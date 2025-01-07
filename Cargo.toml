@@ -1,0 +1,17 @@
+[package]
+name = "iostore"
+edition = "2021"
+
+[workspace]
+
+[profile.release]
+debug = true
+
+[dependencies]
+anyhow = "1.0.95"
+bitflags = "2.6.0"
+byteorder = "1.5.0"
+oodle_loader = { git = "https://github.com/trumank/repak.git", version = "0.2.2" }
+ser-hex = { git = "https://github.com/trumank/ser-hex", version = "0.1.0" }
+strum = { version = "0.26.3", features = ["derive"] }
+tracing = "0.1.41"
