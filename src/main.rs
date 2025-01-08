@@ -1,3 +1,5 @@
+mod script_objects;
+
 use std::{
     collections::HashMap,
     fs::File,
@@ -22,11 +24,11 @@ fn main() -> Result<()> {
     let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Serum/Serum/Content/Paks/pakchunk0-Windows.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Nuclear Nightmare/NuclearNightmare/Content/Paks/NuclearNightmare-Windows.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/The Isle/TheIsle/Content/Paks/pakchunk0-WindowsClient.utoc";
-    //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/VisionsofManaDemo/VisionsofMana/Content/Paks/pakchunk0-WindowsNoEditor.utoc";
     let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Satisfactory/FactoryGame/Content/Paks/FactoryGame-Windows.utoc";
-    let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Satisfactory/FactoryGame/Content/Paks/global.utoc";
+    //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Satisfactory/FactoryGame/Content/Paks/global.utoc";
+    //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/VisionsofManaDemo/VisionsofMana/Content/Paks/pakchunk0-WindowsNoEditor.utoc";
 
-    let mut ucas_stream = BufReader::new(File::open(Path::new(path_utoc).with_extension("ucas"))?);
+    let ucas_stream = BufReader::new(File::open(Path::new(path_utoc).with_extension("ucas"))?);
 
     let mut stream = BufReader::new(File::open(path_utoc)?);
 
@@ -112,20 +114,24 @@ fn read<R: Read, U: Read + Seek>(mut stream: R, mut ucas_stream: U) -> Result<()
 
     let output = Path::new("global");
 
-    for file_name in toc.file_map.keys() {
-        //"FactoryGame/Content/FactoryGame/Interface/UI/InGame/OutputSlotData_Struct.uasset"
-        let chunk_info = toc.get_chunk_info(file_name);
-        dbg!(&chunk_info);
-
-        let path = output.join(file_name);
-        let dir = path.parent().unwrap();
-
-        println!("{file_name}");
-        let data = toc.read(&mut ucas_stream, toc.file_map[file_name])?;
-
-        std::fs::create_dir_all(dir)?;
-        std::fs::write(path, data)?;
+    for chunk in toc.chunk_ids {
+        dbg!(chunk);
     }
+
+    //for file_name in toc.file_map.keys() {
+    //    //"FactoryGame/Content/FactoryGame/Interface/UI/InGame/OutputSlotData_Struct.uasset"
+    //    let chunk_info = toc.get_chunk_info(file_name);
+    //    dbg!(&chunk_info);
+
+    //    let path = output.join(file_name);
+    //    let dir = path.parent().unwrap();
+
+    //    println!("{file_name}");
+    //    let data = toc.read(&mut ucas_stream, toc.file_map[file_name])?;
+
+    //    std::fs::create_dir_all(dir)?;
+    //    std::fs::write(path, data)?;
+    //}
 
     //let data = toc.read(&mut ucas_stream, 0)?;
     //std::fs::write("giga.bin", data)?;
@@ -441,16 +447,27 @@ struct FIoChunkId {
 }
 impl std::fmt::Debug for FIoChunkId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "FIoChunkId(")?;
-        for b in self.id {
-            write!(f, "{:02X}", b)?;
-        }
-        write!(f, ")")
+        //write!(f, "FIoChunkId(")?;
+        //for b in self.id {
+        //    write!(f, "{:02X}", b)?;
+        //}
+        //write!(f, ")")
+        f.debug_struct("FIoChunkId")
+            .field("chunk_id", &self.get_chunk_id())
+            .field("chunk_index", &self.get_chunk_index())
+            .field("chunk_type", &self.get_chunk_type())
+            .finish()
     }
 }
 impl FIoChunkId {
     fn get_chunk_type(&self) -> EIoChunkType {
         EIoChunkType::from_repr(self.id[11]).unwrap()
+    }
+    fn get_chunk_id(&self) -> u64 {
+        u64::from_le_bytes(self.id[0..8].try_into().unwrap())
+    }
+    fn get_chunk_index(&self) -> u16 {
+        u16::from_le_bytes(self.id[8..10].try_into().unwrap())
     }
 }
 #[derive(Debug)]
