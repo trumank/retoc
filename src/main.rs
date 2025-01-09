@@ -1,4 +1,5 @@
 mod script_objects;
+mod compact_binary;
 
 use std::{
     collections::HashMap,
@@ -7,7 +8,7 @@ use std::{
     path::Path,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bitflags::bitflags;
 use byteorder::{ReadBytesExt, LE};
 use strum::FromRepr;
@@ -38,6 +39,140 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+trait ReadableBase {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self>
+    where
+        Self: Sized;
+}
+trait Readable: ReadableBase {}
+trait ReadableCtx<C> {
+    fn ser<S: Read>(stream: &mut S, ctx: C) -> Result<Self>
+    where
+        Self: Sized;
+}
+
+impl<T> ReadExt for T where T: Read {}
+trait ReadExt: Read {
+    fn ser<T: ReadableBase>(&mut self) -> Result<T>
+    where
+        Self: Sized,
+    {
+        T::ser(self)
+    }
+    fn ser_ctx<T: ReadableCtx<C>, C>(&mut self, ctx: C) -> Result<T>
+    where
+        Self: Sized,
+    {
+        T::ser(self, ctx)
+    }
+}
+
+impl<const N: usize> Readable for [u8; N] {}
+impl<const N: usize> ReadableBase for [u8; N] {
+    #[instrument(skip_all, name = "read_fixed_slice")]
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        let mut buf = [0; N];
+        stream.read_exact(&mut buf)?;
+        Ok(buf)
+    }
+}
+impl<const N: usize, T: Readable + Default + Copy> Readable for [T; N] {}
+impl<const N: usize, T: Readable + Default + Copy> ReadableBase for [T; N] {
+    #[instrument(skip_all, name = "read_fixed_slice")]
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        let mut buf = [Default::default(); N];
+        for i in buf.iter_mut() {
+            *i = stream.ser()?;
+        }
+        Ok(buf)
+    }
+}
+
+impl Readable for String {}
+impl ReadableBase for String {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        let len = stream.read_i32::<LE>()?;
+        if len < 0 {
+            let chars = read_array((-len) as usize, stream, |r| Ok(r.read_u16::<LE>()?))?;
+            let length = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
+            Ok(String::from_utf16(&chars[..length]).unwrap())
+        } else {
+            let mut chars = vec![0; len as usize];
+            stream.read_exact(&mut chars)?;
+            let length = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
+            Ok(String::from_utf8_lossy(&chars[..length]).into_owned())
+        }
+    }
+}
+
+impl<T: Readable> Readable for Vec<T> {}
+impl<T: Readable> ReadableBase for Vec<T> {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        read_array(stream.read_u32::<LE>()? as usize, stream, T::ser)
+    }
+}
+impl<T: Readable> ReadableCtx<usize> for Vec<T> {
+    fn ser<S: Read>(stream: &mut S, ctx: usize) -> Result<Self> {
+        read_array(ctx, stream, T::ser)
+    }
+}
+impl ReadableCtx<usize> for Vec<u8> {
+    fn ser<S: Read>(stream: &mut S, ctx: usize) -> Result<Self> {
+        let mut buf = vec![0; ctx];
+        stream.read_exact(&mut buf)?;
+        Ok(buf)
+    }
+}
+
+impl ReadableBase for u8 {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(stream.read_u8()?)
+    }
+}
+impl ReadableBase for i8 {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(stream.read_i8()?)
+    }
+}
+impl ReadableBase for u16 {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(stream.read_u16::<LE>()?)
+    }
+}
+impl ReadableBase for i16 {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(stream.read_i16::<LE>()?)
+    }
+}
+impl ReadableBase for u32 {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(stream.read_u32::<LE>()?)
+    }
+}
+impl ReadableBase for i32 {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(stream.read_i32::<LE>()?)
+    }
+}
+impl ReadableBase for u64 {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(stream.read_u64::<LE>()?)
+    }
+}
+impl ReadableBase for i64 {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(stream.read_i64::<LE>()?)
+    }
+}
+// impl Readable for u8 {} special cased for optimized Vec<u8> serialization
+impl Readable for i8 {}
+impl Readable for u16 {}
+impl Readable for i16 {}
+impl Readable for u32 {}
+impl Readable for i32 {}
+impl Readable for u64 {}
+impl Readable for i64 {}
+
 #[instrument(skip_all)]
 fn read_array<R: Read, T, F>(len: usize, mut stream: R, mut f: F) -> Result<Vec<T>>
 where
@@ -52,7 +187,7 @@ where
 
 #[instrument(skip_all)]
 fn read<R: Read, U: Read + Seek>(mut stream: R, mut ucas_stream: U) -> Result<()> {
-    let header = read_header(&mut stream)?;
+    let header = stream.ser()?;
     dbg!(&header);
 
     //let total_toc_size = len - 0x90 /* sizeof(FIoStoreTocHeader) */;
@@ -71,7 +206,6 @@ fn read<R: Read, U: Read + Seek>(mut stream: R, mut ucas_stream: U) -> Result<()
 
     let compression_blocks = read_compression_blocks(&mut stream, &header)?;
     let compression_methods = read_compression_methods(&mut stream, &header)?;
-    dbg!(&header.compression_method_name_length);
 
     // TODO decrypt
     read_chunk_block_signatures(&mut stream, &header)?;
@@ -114,9 +248,9 @@ fn read<R: Read, U: Read + Seek>(mut stream: R, mut ucas_stream: U) -> Result<()
 
     let output = Path::new("global");
 
-    for chunk in toc.chunk_ids {
-        dbg!(chunk);
-    }
+    //for chunk in toc.chunk_ids {
+    //    dbg!(chunk);
+    //}
 
     //for file_name in toc.file_map.keys() {
     //    //"FactoryGame/Content/FactoryGame/Interface/UI/InGame/OutputSlotData_Struct.uasset"
@@ -144,83 +278,44 @@ fn read<R: Read, U: Read + Seek>(mut stream: R, mut ucas_stream: U) -> Result<()
     Ok(())
 }
 
-#[instrument(skip_all)]
-fn read_header<R: Read>(mut stream: R) -> Result<FIoStoreTocHeader> {
-    let mut toc_magic = [0; 16];
-    stream.read_exact(&mut toc_magic)?;
-    assert_eq!(&toc_magic, b"-==--==--==--==-");
-
-    let version = EIoStoreTocVersion::from_repr(stream.read_u8()?).unwrap();
-    let reserved0 = stream.read_u8()?;
-    let reserved1 = stream.read_u16::<LE>()?;
-    let toc_header_size = stream.read_u32::<LE>()?;
-    let toc_entry_count = stream.read_u32::<LE>()?;
-    let toc_compressed_block_entry_count = stream.read_u32::<LE>()?;
-    let toc_compressed_block_entry_size = stream.read_u32::<LE>()?;
-    let compression_method_name_count = stream.read_u32::<LE>()?;
-    let compression_method_name_length = stream.read_u32::<LE>()?;
-    let compression_block_size = stream.read_u32::<LE>()?;
-    let directory_index_size = stream.read_u32::<LE>()?;
-    let partition_count = stream.read_u32::<LE>()?;
-    let container_id = FIoContainerId {
-        id: stream.read_u64::<LE>()?,
-    };
-    let encryption_key_guid = FGuid {
-        a: stream.read_u32::<LE>()?,
-        b: stream.read_u32::<LE>()?,
-        c: stream.read_u32::<LE>()?,
-        d: stream.read_u32::<LE>()?,
-    };
-    let container_flags = EIoContainerFlags::from_bits(stream.read_u8()?).unwrap();
-    let reserved3 = stream.read_u8()?;
-    let reserved4 = stream.read_u16::<LE>()?;
-    let toc_chunk_perfect_hash_seeds_count = stream.read_u32::<LE>()?;
-    let partition_size = stream.read_u64::<LE>()?;
-    let toc_chunks_without_perfect_hash_count = stream.read_u32::<LE>()?;
-    let reserved7 = stream.read_u32::<LE>()?;
-    let mut reserved8 = [0; 5];
-    for r in &mut reserved8 {
-        *r = stream.read_u64::<LE>()?;
+impl Readable for FIoStoreTocHeader {}
+impl ReadableBase for FIoStoreTocHeader {
+    #[instrument(skip_all, name = "FIoStoreTocHeader")]
+    fn ser<R: Read>(stream: &mut R) -> Result<Self> {
+        let res = FIoStoreTocHeader {
+            toc_magic: stream.ser()?,
+            version: stream.ser()?,
+            reserved0: stream.ser()?,
+            reserved1: stream.ser()?,
+            toc_header_size: stream.ser()?,
+            toc_entry_count: stream.ser()?,
+            toc_compressed_block_entry_count: stream.ser()?,
+            toc_compressed_block_entry_size: stream.ser()?,
+            compression_method_name_count: stream.ser()?,
+            compression_method_name_length: stream.ser()?,
+            compression_block_size: stream.ser()?,
+            directory_index_size: stream.ser()?,
+            partition_count: stream.ser()?,
+            container_id: stream.ser()?,
+            encryption_key_guid: stream.ser()?,
+            container_flags: stream.ser()?,
+            reserved3: stream.ser()?,
+            reserved4: stream.ser()?,
+            toc_chunk_perfect_hash_seeds_count: stream.ser()?,
+            partition_size: stream.ser()?,
+            toc_chunks_without_perfect_hash_count: stream.ser()?,
+            reserved7: stream.ser()?,
+            reserved8: stream.ser()?,
+        };
+        assert_eq!(&res.toc_magic, b"-==--==--==--==-");
+        assert_eq!(res.toc_header_size, 0x90);
+        Ok(res)
     }
-
-    assert_eq!(toc_header_size, 0x90);
-
-    Ok(FIoStoreTocHeader {
-        toc_magic,
-        version,
-        reserved0,
-        reserved1,
-        toc_header_size,
-        toc_entry_count,
-        toc_compressed_block_entry_count,
-        toc_compressed_block_entry_size,
-        compression_method_name_count,
-        compression_method_name_length,
-        compression_block_size,
-        directory_index_size,
-        partition_count,
-        container_id,
-        encryption_key_guid,
-        container_flags,
-        reserved3,
-        reserved4,
-        toc_chunk_perfect_hash_seeds_count,
-        partition_size,
-        toc_chunks_without_perfect_hash_count,
-        reserved7,
-        reserved8,
-    })
 }
 
 #[instrument(skip_all)]
 fn read_chunk_ids<R: Read>(mut stream: R, header: &FIoStoreTocHeader) -> Result<Vec<FIoChunkId>> {
-    let mut chunk_ids = vec![];
-    for _ in 0..header.toc_entry_count {
-        let mut id = [0; 12];
-        stream.read_exact(&mut id)?;
-        chunk_ids.push(FIoChunkId { id });
-    }
-    Ok(chunk_ids)
+    stream.ser_ctx(header.toc_entry_count as usize)
 }
 
 #[instrument(skip_all)]
@@ -228,13 +323,7 @@ fn read_chunk_offsets<R: Read>(
     mut stream: R,
     header: &FIoStoreTocHeader,
 ) -> Result<Vec<FIoOffsetAndLength>> {
-    let mut offsets = vec![];
-    for _ in 0..header.toc_entry_count {
-        let mut data = [0; 10];
-        stream.read_exact(&mut data)?;
-        offsets.push(FIoOffsetAndLength { data });
-    }
-    Ok(offsets)
+    stream.ser_ctx(header.toc_entry_count as usize)
 }
 
 #[instrument(skip_all)]
@@ -252,15 +341,9 @@ fn read_hash_map<R: Read>(
         perfect_hash_seeds_count = header.toc_chunk_perfect_hash_seeds_count;
         chunks_without_perfect_hash_count = 0;
     }
-    let chunk_perfect_hash_seeds =
-        read_array(perfect_hash_seeds_count as usize, &mut stream, |s| {
-            Ok(s.read_i32::<LE>()?)
-        })?;
-    let chunk_indices_without_perfect_hash = read_array(
-        chunks_without_perfect_hash_count as usize,
-        &mut stream,
-        |s| Ok(s.read_i32::<LE>()?),
-    )?;
+    let chunk_perfect_hash_seeds = stream.ser_ctx(perfect_hash_seeds_count as usize)?;
+    let chunk_indices_without_perfect_hash =
+        stream.ser_ctx(chunks_without_perfect_hash_count as usize)?;
 
     Ok((chunk_perfect_hash_seeds, chunk_indices_without_perfect_hash))
 }
@@ -270,15 +353,7 @@ fn read_compression_blocks<R: Read>(
     mut stream: R,
     header: &FIoStoreTocHeader,
 ) -> Result<Vec<FIoStoreTocCompressedBlockEntry>> {
-    read_array(
-        header.toc_compressed_block_entry_count as usize,
-        &mut stream,
-        |s| {
-            let mut data = [0; 12];
-            s.read_exact(&mut data)?;
-            Ok(FIoStoreTocCompressedBlockEntry { data })
-        },
-    )
+    stream.ser_ctx(header.toc_compressed_block_entry_count as usize)
 }
 
 #[instrument(skip_all)]
@@ -288,10 +363,13 @@ fn read_compression_methods<R: Read>(
 ) -> Result<Vec<String>> {
     let mut names = vec!["None".into()];
     for _ in 0..header.compression_method_name_count {
-        let mut buf = vec![0; header.compression_method_name_length as usize];
-        stream.read_exact(&mut buf)?;
-        let nul = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-        names.push(String::from_utf8(buf[..nul].to_vec())?);
+        names.push(String::from_utf8(
+            stream
+                .ser_ctx::<Vec<u8>, _>(header.compression_method_name_length as usize)?
+                .into_iter()
+                .take_while(|&b| b != 0)
+                .collect(),
+        )?);
     }
     Ok(names)
 }
@@ -300,21 +378,12 @@ fn read_compression_methods<R: Read>(
 fn read_chunk_block_signatures<R: Read>(mut stream: R, header: &FIoStoreTocHeader) -> Result<()> {
     let is_signed = header.container_flags.contains(EIoContainerFlags::Signed);
     if is_signed {
-        let hash_size = stream.read_u32::<LE>()? as usize;
-        let mut toc_signature = vec![0; hash_size];
-        stream.read_exact(&mut toc_signature)?;
-        let mut block_signature = vec![0; hash_size];
-        stream.read_exact(&mut block_signature)?;
+        let size = stream.ser::<u32>()? as usize;
+        let toc_signature: Vec<u8> = stream.ser_ctx(size)?;
+        let block_signature: Vec<u8> = stream.ser_ctx(size)?;
 
-        let chunk_block_signatures = read_array(
-            header.toc_compressed_block_entry_count as usize,
-            &mut stream,
-            |s| {
-                let mut data = [0; 20];
-                s.read_exact(&mut data)?;
-                Ok(FSHAHash { data })
-            },
-        )?;
+        let chunk_block_signatures: Vec<FSHAHash> =
+            stream.ser_ctx(header.toc_compressed_block_entry_count as usize)?;
         //dbg!(chunk_block_signatures);
     }
     Ok(())
@@ -322,24 +391,17 @@ fn read_chunk_block_signatures<R: Read>(mut stream: R, header: &FIoStoreTocHeade
 
 #[instrument(skip_all)]
 fn read_directory_index<R: Read>(mut stream: R, header: &FIoStoreTocHeader) -> Result<Vec<u8>> {
-    let mut directory_index = vec![0; header.directory_index_size as usize];
-    stream.read_exact(&mut directory_index)?;
-    Ok(directory_index)
+    stream.ser_ctx(header.directory_index_size as usize)
 }
 
 #[instrument(skip_all)]
 fn read_meta<R: Read>(stream: R, header: &FIoStoreTocHeader) -> Result<Vec<FIoStoreTocEntryMeta>> {
     read_array(header.toc_entry_count as usize, stream, |s| {
-        let mut data = [0; 32];
-        s.read_exact(&mut data)?;
-        let flags = FIoStoreTocEntryMetaFlags::from_bits(s.read_u8()?).unwrap();
+        let res = s.ser()?;
         if header.version >= EIoStoreTocVersion::ReplaceIoChunkHashWithIoHash {
             s.read_exact(&mut [0; 3])?;
         }
-        Ok(FIoStoreTocEntryMeta {
-            chunk_hash: FIoChunkHash { data },
-            flags,
-        })
+        Ok(res)
     })
 }
 
@@ -459,6 +521,12 @@ impl std::fmt::Debug for FIoChunkId {
             .finish()
     }
 }
+impl Readable for FIoChunkId {}
+impl ReadableBase for FIoChunkId {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(Self { id: stream.ser()? })
+    }
+}
 impl FIoChunkId {
     fn get_chunk_type(&self) -> EIoChunkType {
         EIoChunkType::from_repr(self.id[11]).unwrap()
@@ -474,9 +542,23 @@ impl FIoChunkId {
 struct FIoContainerId {
     id: u64,
 }
+impl Readable for FIoContainerId {}
+impl ReadableBase for FIoContainerId {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(Self { id: stream.ser()? })
+    }
+}
 #[derive(Debug, Clone, Copy)]
 struct FIoOffsetAndLength {
     data: [u8; 10],
+}
+impl Readable for FIoOffsetAndLength {}
+impl ReadableBase for FIoOffsetAndLength {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(Self {
+            data: stream.ser()?,
+        })
+    }
 }
 impl FIoOffsetAndLength {
     fn get_offset(&self) -> u64 {
@@ -502,6 +584,14 @@ impl std::fmt::Debug for FIoStoreTocCompressedBlockEntry {
                 &self.get_compression_method_index(),
             )
             .finish()
+    }
+}
+impl Readable for FIoStoreTocCompressedBlockEntry {}
+impl ReadableBase for FIoStoreTocCompressedBlockEntry {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(Self {
+            data: stream.ser()?,
+        })
     }
 }
 impl FIoStoreTocCompressedBlockEntry {
@@ -533,10 +623,27 @@ impl std::fmt::Debug for FIoChunkHash {
         write!(f, ")")
     }
 }
+impl Readable for FIoChunkHash {}
+impl ReadableBase for FIoChunkHash {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(Self {
+            data: stream.ser()?,
+        })
+    }
+}
 #[derive(Debug)]
 struct FIoStoreTocEntryMeta {
     chunk_hash: FIoChunkHash,
     flags: FIoStoreTocEntryMetaFlags,
+}
+impl Readable for FIoStoreTocEntryMeta {}
+impl ReadableBase for FIoStoreTocEntryMeta {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(Self {
+            chunk_hash: stream.ser()?,
+            flags: stream.ser()?,
+        })
+    }
 }
 #[derive(Debug)]
 struct FGuid {
@@ -545,8 +652,27 @@ struct FGuid {
     c: u32,
     d: u32,
 }
+impl Readable for FGuid {}
+impl ReadableBase for FGuid {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(Self {
+            a: stream.ser()?,
+            b: stream.ser()?,
+            c: stream.ser()?,
+            d: stream.ser()?,
+        })
+    }
+}
 struct FSHAHash {
     data: [u8; 20],
+}
+impl Readable for FSHAHash {}
+impl ReadableBase for FSHAHash {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(Self {
+            data: stream.ser()?,
+        })
+    }
 }
 impl std::fmt::Debug for FSHAHash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -572,6 +698,18 @@ bitflags! {
         const MemoryMapped = 2;
     }
 }
+impl Readable for EIoContainerFlags {}
+impl ReadableBase for EIoContainerFlags {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        Self::from_bits(stream.ser()?).context("invalid EIoContainerFlags value")
+    }
+}
+impl Readable for FIoStoreTocEntryMetaFlags {}
+impl ReadableBase for FIoStoreTocEntryMetaFlags {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        Self::from_bits(stream.ser()?).context("invalid FIoStoreTocEntryMetaFlags value")
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
 #[repr(u8)]
@@ -585,8 +723,12 @@ enum EIoStoreTocVersion {
     OnDemandMetaData,
     RemovedOnDemandMetaData,
     ReplaceIoChunkHashWithIoHash,
-    //LatestPlusOne,
-    //Latest = LatestPlusOne - 1
+}
+impl Readable for EIoStoreTocVersion {}
+impl ReadableBase for EIoStoreTocVersion {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        Self::from_repr(stream.ser()?).context("invalid EIoStoreTocVersion value")
+    }
 }
 
 #[derive(Debug)]
@@ -650,20 +792,6 @@ enum EIoChunkType {
     ContainerHeader = 0xa,
 }
 
-fn read_string<S: Read>(mut stream: S) -> Result<String> {
-    let len = stream.read_i32::<LE>()?;
-    if len < 0 {
-        let chars = read_array((-len) as usize, &mut stream, |r| Ok(r.read_u16::<LE>()?))?;
-        let length = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
-        Ok(String::from_utf16(&chars[..length]).unwrap())
-    } else {
-        let mut chars = vec![0; len as usize];
-        stream.read_exact(&mut chars)?;
-        let length = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
-        Ok(String::from_utf8_lossy(&chars[..length]).into_owned())
-    }
-}
-
 use directory_index::*;
 mod directory_index {
     use std::u32;
@@ -680,40 +808,34 @@ mod directory_index {
     impl FIoDirectoryIndexResource {
         pub fn read<S: Read>(mut stream: S) -> Result<Self> {
             Ok(Self {
-                mount_point: read_string(&mut stream)?,
-                directory_entries: read_array(
-                    stream.read_u32::<LE>()? as usize,
-                    &mut stream,
-                    |s| FIoDirectoryIndexEntry::read(s),
-                )?,
-                file_entries: read_array(stream.read_u32::<LE>()? as usize, &mut stream, |s| {
-                    FIoFileIndexEntry::read(s)
-                })?,
-                string_table: read_array(stream.read_u32::<LE>()? as usize, &mut stream, |s| {
-                    read_string(s)
-                })?,
+                mount_point: stream.ser()?,
+                directory_entries: stream.ser()?,
+                file_entries: stream.ser()?,
+                string_table: stream.ser()?,
             })
         }
         pub fn iter_root<F>(&self, mut visitor: F)
         where
             F: FnMut(u32, &[&str]),
         {
-            self.iter(0, &mut vec![], &mut visitor)
+            if !self.directory_entries.is_empty() {
+                self.iter(IdDir(0), &mut vec![], &mut visitor)
+            }
         }
-        pub fn iter<'s, F>(&'s self, dir_index: u32, stack: &mut Vec<&'s str>, visitor: &mut F)
+        pub fn iter<'s, F>(&'s self, dir_index: IdDir, stack: &mut Vec<&'s str>, visitor: &mut F)
         where
             F: FnMut(u32, &[&str]),
         {
-            let dir = &self.directory_entries[dir_index as usize];
-            if dir.name != u32::MAX {
-                stack.push(&self.string_table[dir.name as usize]);
+            let dir = &self.directory_entries[dir_index.get()];
+            if let Some(i) = dir.name {
+                stack.push(&self.string_table[i.get()]);
             }
 
             let mut file_index = dir.first_file_entry;
-            while file_index != u32::MAX {
-                let file = &self.file_entries[file_index as usize];
+            while let Some(i) = file_index {
+                let file = &self.file_entries[i.get()];
 
-                stack.push(&self.string_table[file.name as usize]);
+                stack.push(&self.string_table[file.name.get()]);
                 visitor(file.user_data, stack);
                 stack.pop();
 
@@ -722,50 +844,208 @@ mod directory_index {
 
             {
                 let mut dir_index = dir.first_child_entry;
-                while dir_index != u32::MAX {
-                    let dir = &self.directory_entries[dir_index as usize];
-                    self.iter(dir_index, stack, visitor);
+                while let Some(i) = dir_index {
+                    let dir = &self.directory_entries[i.get()];
+                    self.iter(i, stack, visitor);
                     dir_index = dir.next_sibling_entry;
                 }
             }
 
-            if dir.name != u32::MAX {
+            if dir.name.is_some() {
                 stack.pop();
             }
         }
+        fn root(&self) -> IdDir {
+            IdDir(0)
+        }
+        fn ensure_root(&mut self) -> IdDir {
+            if self.directory_entries.is_empty() {
+                self.directory_entries.push(FIoDirectoryIndexEntry {
+                    name: None,
+                    first_child_entry: None,
+                    next_sibling_entry: None,
+                    first_file_entry: None,
+                });
+            }
+            self.root()
+        }
+        fn get_or_create_dir(&mut self, parent: IdDir, name: &str) -> IdDir {
+            let mut dir_index = self.directory_entries[parent.get()].first_child_entry;
+            let mut last = None;
+            while let Some(i) = dir_index {
+                let dir = &self.directory_entries[i.get()];
+                if self.string_table[dir.name.unwrap().get()] == name {
+                    return i;
+                }
+                last = dir_index;
+                dir_index = dir.next_sibling_entry;
+            }
+            let new = FIoDirectoryIndexEntry {
+                name: Some(self.get_or_create_name(name)),
+                first_child_entry: None,
+                next_sibling_entry: None,
+                first_file_entry: None,
+            };
+            self.directory_entries.push(new);
+            let id = IdDir(self.directory_entries.len() as u32 - 1);
+
+            if let Some(last) = last {
+                self.directory_entries[last.get()].next_sibling_entry = Some(id);
+            } else {
+                self.directory_entries[parent.get()].first_child_entry = Some(id);
+            }
+            id
+        }
+        fn get_or_create_file(&mut self, parent: IdDir, name: &str) -> IdFile {
+            let mut file_index = self.directory_entries[parent.get()].first_file_entry;
+            let mut last = None;
+            while let Some(i) = file_index {
+                let file = &self.file_entries[i.get()];
+                if self.string_table[file.name.get()] == name {
+                    return i;
+                }
+                last = file_index;
+                file_index = file.next_file_entry;
+            }
+            let new = FIoFileIndexEntry {
+                name: self.get_or_create_name(name),
+                next_file_entry: None,
+                user_data: 0,
+            };
+            self.file_entries.push(new);
+            let id = IdFile(self.file_entries.len() as u32 - 1);
+            if let Some(last) = last {
+                self.file_entries[last.get()].next_file_entry = Some(id);
+            } else {
+                self.directory_entries[parent.get()].first_file_entry = Some(id);
+            }
+            id
+        }
+        fn get_or_create_name(&mut self, name: &str) -> IdName {
+            IdName(
+                self.string_table
+                    .iter()
+                    .position(|n| n == name)
+                    .unwrap_or_else(|| {
+                        self.string_table.push(name.to_string());
+                        self.string_table.len() - 1
+                    }) as u32,
+            )
+        }
+        pub fn add_file(&mut self, path: &str, user_data: u32) {
+            let mut components = path.split('/');
+            let file_name = components.next_back().unwrap();
+            let mut dir_index = self.ensure_root();
+            while let Some(dir_name) = components.next() {
+                dir_index = self.get_or_create_dir(dir_index, dir_name);
+            }
+            let file_index = self.get_or_create_file(dir_index, file_name);
+            self.file_entries[file_index.get()].user_data = user_data;
+        }
     }
+
+    macro_rules! new_id {
+        ($name:ident) => {
+            #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+            pub struct $name(u32);
+            impl $name {
+                fn new(value: u32) -> Option<Self> {
+                    (value != u32::MAX).then_some(Self(value))
+                }
+                fn get(self) -> usize {
+                    self.0 as usize
+                }
+            }
+            impl Readable for Option<$name> {}
+            impl ReadableBase for Option<$name> {
+                fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+                    Ok($name::new(stream.ser()?))
+                }
+            }
+            impl Readable for $name {}
+            impl ReadableBase for $name {
+                fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+                    Ok(Self(stream.ser()?))
+                }
+            }
+        };
+    }
+    new_id!(IdFile);
+    new_id!(IdDir);
+    new_id!(IdName);
 
     #[derive(Debug)]
     struct FIoFileIndexEntry {
-        name: u32,
-        next_file_entry: u32,
+        name: IdName,
+        next_file_entry: Option<IdFile>,
         user_data: u32,
     }
-    impl FIoFileIndexEntry {
-        fn read<S: Read>(mut stream: S) -> Result<Self> {
+    impl Readable for FIoFileIndexEntry {}
+    impl ReadableBase for FIoFileIndexEntry {
+        fn ser<S: Read>(stream: &mut S) -> Result<Self> {
             Ok(Self {
-                name: stream.read_u32::<LE>()?,
-                next_file_entry: stream.read_u32::<LE>()?,
-                user_data: stream.read_u32::<LE>()?,
+                name: stream.ser()?,
+                next_file_entry: stream.ser()?,
+                user_data: stream.ser()?,
             })
         }
     }
 
     #[derive(Debug)]
     struct FIoDirectoryIndexEntry {
-        name: u32,
-        first_child_entry: u32,
-        next_sibling_entry: u32,
-        first_file_entry: u32,
+        name: Option<IdName>,
+        first_child_entry: Option<IdDir>,
+        next_sibling_entry: Option<IdDir>,
+        first_file_entry: Option<IdFile>,
     }
-    impl FIoDirectoryIndexEntry {
-        fn read<S: Read>(mut stream: S) -> Result<Self> {
+    impl Readable for FIoDirectoryIndexEntry {}
+    impl ReadableBase for FIoDirectoryIndexEntry {
+        fn ser<S: Read>(stream: &mut S) -> Result<Self> {
             Ok(Self {
-                name: stream.read_u32::<LE>()?,
-                first_child_entry: stream.read_u32::<LE>()?,
-                next_sibling_entry: stream.read_u32::<LE>()?,
-                first_file_entry: stream.read_u32::<LE>()?,
+                name: stream.ser()?,
+                first_child_entry: stream.ser()?,
+                next_sibling_entry: stream.ser()?,
+                first_file_entry: stream.ser()?,
             })
+        }
+    }
+
+    #[cfg(test)]
+    mod test {
+        use super::*;
+
+        #[test]
+        fn test_dir() {
+            let mut index = FIoDirectoryIndexResource {
+                mount_point: Default::default(),
+                directory_entries: Default::default(),
+                file_entries: Default::default(),
+                string_table: Default::default(),
+            };
+
+            let entries = HashMap::from([
+                ("this/b/test2.txt".to_string(), 1),
+                ("this/is/a/test1.txt".to_string(), 2),
+                ("this/test2.txt".to_string(), 3),
+                ("this/is/a/test2.txt".to_string(), 4),
+            ]);
+
+            for (path, data) in &entries {
+                index.add_file(path, *data);
+            }
+
+            dbg!(&index);
+
+            //for d in &dir.directory_entries {
+            //    println!("");
+            //}
+
+            let mut new_map = HashMap::new();
+            index.iter_root(|user_data, path| {
+                new_map.insert(path.join("/"), user_data);
+                println!("{} = {}", path.join("/"), user_data);
+            });
+            assert_eq!(entries, new_map);
         }
     }
 }

@@ -4,7 +4,7 @@ use anyhow::Result;
 use byteorder::{ReadBytesExt, LE};
 use tracing::instrument;
 
-use crate::{read_array, read_string};
+use crate::read_array;
 
 #[instrument(skip_all)]
 fn read_script_objects<S: Read>(mut stream: S) -> Result<()> {
