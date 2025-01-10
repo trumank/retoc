@@ -1,7 +1,6 @@
 use std::io::Read;
 
 use anyhow::{Context as _, Result};
-use byteorder::{ReadBytesExt, LE};
 use indexmap::IndexMap;
 use serde::Serialize;
 use serde_with::serde_as;
@@ -221,9 +220,42 @@ mod test {
     fn test_compact_binary() -> Result<()> {
         let mut stream = BufReader::new(File::open("asdf/out/packagestore.manifest")?);
 
-        let field = ser_hex::read("trace.json", &mut stream, read_compact_binary)?;
+        let mut field = ser_hex::read("trace.json", &mut stream, read_compact_binary)?;
 
         //dbg!(field);
+        fn sort_by_key_ref<T, F, K>(a: &mut [T], key: F)
+        where
+            F: Fn(&T) -> &K,
+            K: ?Sized + Ord,
+        {
+            a.sort_by(|x, y| key(x).cmp(key(y)));
+        }
+
+        match &mut field.value {
+            FieldValue::UniformObject(ref mut vec) => match &mut vec[0] {
+                FieldValue::UniformObject(ref mut index_map) => match &mut index_map["entries"] {
+                    FieldValue::UniformArray(vec) => {
+                        sort_by_key_ref(vec, |op| match op {
+                            FieldValue::Object(index_map) => {
+                                match &index_map["packagestoreentry"] {
+                                    FieldValue::UniformObject(index_map) => {
+                                        match &index_map["packagename"] {
+                                            FieldValue::String(string) => string,
+                                            _ => unreachable!(),
+                                        }
+                                    }
+                                    _ => unreachable!(),
+                                }
+                            }
+                            _ => unreachable!(),
+                        });
+                    }
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        }
 
         std::fs::write("packagestore.json", serde_json::to_vec(&field)?)?;
 
@@ -237,13 +269,13 @@ mod varint {
 
     #[instrument(skip_all)]
     pub fn read_var_uint<S: Read>(stream: &mut S) -> Result<u64> {
-        let lead = stream.read_u8()?;
+        let lead: u8 = stream.ser()?;
         let byte_count = lead.leading_ones();
 
         let mut value = (lead & (0xff >> byte_count)) as u64;
         for _ in 0..byte_count {
             value <<= 8;
-            value |= stream.read_u8()? as u64;
+            value |= stream.ser::<u8>()? as u64;
         }
         Ok(value)
     }

@@ -1,13 +1,11 @@
-use core::str;
-use std::{io::Read, u64};
+use std::io::Read;
 
 use anyhow::Result;
-use byteorder::{ReadBytesExt, LE};
 use tracing::instrument;
 
 use crate::{
     name_map::{FMinimalName, FNameMap},
-    read_array, ReadExt, Readable, ReadableBase, ReadableCtx,
+    read_array, ReadExt,
 };
 
 #[instrument(skip_all)]
@@ -63,7 +61,7 @@ impl FPackageObjectIndex {
     #[instrument(skip_all, name = "FPackageObjectIndex")]
     fn read<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self {
-            type_and_id: s.read_u64::<LE>()?,
+            type_and_id: s.ser()?,
         })
     }
     fn get(self) -> Option<u64> {

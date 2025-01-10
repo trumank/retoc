@@ -1,6 +1,8 @@
 mod compact_binary;
+mod manifest;
 mod name_map;
 mod script_objects;
+mod ser;
 mod zen;
 
 use std::{
@@ -12,7 +14,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use bitflags::bitflags;
-use byteorder::{ReadBytesExt, LE};
+use ser::*;
 use strum::FromRepr;
 use tracing::instrument;
 
@@ -34,158 +36,6 @@ fn main() -> Result<()> {
     ser_hex::read("trace.json", &mut stream, |s| read(s, ucas_stream))?;
 
     Ok(())
-}
-
-trait ReadableBase {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self>
-    where
-        Self: Sized;
-}
-trait Readable: ReadableBase {}
-trait ReadableCtx<C> {
-    fn ser<S: Read>(stream: &mut S, ctx: C) -> Result<Self>
-    where
-        Self: Sized;
-}
-
-impl<T> ReadExt for T where T: Read {}
-trait ReadExt: Read {
-    #[instrument(skip_all)]
-    fn ser<T: ReadableBase>(&mut self) -> Result<T>
-    where
-        Self: Sized,
-    {
-        T::ser(self)
-    }
-    #[instrument(skip_all)]
-    fn ser_ctx<T: ReadableCtx<C>, C>(&mut self, ctx: C) -> Result<T>
-    where
-        Self: Sized,
-    {
-        T::ser(self, ctx)
-    }
-}
-
-impl<const N: usize> Readable for [u8; N] {}
-impl<const N: usize> ReadableBase for [u8; N] {
-    #[instrument(skip_all, name = "read_fixed_slice")]
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        let mut buf = [0; N];
-        stream.read_exact(&mut buf)?;
-        Ok(buf)
-    }
-}
-impl<const N: usize, T: Readable + Default + Copy> Readable for [T; N] {}
-impl<const N: usize, T: Readable + Default + Copy> ReadableBase for [T; N] {
-    #[instrument(skip_all, name = "read_fixed_slice")]
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        let mut buf = [Default::default(); N];
-        for i in buf.iter_mut() {
-            *i = stream.ser()?;
-        }
-        Ok(buf)
-    }
-}
-
-impl Readable for String {}
-impl ReadableBase for String {
-    fn ser<S: Read>(s: &mut S) -> Result<Self> {
-        read_string(s.ser()?, s)
-    }
-}
-
-impl<T: Readable> Readable for Vec<T> {}
-impl<T: Readable> ReadableBase for Vec<T> {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        read_array(stream.read_u32::<LE>()? as usize, stream, T::ser)
-    }
-}
-impl<T: Readable> ReadableCtx<usize> for Vec<T> {
-    fn ser<S: Read>(stream: &mut S, ctx: usize) -> Result<Self> {
-        read_array(ctx, stream, T::ser)
-    }
-}
-impl ReadableCtx<usize> for Vec<u8> {
-    fn ser<S: Read>(stream: &mut S, ctx: usize) -> Result<Self> {
-        let mut buf = vec![0; ctx];
-        stream.read_exact(&mut buf)?;
-        Ok(buf)
-    }
-}
-
-impl ReadableBase for u8 {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(stream.read_u8()?)
-    }
-}
-impl ReadableBase for i8 {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(stream.read_i8()?)
-    }
-}
-impl ReadableBase for u16 {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(stream.read_u16::<LE>()?)
-    }
-}
-impl ReadableBase for i16 {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(stream.read_i16::<LE>()?)
-    }
-}
-impl ReadableBase for u32 {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(stream.read_u32::<LE>()?)
-    }
-}
-impl ReadableBase for i32 {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(stream.read_i32::<LE>()?)
-    }
-}
-impl ReadableBase for u64 {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(stream.read_u64::<LE>()?)
-    }
-}
-impl ReadableBase for i64 {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(stream.read_i64::<LE>()?)
-    }
-}
-// impl Readable for u8 {} special cased for optimized Vec<u8> serialization
-impl Readable for i8 {}
-impl Readable for u16 {}
-impl Readable for i16 {}
-impl Readable for u32 {}
-impl Readable for i32 {}
-impl Readable for u64 {}
-impl Readable for i64 {}
-
-#[instrument(skip_all)]
-fn read_array<S: Read, T, F>(len: usize, stream: &mut S, mut f: F) -> Result<Vec<T>>
-where
-    F: FnMut(&mut S) -> Result<T>,
-{
-    let mut array = Vec::with_capacity(len);
-    for _ in 0..len {
-        array.push(f(stream)?);
-    }
-    Ok(array)
-}
-
-#[instrument(skip_all)]
-fn read_string<S: Read>(len: i32, stream: &mut S) -> Result<String> {
-    if len < 0 {
-        let chars = read_array((-len) as usize, stream, |r| Ok(r.read_u16::<LE>()?))?;
-        let length = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
-        Ok(String::from_utf16(&chars[..length]).unwrap())
-    } else {
-        let mut chars = vec![0; len as usize];
-        stream.read_exact(&mut chars)?;
-        let length = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
-        Ok(String::from_utf8_lossy(&chars[..length]).into_owned())
-    }
 }
 
 #[instrument(skip_all)]
@@ -218,16 +68,18 @@ fn read<R: Read, U: Read + Seek>(mut stream: R, mut ucas_stream: U) -> Result<()
 
     // build index
     let mut chunk_id_to_index: HashMap<FIoChunkId, u32> = Default::default();
-    for chunk_index in 0..chunk_ids.len() {
-        chunk_id_to_index.insert(chunk_ids[chunk_index], chunk_index as u32);
+    for (chunk_index, &chunk_id) in chunk_ids.iter().enumerate() {
+        chunk_id_to_index.insert(chunk_id, chunk_index as u32);
     }
 
     let mut file_map: HashMap<String, u32> = Default::default();
+    let mut file_map_lower: HashMap<String, u32> = Default::default();
     let directory_index = if !directory_index.is_empty() {
         let directory_index = FIoDirectoryIndexResource::read(Cursor::new(directory_index))?;
         directory_index.iter_root(|user_data, path| {
             let path = path.join("/");
             //println!("{}", path);
+            file_map_lower.insert(path.to_ascii_lowercase(), user_data);
             file_map.insert(path, user_data);
         });
         Some(directory_index)
@@ -247,6 +99,7 @@ fn read<R: Read, U: Read + Seek>(mut stream: R, mut ucas_stream: U) -> Result<()
 
         directory_index,
         file_map,
+        file_map_lower,
     };
 
     let output = Path::new("zen_out");
@@ -254,6 +107,8 @@ fn read<R: Read, U: Read + Seek>(mut stream: R, mut ucas_stream: U) -> Result<()
     //for chunk in toc.chunk_ids {
     //    dbg!(chunk);
     //}
+
+    let mut entries = vec![];
 
     for file_name in toc.file_map.keys() {
         //"FactoryGame/Content/FactoryGame/Interface/UI/InGame/OutputSlotData_Struct.uasset"
@@ -274,10 +129,57 @@ fn read<R: Read, U: Read + Seek>(mut stream: R, mut ucas_stream: U) -> Result<()
             //std::fs::write(path, &data)?;
             // END WRITE
 
+            let package_name = get_package_name(&data)?;
 
-            println!("{:>20} {:>20}", get_package_name(&data)?, file_name);
+            let (path, _ext) = file_name.rsplit_once(".").unwrap();
+            let packagename = if let (Some((package_path, package_name)), Some((_, file_name))) =
+                (package_name.rsplit_once("/"), path.rsplit_once("/"))
+            {
+                format!(
+                    "{package_path}/{}{}",
+                    package_name,
+                    &file_name[package_name.len()..]
+                )
+            } else {
+                package_name.to_string()
+            };
+
+            let mut entry = manifest::Op {
+                packagestoreentry: manifest::PackageStoreEntry { packagename },
+                packagedata: vec![manifest::ChunkData {
+                    id: chunk_info.id,
+                    filename: file_name.to_string(),
+                }],
+                bulkdata: vec![],
+            };
+
+            if let Some((path, _ext)) = file_name.rsplit_once(".") {
+                let bulk_path = format!("{path}.ubulk");
+                if let Some(&bulk) = toc.file_map_lower.get(&bulk_path.to_ascii_lowercase()) {
+                    entry.bulkdata.push(manifest::ChunkData {
+                        id: toc.chunk_ids[bulk as usize],
+                        filename: bulk_path,
+                    });
+                }
+            }
+
+            entries.push(entry);
         }
     }
+
+    //entries.sort_by_key(|op| op.packagedata.first().map(|c| c.filename.clone()));
+    entries.sort_by(|a, b| {
+        a.packagestoreentry
+            .packagename
+            .cmp(&b.packagestoreentry.packagename)
+    });
+
+    std::fs::write(
+        "pakstore.json",
+        serde_json::to_vec(&manifest::PackageStoreManifest {
+            oplog: manifest::OpLog { entries },
+        })?,
+    )?;
 
     //let data = toc.read(&mut ucas_stream, 0)?;
     //std::fs::write("giga.bin", data)?;
@@ -407,7 +309,10 @@ fn read_directory_index<R: Read>(mut stream: R, header: &FIoStoreTocHeader) -> R
 }
 
 #[instrument(skip_all)]
-fn read_meta<S: Read>(stream: &mut S, header: &FIoStoreTocHeader) -> Result<Vec<FIoStoreTocEntryMeta>> {
+fn read_meta<S: Read>(
+    stream: &mut S,
+    header: &FIoStoreTocHeader,
+) -> Result<Vec<FIoStoreTocEntryMeta>> {
     read_array(header.toc_entry_count as usize, stream, |s| {
         let res = s.ser()?;
         if header.version >= EIoStoreTocVersion::ReplaceIoChunkHashWithIoHash {
@@ -429,6 +334,7 @@ struct Toc {
 
     directory_index: Option<FIoDirectoryIndexResource>,
     file_map: HashMap<String, u32>,
+    file_map_lower: HashMap<String, u32>,
 }
 impl Toc {
     //fn get_chunk_info(&self, toc_entry_index: u32) {
@@ -531,6 +437,20 @@ impl std::fmt::Debug for FIoChunkId {
             .field("chunk_index", &self.get_chunk_index())
             .field("chunk_type", &self.get_chunk_type())
             .finish()
+    }
+}
+impl AsRef<[u8]> for FIoChunkId {
+    fn as_ref(&self) -> &[u8] {
+        &self.id
+    }
+}
+impl TryFrom<Vec<u8>> for FIoChunkId {
+    type Error = Vec<u8>;
+
+    fn try_from(value: Vec<u8>) -> std::result::Result<Self, Self::Error> {
+        Ok(Self {
+            id: value.try_into()?,
+        })
     }
 }
 impl Readable for FIoChunkId {}
@@ -820,10 +740,8 @@ enum EIoChunkType {
 }
 
 use directory_index::*;
-use zen::{get_package_name, FPackageFileSummary};
+use zen::get_package_name;
 mod directory_index {
-    use std::u32;
-
     use super::*;
 
     #[derive(Debug)]
@@ -964,7 +882,7 @@ mod directory_index {
             let mut components = path.split('/');
             let file_name = components.next_back().unwrap();
             let mut dir_index = self.ensure_root();
-            while let Some(dir_name) = components.next() {
+            for dir_name in components {
                 dir_index = self.get_or_create_dir(dir_index, dir_name);
             }
             let file_index = self.get_or_create_file(dir_index, file_name);
