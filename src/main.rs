@@ -26,10 +26,10 @@ fn main() -> Result<()> {
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Serum/Serum/Content/Paks/pakchunk0-Windows.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Nuclear Nightmare/NuclearNightmare/Content/Paks/NuclearNightmare-Windows.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/The Isle/TheIsle/Content/Paks/pakchunk0-WindowsClient.utoc";
-    //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Satisfactory/FactoryGame/Content/Paks/FactoryGame-Windows.utoc";
+    let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Satisfactory/FactoryGame/Content/Paks/FactoryGame-Windows.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Satisfactory/FactoryGame/Content/Paks/global.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/VisionsofManaDemo/VisionsofMana/Content/Paks/pakchunk0-WindowsNoEditor.utoc";
-    let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/AbioticFactor/AbioticFactor/Content/Paks/pakchunk0-Windows.utoc";
+    //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/AbioticFactor/AbioticFactor/Content/Paks/pakchunk0-Windows.utoc";
 
     let ucas_stream = BufReader::new(File::open(Path::new(path_utoc).with_extension("ucas"))?);
     let mut stream = BufReader::new(File::open(path_utoc)?);
@@ -129,7 +129,10 @@ fn read<R: Read, U: Read + Seek>(mut stream: R, mut ucas_stream: U) -> Result<()
             //std::fs::write(path, &data)?;
             // END WRITE
 
-            let package_name = get_package_name(&data)?;
+            if file_name == "FactoryGame/Content/FactoryGame/Buildable/Factory/ResourceSink/DT_ResourceSinkPoints.uasset" {
+                std::fs::write("bad.uasset", &data)?;
+            }
+            let package_name = get_package_name(&data).with_context(|| file_name.to_string())?;
 
             let (path, _ext) = file_name.rsplit_once(".").unwrap();
             let packagename = if let (Some((package_path, package_name)), Some((_, file_name))) =

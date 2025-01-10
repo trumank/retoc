@@ -23,7 +23,11 @@ impl ReadableBase for FNameMap {
         let lengths = read_array(num as usize, s, |s| Ok(u16::from_be_bytes(s.ser()?)))?;
         let names: Vec<_> = lengths
             .iter()
-            .map(|&l| read_string(l as i32, s))
+            .map(|&l| {
+                let utf16 = l & 0x8000 != 0; // check high bit
+                let l = (l & !0x8000) as i32; // reset high bit
+                read_string(if utf16 { -l } else { l }, s)
+            })
             .collect::<Result<_>>()?;
 
         Ok(Self { names })

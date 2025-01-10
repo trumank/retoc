@@ -119,7 +119,8 @@ mod test {
     #[test]
     fn test_zen() -> Result<()> {
         let mut stream = BufReader::new(File::open(
-            "zen_out/AbioticFactor/Content/Audio/Abiotic_Dialog_NarrativeNPC.uasset",
+            //"zen_out/AbioticFactor/Content/Audio/Abiotic_Dialog_NarrativeNPC.uasset",
+            "bad.uasset",
         )?);
 
         let header = ser_hex::read("trace.json", &mut stream, FZenPackageHeader::ser)?;
