@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, io::Read};
+use std::io::Read;
 
 use anyhow::{Context as _, Result};
 use byteorder::{ReadBytesExt, LE};
@@ -188,9 +188,7 @@ fn read_field<S: Read>(stream: &mut Ctx<S>, mut tag: ECbFieldTypeFlags) -> Resul
                 FieldValue::UniformArray(fields)
             }
             //Binary = 0x06,
-            ECbFieldType::String => {
-                FieldValue::String(read_string(stream)?)
-            }
+            ECbFieldType::String => FieldValue::String(read_string(stream)?),
             //ECbFieldType::IntegerPositive = 0x08,
             //ECbFieldType::IntegerNegative = 0x09,
             //ECbFieldType::Float32 = 0x0a,
@@ -205,9 +203,7 @@ fn read_field<S: Read>(stream: &mut Ctx<S>, mut tag: ECbFieldTypeFlags) -> Resul
             //ECbFieldType::Uuid = 0x11,
             //ECbFieldType::DateTime = 0x12,
             //ECbFieldType::TimeSpan = 0x13,
-            ECbFieldType::ObjectId => {
-                FieldValue::ObjectId(stream.ser::<[u8; 12]>()?)
-            }
+            ECbFieldType::ObjectId => FieldValue::ObjectId(stream.ser::<[u8; 12]>()?),
             //ECbFieldType::CustomById = 0x1e,
             //ECbFieldType::CustomByName = 0x1f,
             _ => todo!("{tag:?}"),

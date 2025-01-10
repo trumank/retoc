@@ -1,53 +1,37 @@
-use std::io::Read;
+use core::str;
+use std::{io::Read, u64};
 
 use anyhow::Result;
 use byteorder::{ReadBytesExt, LE};
 use tracing::instrument;
 
-use crate::read_array;
+use crate::{
+    name_map::{FMinimalName, FNameMap},
+    read_array, ReadExt, Readable, ReadableBase, ReadableCtx,
+};
 
 #[instrument(skip_all)]
-fn read_script_objects<S: Read>(mut stream: S) -> Result<()> {
-    let global_name_map = read_name_batch(&mut stream)?;
-    let num_script_objects = stream.read_u32::<LE>()?;
+fn read_script_objects<S: Read>(s: &mut S) -> Result<()> {
+    let global_name_map: FNameMap = s.ser()?;
+    let num_script_objects: u32 = s.ser()?;
 
-    let script_objects = read_array(
-        num_script_objects as usize,
-        &mut stream,
-        FScriptObjectEntry::read,
-    )?;
+    let script_objects = read_array(num_script_objects as usize, s, FScriptObjectEntry::read)?;
 
-    println!("{:#?}", script_objects);
+    for s in script_objects {
+        //println!(
+        //    "{}:",
+        //    global_name_map.header_bytes[s.object_name.index.value as usize & 0xffffff]
+        //);
+        //println!("{}:", s.object_name.index.value as usize & 0xffffff);
+        println!("{}:", global_name_map.get(s.object_name));
+        println!("  global_index:    {:?}", s.global_index.get());
+        println!("  outer_index:     {:?}", s.outer_index.get());
+        println!("  cdo_class_index: {:?}", s.cdo_class_index.get());
+    }
+
+    //println!("{:#?}", script_objects);
 
     Ok(())
-}
-
-#[instrument(skip_all)]
-fn read_name_batch<S: Read>(mut stream: S) -> Result<FNameBatch> {
-    let num = stream.read_u32::<LE>()?;
-    let num_string_bytes = stream.read_u32::<LE>()?;
-    let hash_version = stream.read_u64::<LE>()?;
-
-    let use_saved_hashes = false; // TODO check CanUseSavedHashes(HashVersion)
-
-    let num_hash_bytes = num * 8;
-    let num_header_bytes = num * 2;
-
-    let mut hash_bytes = vec![0; num_hash_bytes as usize];
-    stream.read_exact(&mut hash_bytes)?;
-
-    let mut header_bytes = vec![0; num_header_bytes as usize];
-    stream.read_exact(&mut header_bytes)?;
-
-    let mut string_bytes = vec![0; num_string_bytes as usize];
-    stream.read_exact(&mut string_bytes)?;
-
-    Ok(FNameBatch {
-        num,
-        hash_bytes,
-        header_bytes,
-        string_bytes,
-    })
 }
 
 #[derive(Debug)]
@@ -63,7 +47,7 @@ impl FScriptObjectEntry {
     fn read<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self {
             //mapped: FMappedName::read(s)?,
-            object_name: FMinimalName::read(s)?,
+            object_name: s.ser()?,
             global_index: FPackageObjectIndex::read(s)?,
             outer_index: FPackageObjectIndex::read(s)?,
             cdo_class_index: FPackageObjectIndex::read(s)?,
@@ -71,7 +55,7 @@ impl FScriptObjectEntry {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 struct FPackageObjectIndex {
     type_and_id: u64,
 }
@@ -82,57 +66,9 @@ impl FPackageObjectIndex {
             type_and_id: s.read_u64::<LE>()?,
         })
     }
-}
-
-#[derive(Debug)]
-struct FMappedName {
-    index: u32,
-    number: u32,
-}
-impl FMappedName {
-    #[instrument(skip_all, name = "FMappedName")]
-    fn read<S: Read>(s: &mut S) -> Result<Self> {
-        Ok(Self {
-            index: s.read_u32::<LE>()?,
-            number: s.read_u32::<LE>()?,
-        })
+    fn get(self) -> Option<u64> {
+        (self.type_and_id != u64::MAX).then_some(self.type_and_id)
     }
-}
-
-#[derive(Debug)]
-struct FMinimalName {
-    index: FNameEntryId,
-    number: i32,
-}
-impl FMinimalName {
-    #[instrument(skip_all, name = "FMinimalName")]
-    fn read<S: Read>(s: &mut S) -> Result<Self> {
-        Ok(Self {
-            index: FNameEntryId::read(s)?,
-            number: s.read_i32::<LE>()?,
-        })
-    }
-}
-
-#[derive(Debug)]
-struct FNameEntryId {
-    value: u32,
-}
-impl FNameEntryId {
-    #[instrument(skip_all, "FNameEntryId")]
-    fn read<S: Read>(s: &mut S) -> Result<Self> {
-        Ok(Self {
-            value: s.read_u32::<LE>()?,
-        })
-    }
-}
-
-#[derive(Debug)]
-struct FNameBatch {
-    num: u32,
-    hash_bytes: Vec<u8>,
-    header_bytes: Vec<u8>,
-    string_bytes: Vec<u8>,
 }
 
 #[cfg(test)]

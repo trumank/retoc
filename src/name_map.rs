@@ -1,0 +1,81 @@
+use std::io::Read;
+
+use anyhow::Result;
+use tracing::instrument;
+
+use crate::{read_array, read_string, ReadExt, Readable, ReadableBase};
+
+#[derive(Debug)]
+pub(crate) struct FNameMap {
+    names: Vec<String>,
+}
+impl Readable for FNameMap {}
+impl ReadableBase for FNameMap {
+    #[instrument(skip_all, "FNameMap")]
+    fn ser<S: Read>(s: &mut S) -> Result<Self> {
+        let num: u32 = s.ser()?;
+        let _num_string_bytes: u32 = s.ser()?;
+        let _hash_version: u64 = s.ser()?;
+
+        let _use_saved_hashes = false; // TODO check CanUseSavedHashes(HashVersion)
+
+        let _hash_bytes: Vec<u8> = s.ser_ctx(num as usize * 8)?;
+        let lengths = read_array(num as usize, s, |s| Ok(u16::from_be_bytes(s.ser()?)))?;
+        let names: Vec<_> = lengths
+            .iter()
+            .map(|&l| read_string(l as i32, s))
+            .collect::<Result<_>>()?;
+
+        Ok(Self { names })
+    }
+}
+impl FNameMap {
+    pub(crate) fn get(&self, name: FMinimalName) -> &str {
+        &self.names[name.index.value as usize & 0xff_ffff]
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct FMappedName {
+    index: u32,
+    number: u32,
+}
+
+impl Readable for FMappedName {}
+impl ReadableBase for FMappedName {
+    #[instrument(skip_all, name = "FMappedName")]
+    fn ser<S: Read>(s: &mut S) -> Result<Self> {
+        Ok(Self {
+            index: s.ser()?,
+            number: s.ser()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FMinimalName {
+    index: FNameEntryId,
+    number: i32,
+}
+impl Readable for FMinimalName {}
+impl ReadableBase for FMinimalName {
+    #[instrument(skip_all, name = "FMinimalName")]
+    fn ser<S: Read>(s: &mut S) -> Result<Self> {
+        Ok(Self {
+            index: s.ser()?,
+            number: s.ser()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FNameEntryId {
+    value: u32,
+}
+impl Readable for FNameEntryId {}
+impl ReadableBase for FNameEntryId {
+    #[instrument(skip_all, name = "FNameEntryId")]
+    fn ser<S: Read>(s: &mut S) -> Result<Self> {
+        Ok(Self { value: s.ser()? })
+    }
+}

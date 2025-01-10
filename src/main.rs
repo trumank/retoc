@@ -1,5 +1,7 @@
-mod script_objects;
 mod compact_binary;
+mod name_map;
+mod script_objects;
+mod zen;
 
 use std::{
     collections::HashMap,
@@ -19,22 +21,17 @@ fn align(value: u64, alignment: u64) -> u64 {
 }
 
 fn main() -> Result<()> {
-    let path_ucas = "/home/truman/.local/share/Steam/steamapps/common/AbioticFactor/AbioticFactor/Content/Paks/pakchunk0-Windows.ucas";
-
-    let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/AbioticFactor/AbioticFactor/Content/Paks/pakchunk0-Windows.utoc";
-    let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Serum/Serum/Content/Paks/pakchunk0-Windows.utoc";
+    //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Serum/Serum/Content/Paks/pakchunk0-Windows.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Nuclear Nightmare/NuclearNightmare/Content/Paks/NuclearNightmare-Windows.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/The Isle/TheIsle/Content/Paks/pakchunk0-WindowsClient.utoc";
-    let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Satisfactory/FactoryGame/Content/Paks/FactoryGame-Windows.utoc";
+    //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Satisfactory/FactoryGame/Content/Paks/FactoryGame-Windows.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Satisfactory/FactoryGame/Content/Paks/global.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/VisionsofManaDemo/VisionsofMana/Content/Paks/pakchunk0-WindowsNoEditor.utoc";
+    let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/AbioticFactor/AbioticFactor/Content/Paks/pakchunk0-Windows.utoc";
 
     let ucas_stream = BufReader::new(File::open(Path::new(path_utoc).with_extension("ucas"))?);
-
     let mut stream = BufReader::new(File::open(path_utoc)?);
-
     ser_hex::read("trace.json", &mut stream, |s| read(s, ucas_stream))?;
-    //read(stream, ucas_stream)?;
 
     Ok(())
 }
@@ -53,12 +50,14 @@ trait ReadableCtx<C> {
 
 impl<T> ReadExt for T where T: Read {}
 trait ReadExt: Read {
+    #[instrument(skip_all)]
     fn ser<T: ReadableBase>(&mut self) -> Result<T>
     where
         Self: Sized,
     {
         T::ser(self)
     }
+    #[instrument(skip_all)]
     fn ser_ctx<T: ReadableCtx<C>, C>(&mut self, ctx: C) -> Result<T>
     where
         Self: Sized,
@@ -90,18 +89,8 @@ impl<const N: usize, T: Readable + Default + Copy> ReadableBase for [T; N] {
 
 impl Readable for String {}
 impl ReadableBase for String {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        let len = stream.read_i32::<LE>()?;
-        if len < 0 {
-            let chars = read_array((-len) as usize, stream, |r| Ok(r.read_u16::<LE>()?))?;
-            let length = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
-            Ok(String::from_utf16(&chars[..length]).unwrap())
-        } else {
-            let mut chars = vec![0; len as usize];
-            stream.read_exact(&mut chars)?;
-            let length = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
-            Ok(String::from_utf8_lossy(&chars[..length]).into_owned())
-        }
+    fn ser<S: Read>(s: &mut S) -> Result<Self> {
+        read_string(s.ser()?, s)
     }
 }
 
@@ -174,15 +163,29 @@ impl Readable for u64 {}
 impl Readable for i64 {}
 
 #[instrument(skip_all)]
-fn read_array<R: Read, T, F>(len: usize, mut stream: R, mut f: F) -> Result<Vec<T>>
+fn read_array<S: Read, T, F>(len: usize, stream: &mut S, mut f: F) -> Result<Vec<T>>
 where
-    F: FnMut(&mut R) -> Result<T>,
+    F: FnMut(&mut S) -> Result<T>,
 {
     let mut array = Vec::with_capacity(len);
     for _ in 0..len {
-        array.push(f(&mut stream)?);
+        array.push(f(stream)?);
     }
     Ok(array)
+}
+
+#[instrument(skip_all)]
+fn read_string<S: Read>(len: i32, stream: &mut S) -> Result<String> {
+    if len < 0 {
+        let chars = read_array((-len) as usize, stream, |r| Ok(r.read_u16::<LE>()?))?;
+        let length = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
+        Ok(String::from_utf16(&chars[..length]).unwrap())
+    } else {
+        let mut chars = vec![0; len as usize];
+        stream.read_exact(&mut chars)?;
+        let length = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
+        Ok(String::from_utf8_lossy(&chars[..length]).into_owned())
+    }
 }
 
 #[instrument(skip_all)]
@@ -246,26 +249,35 @@ fn read<R: Read, U: Read + Seek>(mut stream: R, mut ucas_stream: U) -> Result<()
         file_map,
     };
 
-    let output = Path::new("global");
+    let output = Path::new("zen_out");
 
     //for chunk in toc.chunk_ids {
     //    dbg!(chunk);
     //}
 
-    //for file_name in toc.file_map.keys() {
-    //    //"FactoryGame/Content/FactoryGame/Interface/UI/InGame/OutputSlotData_Struct.uasset"
-    //    let chunk_info = toc.get_chunk_info(file_name);
-    //    dbg!(&chunk_info);
+    for file_name in toc.file_map.keys() {
+        //"FactoryGame/Content/FactoryGame/Interface/UI/InGame/OutputSlotData_Struct.uasset"
+        let chunk_info = toc.get_chunk_info(file_name);
+        //dbg!(&chunk_info);
 
-    //    let path = output.join(file_name);
-    //    let dir = path.parent().unwrap();
+        //println!("{file_name}");
+        if chunk_info.id.get_chunk_type() == EIoChunkType::ExportBundleData {
+            //println!("{}", file_name);
+            let data = toc.read(&mut ucas_stream, toc.file_map[file_name])?;
+            //let summary: FPackageFileSummary = .ser()?;
+            //std::fs::write("uasset.uasset", &data)?;
 
-    //    println!("{file_name}");
-    //    let data = toc.read(&mut ucas_stream, toc.file_map[file_name])?;
+            // WRITE
+            //let path = output.join(file_name);
+            //let dir = path.parent().unwrap();
+            //std::fs::create_dir_all(dir)?;
+            //std::fs::write(path, &data)?;
+            // END WRITE
 
-    //    std::fs::create_dir_all(dir)?;
-    //    std::fs::write(path, data)?;
-    //}
+
+            println!("{:>20} {:>20}", get_package_name(&data)?, file_name);
+        }
+    }
 
     //let data = toc.read(&mut ucas_stream, 0)?;
     //std::fs::write("giga.bin", data)?;
@@ -395,7 +407,7 @@ fn read_directory_index<R: Read>(mut stream: R, header: &FIoStoreTocHeader) -> R
 }
 
 #[instrument(skip_all)]
-fn read_meta<R: Read>(stream: R, header: &FIoStoreTocHeader) -> Result<Vec<FIoStoreTocEntryMeta>> {
+fn read_meta<S: Read>(stream: &mut S, header: &FIoStoreTocHeader) -> Result<Vec<FIoStoreTocEntryMeta>> {
     read_array(header.toc_entry_count as usize, stream, |s| {
         let res = s.ser()?;
         if header.version >= EIoStoreTocVersion::ReplaceIoChunkHashWithIoHash {
@@ -483,7 +495,7 @@ impl Toc {
         let mut data = vec![];
         for i in first_block_index..=last_block_index {
             let block = &self.compression_blocks[i];
-            println!("{i} {block:#?}");
+            //println!("{i} {block:#?}");
 
             let mut buffer = vec![0; block.get_compressed_size() as usize];
             ucas_stream.seek(SeekFrom::Start(block.get_offset()))?;
@@ -776,23 +788,39 @@ struct FIoStoreTocChunkInfo {
     is_compressed: bool,
 }
 
-#[derive(Debug, FromRepr)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
 #[repr(u8)]
 enum EIoChunkType {
-    Invalid = 0x0,
-    InstallManifest = 0x1,
-    ExportBundleData = 0x2,
-    BulkData = 0x3,
-    OptionalBulkData = 0x4,
-    MemoryMappedBulkData = 0x5,
-    LoaderGlobalMeta = 0x6,
-    LoaderInitialLoadMeta = 0x7,
-    LoaderGlobalNames = 0x8,
-    LoaderGlobalNameHashes = 0x9,
-    ContainerHeader = 0xa,
+    Invalid = 0,
+    ExportBundleData = 1,
+    BulkData = 2,
+    OptionalBulkData = 3,
+    MemoryMappedBulkData = 4,
+    ScriptObjects = 5,
+    ContainerHeader = 6,
+    ExternalFile = 7,
+    ShaderCodeLibrary = 8,
+    ShaderCode = 9,
+    PackageStoreEntry = 10,
+    DerivedData = 11,
+    EditorDerivedData = 12,
+    PackageResource = 13,
+    // from 4.25
+    //Invalid = 0x0,
+    //InstallManifest = 0x1,
+    //ExportBundleData = 0x2,
+    //BulkData = 0x3,
+    //OptionalBulkData = 0x4,
+    //MemoryMappedBulkData = 0x5,
+    //LoaderGlobalMeta = 0x6,
+    //LoaderInitialLoadMeta = 0x7,
+    //LoaderGlobalNames = 0x8,
+    //LoaderGlobalNameHashes = 0x9,
+    //ContainerHeader = 0xa,
 }
 
 use directory_index::*;
+use zen::{get_package_name, FPackageFileSummary};
 mod directory_index {
     use std::u32;
 
