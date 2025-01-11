@@ -19,7 +19,7 @@ use bitflags::bitflags;
 use clap::Parser;
 use rayon::prelude::*;
 use ser::*;
-use strum::FromRepr;
+use strum::{AsRefStr, FromRepr};
 use tracing::instrument;
 
 #[derive(Parser, Debug)]
@@ -167,8 +167,15 @@ fn action_manifest(args: ActionManifest) -> Result<()> {
 
 fn action_list(args: ActionList) -> Result<()> {
     let toc: Toc = BufReader::new(File::open(&args.utoc)?).ser()?;
-    for f in toc.file_map.keys() {
-        println!("{f}");
+    for (i, &chunk_id) in toc.chunk_ids.iter().enumerate() {
+        let file_name = toc.file_map_rev.get(&(i as u32));
+        println!(
+            "{:>10}  {}  {:20}  {}",
+            i,
+            hex::encode(chunk_id.get_chunk_id()),
+            chunk_id.get_chunk_type().as_ref(),
+            file_name.map(String::as_str).unwrap_or("-")
+        );
     }
     Ok(())
 }
@@ -465,6 +472,7 @@ struct Toc {
     directory_index: Option<FIoDirectoryIndexResource>,
     file_map: HashMap<String, u32>,
     file_map_lower: HashMap<String, u32>,
+    file_map_rev: HashMap<u32, String>,
     chunk_id_map: HashMap<FIoChunkId, u32>,
 }
 struct TocSignatures {
@@ -495,13 +503,15 @@ impl Readable for Toc {
 
         let mut file_map: HashMap<String, u32> = Default::default();
         let mut file_map_lower: HashMap<String, u32> = Default::default();
+        let mut file_map_rev: HashMap<u32, String> = Default::default();
         let directory_index = if !directory_index.is_empty() {
             let directory_index =
                 FIoDirectoryIndexResource::read(&mut Cursor::new(directory_index))?;
             directory_index.iter_root(|user_data, path| {
                 let path = path.join("/");
                 file_map_lower.insert(path.to_ascii_lowercase(), user_data);
-                file_map.insert(path, user_data);
+                file_map.insert(path.clone(), user_data);
+                file_map_rev.insert(user_data, path);
             });
             Some(directory_index)
         } else {
@@ -527,6 +537,7 @@ impl Readable for Toc {
             directory_index,
             file_map,
             file_map_lower,
+            file_map_rev,
             chunk_id_map,
         })
     }
@@ -938,7 +949,7 @@ struct FIoStoreTocChunkInfo {
     is_compressed: bool,
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, FromRepr, AsRefStr)]
 #[repr(u8)]
 enum EIoChunkType {
     Invalid = 0,
