@@ -9,11 +9,11 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{BufReader, Cursor, Read, Seek, SeekFrom},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use bitflags::bitflags;
 use clap::Parser;
 use rayon::prelude::*;
@@ -34,6 +34,12 @@ struct ActionList {
 }
 
 #[derive(Parser, Debug)]
+struct ActionVerify {
+    #[arg(index = 1)]
+    utoc: PathBuf,
+}
+
+#[derive(Parser, Debug)]
 struct ActionUnpack {
     #[arg(index = 1)]
     utoc: PathBuf,
@@ -49,6 +55,8 @@ enum Action {
     Manifest(ActionManifest),
     /// List fils in .utoc (directory index)
     List(ActionList),
+    /// Verify IO Store container
+    Verify(ActionVerify),
     /// Extracts chunks (files) from .utoc
     Unpack(ActionUnpack),
 }
@@ -64,6 +72,7 @@ fn main() -> Result<()> {
     match args.action {
         Action::Manifest(action) => action_manifest(action),
         Action::List(action) => action_list(action),
+        Action::Verify(action) => action_verify(action),
         Action::Unpack(action) => action_unpack(action),
     }
 }
@@ -157,6 +166,59 @@ fn action_list(args: ActionList) -> Result<()> {
     for f in toc.file_map.keys() {
         println!("{f}");
     }
+    Ok(())
+}
+
+fn action_verify(args: ActionVerify) -> Result<()> {
+    let mut stream = BufReader::new(File::open(&args.utoc)?);
+    let ucas = &args.utoc.with_extension("ucas");
+
+    let toc: Toc = stream.ser()?;
+
+    // most of these don't match?!
+    //let sigs = &toc.signatures.as_ref().unwrap().chunk_block_signatures;
+    //let mut rdr = BufReader::new(File::open(ucas)?);
+    //for (i, b) in toc.compression_blocks.iter().enumerate() {
+    //    rdr.seek(SeekFrom::Start(b.get_offset()))?;
+
+    //    let data: Vec<u8> = rdr.ser_ctx(b.get_compressed_size() as usize)?;
+
+    //    use sha1::{Digest, Sha1};
+    //    let mut hasher = Sha1::new();
+    //    hasher.update(&data);
+    //    let hash = hasher.finalize();
+
+    //    println!(
+    //        "{:?} {} {} {}",
+    //        sigs[i],
+    //        hex::encode_upper(hash),
+    //        b.get_compression_method_index(),
+    //        sigs[i].data == hash.as_ref()
+    //    );
+    //}
+
+    toc.chunk_metas.par_iter().enumerate().try_for_each_init(
+        || BufReader::new(File::open(ucas).unwrap()),
+        |ucas, (i, meta)| -> Result<()> {
+            let data = toc.read(ucas, i as u32)?;
+            let hash = blake3::hash(&data);
+
+            println!(
+                "{:>10} {:?} {} {:?}",
+                i,
+                hex::encode(meta.chunk_hash.data),
+                hex::encode(hash.as_bytes()),
+                meta.flags
+            );
+
+            if meta.chunk_hash.data[..20] != hash.as_bytes()[..20] {
+                bail!("hash mismatch for chunk #{i}")
+            }
+
+            Ok(())
+        },
+    )?;
+
     Ok(())
 }
 
@@ -292,18 +354,22 @@ fn read_compression_methods<R: Read>(
 }
 
 #[instrument(skip_all)]
-fn read_chunk_block_signatures<R: Read>(stream: &mut R, header: &FIoStoreTocHeader) -> Result<()> {
+fn read_chunk_block_signatures<R: Read>(
+    stream: &mut R,
+    header: &FIoStoreTocHeader,
+) -> Result<Option<TocSignatures>> {
     let is_signed = header.container_flags.contains(EIoContainerFlags::Signed);
-    if is_signed {
+    Ok(if is_signed {
         let size = stream.ser::<u32>()? as usize;
-        let toc_signature: Vec<u8> = stream.ser_ctx(size)?;
-        let block_signature: Vec<u8> = stream.ser_ctx(size)?;
-
-        let chunk_block_signatures: Vec<FSHAHash> =
-            stream.ser_ctx(header.toc_compressed_block_entry_count as usize)?;
-        //dbg!(chunk_block_signatures);
-    }
-    Ok(())
+        Some(TocSignatures {
+            toc_signature: stream.ser_ctx(size)?,
+            block_signature: stream.ser_ctx(size)?,
+            chunk_block_signatures: stream
+                .ser_ctx(header.toc_compressed_block_entry_count as usize)?,
+        })
+    } else {
+        None
+    })
 }
 
 #[instrument(skip_all)]
@@ -333,11 +399,17 @@ struct Toc {
     chunk_indices_without_perfect_hash: Vec<i32>,
     compression_blocks: Vec<FIoStoreTocCompressedBlockEntry>,
     compression_methods: Vec<String>,
+    signatures: Option<TocSignatures>,
     chunk_metas: Vec<FIoStoreTocEntryMeta>,
 
     directory_index: Option<FIoDirectoryIndexResource>,
     file_map: HashMap<String, u32>,
     file_map_lower: HashMap<String, u32>,
+}
+struct TocSignatures {
+    toc_signature: Vec<u8>,
+    block_signature: Vec<u8>,
+    chunk_block_signatures: Vec<FSHAHash>,
 }
 impl Readable for Toc {}
 impl ReadableBase for Toc {
@@ -351,7 +423,7 @@ impl ReadableBase for Toc {
         let compression_blocks = read_compression_blocks(stream, &header)?;
         let compression_methods = read_compression_methods(stream, &header)?;
 
-        read_chunk_block_signatures(stream, &header)?;
+        let signatures = read_chunk_block_signatures(stream, &header)?;
         let directory_index = read_directory_index(stream, &header)?; // TODO decrypt
         let chunk_metas = read_meta(stream, &header)?;
 
@@ -384,6 +456,7 @@ impl ReadableBase for Toc {
             chunk_indices_without_perfect_hash,
             compression_blocks,
             compression_methods,
+            signatures,
             chunk_metas,
 
             directory_index,
