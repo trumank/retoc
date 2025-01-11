@@ -10,10 +10,12 @@ use std::{
     fs::File,
     io::{BufReader, Cursor, Read, Seek, SeekFrom},
     path::Path,
+    sync::{Arc, Mutex},
 };
 
 use anyhow::{Context, Result};
 use bitflags::bitflags;
+use rayon::iter::ParallelBridge;
 use ser::*;
 use strum::FromRepr;
 use tracing::instrument;
@@ -31,145 +33,92 @@ fn main() -> Result<()> {
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/VisionsofManaDemo/VisionsofMana/Content/Paks/pakchunk0-WindowsNoEditor.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/AbioticFactor/AbioticFactor/Content/Paks/pakchunk0-Windows.utoc";
 
-    let ucas_stream = BufReader::new(File::open(Path::new(path_utoc).with_extension("ucas"))?);
     let mut stream = BufReader::new(File::open(path_utoc)?);
-    ser_hex::read("trace.json", &mut stream, |s| read(s, ucas_stream))?;
+    //ser_hex::read("trace.json", &mut stream, |s| read(s, ucas_stream))?;
+    read(&mut stream, Path::new(path_utoc).with_extension("ucas"))?;
 
     Ok(())
 }
 
 #[instrument(skip_all)]
-fn read<R: Read, U: Read + Seek>(mut stream: R, mut ucas_stream: U) -> Result<()> {
-    let header = stream.ser()?;
-    dbg!(&header);
-
-    //let total_toc_size = len - 0x90 /* sizeof(FIoStoreTocHeader) */;
-    //let toc_meta_size = header.toc_entry_count as u64 *  1 /* sizeof(FIoStoreTocEntryMeta) */;
-
-    //let default_toc_size = total_toc_size - (header.directory_index_size as u64 + toc_meta_size);
-    //let toc_size = default_toc_size;
-
-    // START TOC READ
-    let chunk_ids = read_chunk_ids(&mut stream, &header)?;
-
-    let chunk_offset_lengths = read_chunk_offsets(&mut stream, &header)?;
-
-    let (chunk_perfect_hash_seeds, chunk_indices_without_perfect_hash) =
-        read_hash_map(&mut stream, &header)?;
-
-    let compression_blocks = read_compression_blocks(&mut stream, &header)?;
-    let compression_methods = read_compression_methods(&mut stream, &header)?;
-
-    // TODO decrypt
-    read_chunk_block_signatures(&mut stream, &header)?;
-    let directory_index = read_directory_index(&mut stream, &header)?;
-    let chunk_metas = read_meta(&mut stream, &header)?;
-    // END TOC READ
-
-    // build index
-    let mut chunk_id_to_index: HashMap<FIoChunkId, u32> = Default::default();
-    for (chunk_index, &chunk_id) in chunk_ids.iter().enumerate() {
-        chunk_id_to_index.insert(chunk_id, chunk_index as u32);
-    }
-
-    let mut file_map: HashMap<String, u32> = Default::default();
-    let mut file_map_lower: HashMap<String, u32> = Default::default();
-    let directory_index = if !directory_index.is_empty() {
-        let directory_index = FIoDirectoryIndexResource::read(Cursor::new(directory_index))?;
-        directory_index.iter_root(|user_data, path| {
-            let path = path.join("/");
-            //println!("{}", path);
-            file_map_lower.insert(path.to_ascii_lowercase(), user_data);
-            file_map.insert(path, user_data);
-        });
-        Some(directory_index)
-    } else {
-        None
-    };
-
-    let toc = Toc {
-        header,
-        chunk_ids,
-        chunk_offset_lengths,
-        chunk_perfect_hash_seeds,
-        chunk_indices_without_perfect_hash,
-        compression_blocks,
-        compression_methods,
-        chunk_metas,
-
-        directory_index,
-        file_map,
-        file_map_lower,
-    };
+fn read<R: Read, U: AsRef<Path>>(stream: &mut R, ucas: U) -> Result<()> {
+    let ucas = ucas.as_ref();
+    let toc: Toc = stream.ser()?;
 
     let output = Path::new("zen_out");
 
-    //for chunk in toc.chunk_ids {
-    //    dbg!(chunk);
+    let mut entries = Arc::new(Mutex::new(vec![]));
+
+    //fn process(toc: &Toc, file_name: &str) -> Result<()> {
     //}
+    use rayon::prelude::*;
 
-    let mut entries = vec![];
+    toc.file_map.keys().par_bridge().try_for_each_init(
+        || (entries.clone(), BufReader::new(File::open(ucas).unwrap())),
+        |(entries, ucas), file_name| -> Result<()> {
+            //"FactoryGame/Content/FactoryGame/Interface/UI/InGame/OutputSlotData_Struct.uasset"
+            let chunk_info = toc.get_chunk_info(file_name);
+            //dbg!(&chunk_info);
 
-    for file_name in toc.file_map.keys() {
-        //"FactoryGame/Content/FactoryGame/Interface/UI/InGame/OutputSlotData_Struct.uasset"
-        let chunk_info = toc.get_chunk_info(file_name);
-        //dbg!(&chunk_info);
+            //println!("{file_name}");
+            if chunk_info.id.get_chunk_type() == EIoChunkType::ExportBundleData {
+                //println!("{}", file_name);
+                let data = toc.read(ucas, toc.file_map[file_name])?;
+                //let summary: FPackageFileSummary = .ser()?;
+                //std::fs::write("uasset.uasset", &data)?;
 
-        //println!("{file_name}");
-        if chunk_info.id.get_chunk_type() == EIoChunkType::ExportBundleData {
-            //println!("{}", file_name);
-            let data = toc.read(&mut ucas_stream, toc.file_map[file_name])?;
-            //let summary: FPackageFileSummary = .ser()?;
-            //std::fs::write("uasset.uasset", &data)?;
+                // WRITE
+                //let path = output.join(file_name);
+                //let dir = path.parent().unwrap();
+                //std::fs::create_dir_all(dir)?;
+                //std::fs::write(path, &data)?;
+                // END WRITE
 
-            // WRITE
-            //let path = output.join(file_name);
-            //let dir = path.parent().unwrap();
-            //std::fs::create_dir_all(dir)?;
-            //std::fs::write(path, &data)?;
-            // END WRITE
+                let package_name =
+                    get_package_name(&data).with_context(|| file_name.to_string())?;
 
-            if file_name == "FactoryGame/Content/FactoryGame/Buildable/Factory/ResourceSink/DT_ResourceSinkPoints.uasset" {
-                std::fs::write("bad.uasset", &data)?;
-            }
-            let package_name = get_package_name(&data).with_context(|| file_name.to_string())?;
+                //println!("{package_name} {file_name} {:?}", chunk_info.id);
 
-            let (path, _ext) = file_name.rsplit_once(".").unwrap();
-            let packagename = if let (Some((package_path, package_name)), Some((_, file_name))) =
-                (package_name.rsplit_once("/"), path.rsplit_once("/"))
-            {
-                format!(
-                    "{package_path}/{}{}",
-                    package_name,
-                    &file_name[package_name.len()..]
-                )
-            } else {
-                package_name.to_string()
-            };
+                let (path, _ext) = file_name.rsplit_once(".").unwrap();
+                let packagename =
+                    if let (Some((package_path, package_name)), Some((_, file_name))) =
+                        (package_name.rsplit_once("/"), path.rsplit_once("/"))
+                    {
+                        format!(
+                            "{package_path}/{}{}",
+                            package_name,
+                            &file_name[package_name.len()..]
+                        )
+                    } else {
+                        package_name.to_string()
+                    };
 
-            let mut entry = manifest::Op {
-                packagestoreentry: manifest::PackageStoreEntry { packagename },
-                packagedata: vec![manifest::ChunkData {
-                    id: chunk_info.id,
-                    filename: file_name.to_string(),
-                }],
-                bulkdata: vec![],
-            };
+                let mut entry = manifest::Op {
+                    packagestoreentry: manifest::PackageStoreEntry { packagename },
+                    packagedata: vec![manifest::ChunkData {
+                        id: chunk_info.id,
+                        filename: file_name.to_string(),
+                    }],
+                    bulkdata: vec![],
+                };
 
-            if let Some((path, _ext)) = file_name.rsplit_once(".") {
-                let bulk_path = format!("{path}.ubulk");
-                if let Some(&bulk) = toc.file_map_lower.get(&bulk_path.to_ascii_lowercase()) {
-                    entry.bulkdata.push(manifest::ChunkData {
-                        id: toc.chunk_ids[bulk as usize],
-                        filename: bulk_path,
-                    });
+                if let Some((path, _ext)) = file_name.rsplit_once(".") {
+                    let bulk_path = format!("{path}.ubulk");
+                    if let Some(&bulk) = toc.file_map_lower.get(&bulk_path.to_ascii_lowercase()) {
+                        entry.bulkdata.push(manifest::ChunkData {
+                            id: toc.chunk_ids[bulk as usize],
+                            filename: bulk_path,
+                        });
+                    }
                 }
+
+                entries.lock().unwrap().push(entry);
             }
+            Ok(())
+        },
+    )?;
 
-            entries.push(entry);
-        }
-    }
-
+    let mut entries = Arc::into_inner(entries).unwrap().into_inner().unwrap();
     //entries.sort_by_key(|op| op.packagedata.first().map(|c| c.filename.clone()));
     entries.sort_by(|a, b| {
         a.packagestoreentry
@@ -231,13 +180,13 @@ impl ReadableBase for FIoStoreTocHeader {
 }
 
 #[instrument(skip_all)]
-fn read_chunk_ids<R: Read>(mut stream: R, header: &FIoStoreTocHeader) -> Result<Vec<FIoChunkId>> {
+fn read_chunk_ids<R: Read>(stream: &mut R, header: &FIoStoreTocHeader) -> Result<Vec<FIoChunkId>> {
     stream.ser_ctx(header.toc_entry_count as usize)
 }
 
 #[instrument(skip_all)]
 fn read_chunk_offsets<R: Read>(
-    mut stream: R,
+    stream: &mut R,
     header: &FIoStoreTocHeader,
 ) -> Result<Vec<FIoOffsetAndLength>> {
     stream.ser_ctx(header.toc_entry_count as usize)
@@ -245,7 +194,7 @@ fn read_chunk_offsets<R: Read>(
 
 #[instrument(skip_all)]
 fn read_hash_map<R: Read>(
-    mut stream: R,
+    stream: &mut R,
     header: &FIoStoreTocHeader,
 ) -> Result<(Vec<i32>, Vec<i32>)> {
     let mut perfect_hash_seeds_count = 0;
@@ -267,7 +216,7 @@ fn read_hash_map<R: Read>(
 
 #[instrument(skip_all)]
 fn read_compression_blocks<R: Read>(
-    mut stream: R,
+    stream: &mut R,
     header: &FIoStoreTocHeader,
 ) -> Result<Vec<FIoStoreTocCompressedBlockEntry>> {
     stream.ser_ctx(header.toc_compressed_block_entry_count as usize)
@@ -275,7 +224,7 @@ fn read_compression_blocks<R: Read>(
 
 #[instrument(skip_all)]
 fn read_compression_methods<R: Read>(
-    mut stream: R,
+    stream: &mut R,
     header: &FIoStoreTocHeader,
 ) -> Result<Vec<String>> {
     let mut names = vec!["None".into()];
@@ -292,7 +241,7 @@ fn read_compression_methods<R: Read>(
 }
 
 #[instrument(skip_all)]
-fn read_chunk_block_signatures<R: Read>(mut stream: R, header: &FIoStoreTocHeader) -> Result<()> {
+fn read_chunk_block_signatures<R: Read>(stream: &mut R, header: &FIoStoreTocHeader) -> Result<()> {
     let is_signed = header.container_flags.contains(EIoContainerFlags::Signed);
     if is_signed {
         let size = stream.ser::<u32>()? as usize;
@@ -307,7 +256,7 @@ fn read_chunk_block_signatures<R: Read>(mut stream: R, header: &FIoStoreTocHeade
 }
 
 #[instrument(skip_all)]
-fn read_directory_index<R: Read>(mut stream: R, header: &FIoStoreTocHeader) -> Result<Vec<u8>> {
+fn read_directory_index<R: Read>(stream: &mut R, header: &FIoStoreTocHeader) -> Result<Vec<u8>> {
     stream.ser_ctx(header.directory_index_size as usize)
 }
 
@@ -338,6 +287,59 @@ struct Toc {
     directory_index: Option<FIoDirectoryIndexResource>,
     file_map: HashMap<String, u32>,
     file_map_lower: HashMap<String, u32>,
+}
+impl Readable for Toc {}
+impl ReadableBase for Toc {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        let header = stream.ser()?;
+
+        let chunk_ids = read_chunk_ids(stream, &header)?;
+        let chunk_offset_lengths = read_chunk_offsets(stream, &header)?;
+        let (chunk_perfect_hash_seeds, chunk_indices_without_perfect_hash) =
+            read_hash_map(stream, &header)?;
+        let compression_blocks = read_compression_blocks(stream, &header)?;
+        let compression_methods = read_compression_methods(stream, &header)?;
+
+        read_chunk_block_signatures(stream, &header)?;
+        let directory_index = read_directory_index(stream, &header)?; // TODO decrypt
+        let chunk_metas = read_meta(stream, &header)?;
+
+        // build indexes
+        let mut chunk_id_to_index: HashMap<FIoChunkId, u32> = Default::default();
+        for (chunk_index, &chunk_id) in chunk_ids.iter().enumerate() {
+            chunk_id_to_index.insert(chunk_id, chunk_index as u32);
+        }
+
+        let mut file_map: HashMap<String, u32> = Default::default();
+        let mut file_map_lower: HashMap<String, u32> = Default::default();
+        let directory_index = if !directory_index.is_empty() {
+            let directory_index =
+                FIoDirectoryIndexResource::read(&mut Cursor::new(directory_index))?;
+            directory_index.iter_root(|user_data, path| {
+                let path = path.join("/");
+                file_map_lower.insert(path.to_ascii_lowercase(), user_data);
+                file_map.insert(path, user_data);
+            });
+            Some(directory_index)
+        } else {
+            None
+        };
+
+        Ok(Toc {
+            header,
+            chunk_ids,
+            chunk_offset_lengths,
+            chunk_perfect_hash_seeds,
+            chunk_indices_without_perfect_hash,
+            compression_blocks,
+            compression_methods,
+            chunk_metas,
+
+            directory_index,
+            file_map,
+            file_map_lower,
+        })
+    }
 }
 impl Toc {
     //fn get_chunk_info(&self, toc_entry_index: u32) {
@@ -401,24 +403,34 @@ impl Toc {
         let last_block_index = ((align(offset + size, compression_block_size as u64) - 1)
             / compression_block_size as u64) as usize;
 
-        let mut data = vec![];
-        for i in first_block_index..=last_block_index {
-            let block = &self.compression_blocks[i];
+        let blocks = &self.compression_blocks[first_block_index..=last_block_index];
+
+        let mut max_buffer = 0;
+        let mut total_size = 0;
+        for b in blocks {
+            total_size += b.get_uncompressed_size() as usize;
+            max_buffer = max_buffer.max(b.get_compressed_size() as usize);
+        }
+        let mut data = vec![0; total_size];
+        let mut buffer = vec![0; max_buffer];
+        let mut cur = 0;
+        for block in blocks {
+            let out = &mut data[cur..cur + block.get_uncompressed_size() as usize];
             //println!("{i} {block:#?}");
 
-            let mut buffer = vec![0; block.get_compressed_size() as usize];
             ucas_stream.seek(SeekFrom::Start(block.get_offset()))?;
-            ucas_stream.read_exact(&mut buffer)?;
-            let decomp = match block.get_compression_method_index() {
-                0 => buffer,
+            match block.get_compression_method_index() {
+                0 => {
+                    ucas_stream.read_exact(out)?;
+                }
                 1 => {
-                    let mut decomp = vec![0; block.get_uncompressed_size() as usize];
-                    oodle_loader::decompress().unwrap()(&buffer, &mut decomp);
-                    decomp
+                    let tmp = &mut buffer[..block.get_compressed_size() as usize];
+                    ucas_stream.read_exact(tmp)?;
+                    oodle_loader::decompress().unwrap()(tmp, out);
                 }
                 other => todo!("{other}"),
-            };
-            data.extend_from_slice(&decomp);
+            }
+            cur += block.get_uncompressed_size() as usize;
         }
         Ok(data)
     }
@@ -436,8 +448,7 @@ impl std::fmt::Debug for FIoChunkId {
         //}
         //write!(f, ")")
         f.debug_struct("FIoChunkId")
-            .field("chunk_id", &self.get_chunk_id())
-            .field("chunk_index", &self.get_chunk_index())
+            .field("chunk_id", &hex::encode(self.get_chunk_id()))
             .field("chunk_type", &self.get_chunk_type())
             .finish()
     }
@@ -466,11 +477,8 @@ impl FIoChunkId {
     fn get_chunk_type(&self) -> EIoChunkType {
         EIoChunkType::from_repr(self.id[11]).unwrap()
     }
-    fn get_chunk_id(&self) -> u64 {
-        u64::from_le_bytes(self.id[0..8].try_into().unwrap())
-    }
-    fn get_chunk_index(&self) -> u16 {
-        u16::from_le_bytes(self.id[8..10].try_into().unwrap())
+    fn get_chunk_id(&self) -> [u8; 11] {
+        self.id[0..11].try_into().unwrap()
     }
 }
 #[derive(Debug)]
@@ -755,7 +763,7 @@ mod directory_index {
         string_table: Vec<String>,
     }
     impl FIoDirectoryIndexResource {
-        pub fn read<S: Read>(mut stream: S) -> Result<Self> {
+        pub fn read<S: Read>(stream: &mut S) -> Result<Self> {
             Ok(Self {
                 mount_point: stream.ser()?,
                 directory_entries: stream.ser()?,
