@@ -102,22 +102,10 @@ fn action_manifest(args: ActionManifest) -> Result<()> {
                 let package_name =
                     get_package_name(&data).with_context(|| file_name.to_string())?;
 
-                let (path, _ext) = file_name.rsplit_once(".").unwrap();
-                let packagename =
-                    if let (Some((package_path, package_name)), Some((_, file_name))) =
-                        (package_name.rsplit_once("/"), path.rsplit_once("/"))
-                    {
-                        format!(
-                            "{package_path}/{}{}",
-                            package_name,
-                            &file_name[package_name.len()..]
-                        )
-                    } else {
-                        package_name.to_string()
-                    };
-
                 let mut entry = manifest::Op {
-                    packagestoreentry: manifest::PackageStoreEntry { packagename },
+                    packagestoreentry: manifest::PackageStoreEntry {
+                        packagename: package_name,
+                    },
                     packagedata: vec![manifest::ChunkData {
                         id: chunk_info.id,
                         filename: file_name.to_string(),

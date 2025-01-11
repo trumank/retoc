@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::{borrow::Cow, io::Read};
 
 use anyhow::Result;
 use tracing::instrument;
@@ -34,8 +34,13 @@ impl ReadableBase for FNameMap {
     }
 }
 impl FNameMap {
-    pub(crate) fn get(&self, name: FMinimalName) -> &str {
-        &self.names[name.index.value as usize & 0xff_ffff]
+    pub(crate) fn get(&self, name: FMinimalName) -> Cow<'_, str> {
+        let n = &self.names[name.index.value as usize & 0xff_ffff];
+        if name.number != 0 {
+            format!("{n}_{}", name.number - 1).into()
+        } else {
+            n.into()
+        }
     }
 }
 
