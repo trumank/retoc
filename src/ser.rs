@@ -1,7 +1,7 @@
-use std::io::Read;
+use std::{io::Read, io::Write};
 
 use anyhow::Result;
-use byteorder::{ReadBytesExt, LE};
+use byteorder::{ReadBytesExt, WriteBytesExt, LE};
 use tracing::instrument;
 
 pub(crate) trait ReadableBase {
@@ -154,4 +154,20 @@ pub(crate) fn read_string<S: Read>(len: i32, stream: &mut S) -> Result<String> {
         let length = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
         Ok(String::from_utf8_lossy(&chars[..length]).into_owned())
     }
+}
+
+pub(crate) fn write_string<S: Write>(stream: &mut S, value: &str) -> Result<()> {
+    if value.is_empty() || value.is_ascii() {
+        stream.write_u32::<LE>(value.as_bytes().len() as u32 + 1)?;
+        stream.write_all(value.as_bytes())?;
+        stream.write_u8(0)?;
+    } else {
+        let chars: Vec<u16> = value.encode_utf16().collect();
+        stream.write_i32::<LE>(-(chars.len() as i32 + 1))?;
+        for c in chars {
+            stream.write_u16::<LE>(c)?;
+        }
+        stream.write_u16::<LE>(0)?;
+    }
+    Ok(())
 }

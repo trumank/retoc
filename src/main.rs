@@ -1,4 +1,5 @@
 mod compact_binary;
+mod legacy_asset;
 mod manifest;
 mod name_map;
 mod script_objects;
@@ -508,7 +509,7 @@ impl Toc {
             is_compressed: meta.flags.contains(FIoStoreTocEntryMetaFlags::Compressed),
         }
     }
-    fn read<U: Read + Seek>(&self, mut ucas_stream: U, toc_entry_index: u32) -> Result<Vec<u8>> {
+    fn read<C: Read + Seek>(&self, cas_stream: &mut C, toc_entry_index: u32) -> Result<Vec<u8>> {
         let offset_and_length = &self.chunk_offset_lengths[toc_entry_index as usize];
         let offset = offset_and_length.get_offset();
         let size = offset_and_length.get_length();
@@ -533,14 +534,14 @@ impl Toc {
             let out = &mut data[cur..cur + block.get_uncompressed_size() as usize];
             //println!("{i} {block:#?}");
 
-            ucas_stream.seek(SeekFrom::Start(block.get_offset()))?;
+            cas_stream.seek(SeekFrom::Start(block.get_offset()))?;
             match block.get_compression_method_index() {
                 0 => {
-                    ucas_stream.read_exact(out)?;
+                    cas_stream.read_exact(out)?;
                 }
                 1 => {
                     let tmp = &mut buffer[..block.get_compressed_size() as usize];
-                    ucas_stream.read_exact(tmp)?;
+                    cas_stream.read_exact(tmp)?;
                     oodle_loader::decompress().unwrap()(tmp, out);
                 }
                 other => todo!("{other}"),
