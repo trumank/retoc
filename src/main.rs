@@ -9,33 +9,54 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{BufReader, Cursor, Read, Seek, SeekFrom},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
 use anyhow::{Context, Result};
 use bitflags::bitflags;
-use rayon::iter::ParallelBridge;
+use clap::Parser;
 use ser::*;
 use strum::FromRepr;
 use tracing::instrument;
 
-fn align(value: u64, alignment: u64) -> u64 {
-    (value + alignment - 1) & !(alignment - 1)
+#[derive(Parser, Debug)]
+struct ActionManifest {
+    #[arg(index = 1)]
+    utoc: PathBuf,
+}
+
+#[derive(Parser, Debug)]
+enum Action {
+    /// Extract manifest from .utoc
+    Manifest(ActionManifest),
+}
+
+#[derive(Parser, Debug)]
+struct Args {
+    #[command(subcommand)]
+    action: Action,
 }
 
 fn main() -> Result<()> {
+    let args = Args::parse();
+    match args.action {
+        Action::Manifest(action) => action_manifest(action),
+    }
+}
+
+fn action_manifest(args: ActionManifest) -> Result<()> {
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Serum/Serum/Content/Paks/pakchunk0-Windows.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Nuclear Nightmare/NuclearNightmare/Content/Paks/NuclearNightmare-Windows.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/The Isle/TheIsle/Content/Paks/pakchunk0-WindowsClient.utoc";
-    let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Satisfactory/FactoryGame/Content/Paks/FactoryGame-Windows.utoc";
+    //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Satisfactory/FactoryGame/Content/Paks/FactoryGame-Windows.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Satisfactory/FactoryGame/Content/Paks/global.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/VisionsofManaDemo/VisionsofMana/Content/Paks/pakchunk0-WindowsNoEditor.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/AbioticFactor/AbioticFactor/Content/Paks/pakchunk0-Windows.utoc";
 
-    let mut stream = BufReader::new(File::open(path_utoc)?);
+    let mut stream = BufReader::new(File::open(&args.utoc)?);
     //ser_hex::read("trace.json", &mut stream, |s| read(s, ucas_stream))?;
-    read(&mut stream, Path::new(path_utoc).with_extension("ucas"))?;
+    read(&mut stream, args.utoc.with_extension("ucas"))?;
 
     Ok(())
 }
@@ -47,7 +68,7 @@ fn read<R: Read, U: AsRef<Path>>(stream: &mut R, ucas: U) -> Result<()> {
 
     let output = Path::new("zen_out");
 
-    let mut entries = Arc::new(Mutex::new(vec![]));
+    let entries = Arc::new(Mutex::new(vec![]));
 
     //fn process(toc: &Toc, file_name: &str) -> Result<()> {
     //}
@@ -126,12 +147,14 @@ fn read<R: Read, U: AsRef<Path>>(stream: &mut R, ucas: U) -> Result<()> {
             .cmp(&b.packagestoreentry.packagename)
     });
 
-    std::fs::write(
-        "pakstore.json",
-        serde_json::to_vec(&manifest::PackageStoreManifest {
-            oplog: manifest::OpLog { entries },
-        })?,
-    )?;
+    let manifest = manifest::PackageStoreManifest {
+        oplog: manifest::OpLog { entries },
+    };
+
+    let path = "pakstore.json";
+    std::fs::write(path, serde_json::to_vec(&manifest)?)?;
+
+    println!("wrote {} entries to {}", manifest.oplog.entries.len(), path);
 
     //let data = toc.read(&mut ucas_stream, 0)?;
     //std::fs::write("giga.bin", data)?;
@@ -340,6 +363,9 @@ impl ReadableBase for Toc {
             file_map_lower,
         })
     }
+}
+fn align(value: u64, alignment: u64) -> u64 {
+    (value + alignment - 1) & !(alignment - 1)
 }
 impl Toc {
     //fn get_chunk_info(&self, toc_entry_index: u32) {
