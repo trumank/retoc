@@ -25,6 +25,18 @@ pub(crate) trait Readable {
         Ok(buf)
     }
 }
+pub(crate) trait Writeable {
+    fn ser<S: Write>(&self, stream: &mut S) -> Result<()>;
+    fn ser_array<S: Write, T: AsRef<[Self]>>(this: T, stream: &mut S) -> Result<()>
+    where
+        Self: Sized,
+    {
+        for i in this.as_ref() {
+            Self::ser(i, stream)?;
+        }
+        Ok(())
+    }
+}
 pub(crate) trait ReadableCtx<C> {
     fn ser<S: Read>(stream: &mut S, ctx: C) -> Result<Self>
     where
@@ -48,6 +60,16 @@ pub(crate) trait ReadExt: Read {
         T::ser(self, ctx)
     }
 }
+impl<T> WriteExt for T where T: Write {}
+pub(crate) trait WriteExt: Write {
+    #[instrument(skip_all)]
+    fn ser<T: Writeable>(&mut self, value: T) -> Result<()>
+    where
+        Self: Sized,
+    {
+        value.ser(self)
+    }
+}
 
 impl<const N: usize, T: Readable + Default + Copy> Readable for [T; N] {
     #[instrument(skip_all, name = "read_fixed_slice")]
@@ -61,6 +83,11 @@ impl Readable for String {
         read_string(s.ser()?, s)
     }
 }
+impl Writeable for String {
+    fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
+        write_string(stream, self)
+    }
+}
 
 impl<T: Readable> Readable for Vec<T> {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
@@ -70,6 +97,11 @@ impl<T: Readable> Readable for Vec<T> {
 impl<T: Readable> ReadableCtx<usize> for Vec<T> {
     fn ser<S: Read>(stream: &mut S, ctx: usize) -> Result<Self> {
         T::ser_vec(ctx, stream)
+    }
+}
+impl<T: Writeable> Writeable for Vec<T> {
+    fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
+        T::ser_array(self, stream)
     }
 }
 
@@ -94,9 +126,25 @@ impl Readable for u8 {
         Ok(buf)
     }
 }
+impl Writeable for u8 {
+    fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
+        Ok(stream.write_u8(*self)?)
+    }
+    fn ser_array<S: Write, T: AsRef<[Self]>>(this: T, stream: &mut S) -> Result<()>
+    where
+        Self: Sized,
+    {
+        Ok(stream.write_all(this.as_ref())?)
+    }
+}
 impl Readable for i8 {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(stream.read_i8()?)
+    }
+}
+impl Writeable for i8 {
+    fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
+        Ok(stream.write_i8(*self)?)
     }
 }
 impl Readable for u16 {
@@ -104,9 +152,19 @@ impl Readable for u16 {
         Ok(stream.read_u16::<LE>()?)
     }
 }
+impl Writeable for u16 {
+    fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
+        Ok(stream.write_u16::<LE>(*self)?)
+    }
+}
 impl Readable for i16 {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(stream.read_i16::<LE>()?)
+    }
+}
+impl Writeable for i16 {
+    fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
+        Ok(stream.write_i16::<LE>(*self)?)
     }
 }
 impl Readable for u32 {
@@ -114,9 +172,19 @@ impl Readable for u32 {
         Ok(stream.read_u32::<LE>()?)
     }
 }
+impl Writeable for u32 {
+    fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
+        Ok(stream.write_u32::<LE>(*self)?)
+    }
+}
 impl Readable for i32 {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(stream.read_i32::<LE>()?)
+    }
+}
+impl Writeable for i32 {
+    fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
+        Ok(stream.write_i32::<LE>(*self)?)
     }
 }
 impl Readable for u64 {
@@ -124,9 +192,19 @@ impl Readable for u64 {
         Ok(stream.read_u64::<LE>()?)
     }
 }
+impl Writeable for u64 {
+    fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
+        Ok(stream.write_u64::<LE>(*self)?)
+    }
+}
 impl Readable for i64 {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(stream.read_i64::<LE>()?)
+    }
+}
+impl Writeable for i64 {
+    fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
+        Ok(stream.write_i64::<LE>(*self)?)
     }
 }
 
