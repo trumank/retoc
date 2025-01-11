@@ -59,6 +59,7 @@ impl Readable for FPackageFileSummary {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct FZenPackageSummary {
     has_versioning_info: u32,
     header_size: u32,
@@ -93,6 +94,7 @@ impl Readable for FZenPackageSummary {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct FZenPackageHeader {
     summary: FZenPackageSummary,
     name_map: FNameMap,

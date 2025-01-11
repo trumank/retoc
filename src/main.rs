@@ -51,6 +51,18 @@ struct ActionUnpack {
 }
 
 #[derive(Parser, Debug)]
+struct ActionExtractLegacy {
+    #[arg(index = 1)]
+    utoc: PathBuf,
+    #[arg(index = 2)]
+    output: PathBuf,
+    #[arg(short, long, default_value = "false")]
+    verbose: bool,
+    #[arg(short, long)]
+    filter: Option<String>,
+}
+
+#[derive(Parser, Debug)]
 enum Action {
     /// Extract manifest from .utoc
     Manifest(ActionManifest),
@@ -60,6 +72,8 @@ enum Action {
     Verify(ActionVerify),
     /// Extracts chunks (files) from .utoc
     Unpack(ActionUnpack),
+    /// Extracts legacy assets from .utoc
+    ExtractLegacy(ActionExtractLegacy),
 }
 
 #[derive(Parser, Debug)]
@@ -75,6 +89,7 @@ fn main() -> Result<()> {
         Action::List(action) => action_list(action),
         Action::Verify(action) => action_verify(action),
         Action::Unpack(action) => action_unpack(action),
+        Action::ExtractLegacy(action) => action_extract_legacy(action),
     }
 }
 
@@ -257,6 +272,46 @@ fn action_unpack(args: ActionUnpack) -> Result<()> {
     println!(
         "unpacked {} files to {}",
         toc.file_map.len(),
+        output.to_string_lossy()
+    );
+
+    Ok(())
+}
+
+fn action_extract_legacy(args: ActionExtractLegacy) -> Result<()> {
+    let mut stream = BufReader::new(File::open(&args.utoc)?);
+    let cas = &args.utoc.with_extension("ucas");
+    let mut cas = BufReader::new(File::open(cas).unwrap());
+
+    let toc: Toc = stream.ser()?;
+
+    let output = args.output;
+
+    let mut count = 0;
+    toc.file_map
+        .iter()
+        .try_for_each(|(file_name, &index)| -> Result<()> {
+            if let Some(filter) = &args.filter {
+                if !file_name.contains(filter) {
+                    return Ok(());
+                }
+            }
+            if toc.chunk_ids[index as usize].get_chunk_type() == EIoChunkType::ExportBundleData {
+                if args.verbose {
+                    println!("{file_name}");
+                }
+                let path = output.join(file_name);
+                let dir = path.parent().unwrap();
+                std::fs::create_dir_all(dir)?;
+                legacy_asset::build_legacy(&toc, &mut cas, index, path)?;
+                count += 1;
+            }
+            Ok(())
+        })?;
+
+    println!(
+        "unpacked {} legacy assets to {}",
+        count,
         output.to_string_lossy()
     );
 

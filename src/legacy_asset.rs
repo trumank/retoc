@@ -1,13 +1,17 @@
-use std::io::{Cursor, Read, Seek};
+use std::{
+    io::{Cursor, Read, Seek},
+    path::Path,
+};
 
 use crate::{ser::*, zen::FZenPackageHeader, Toc};
 use anyhow::Result;
 use byteorder::{WriteBytesExt as _, LE};
 
-pub(crate) fn build_legacy<C: Read + Seek>(
+pub(crate) fn build_legacy<C: Read + Seek, P: AsRef<Path>>(
     toc: &Toc,
     cas: &mut C,
     toc_entry_index: u32,
+    out_path: P,
 ) -> Result<()> {
     let mut zen_data = Cursor::new(toc.read(cas, toc_entry_index)?);
 
@@ -16,7 +20,12 @@ pub(crate) fn build_legacy<C: Read + Seek>(
 
     let zen_summary = FZenPackageHeader::ser(&mut zen_data)?;
 
-    cur.write_u32::<LE>(1234)?;
+    dbg!(zen_summary);
+
+    // arch's sandbox
+    cur.write_u32::<LE>(0xa687562)?;
+
+    std::fs::write(out_path, out_buffer)?;
 
     Ok(())
 }
