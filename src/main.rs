@@ -16,6 +16,7 @@ use std::{
 use anyhow::{Context, Result};
 use bitflags::bitflags;
 use clap::Parser;
+use rayon::prelude::*;
 use ser::*;
 use strum::FromRepr;
 use tracing::instrument;
@@ -27,9 +28,29 @@ struct ActionManifest {
 }
 
 #[derive(Parser, Debug)]
+struct ActionList {
+    #[arg(index = 1)]
+    utoc: PathBuf,
+}
+
+#[derive(Parser, Debug)]
+struct ActionUnpack {
+    #[arg(index = 1)]
+    utoc: PathBuf,
+    #[arg(index = 2)]
+    output: PathBuf,
+    #[arg(short, long, default_value = "false")]
+    verbose: bool,
+}
+
+#[derive(Parser, Debug)]
 enum Action {
     /// Extract manifest from .utoc
     Manifest(ActionManifest),
+    /// List fils in .utoc (directory index)
+    List(ActionList),
+    /// Extracts chunks (files) from .utoc
+    Unpack(ActionUnpack),
 }
 
 #[derive(Parser, Debug)]
@@ -42,6 +63,8 @@ fn main() -> Result<()> {
     let args = Args::parse();
     match args.action {
         Action::Manifest(action) => action_manifest(action),
+        Action::List(action) => action_list(action),
+        Action::Unpack(action) => action_unpack(action),
     }
 }
 
@@ -54,51 +77,21 @@ fn action_manifest(args: ActionManifest) -> Result<()> {
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/VisionsofManaDemo/VisionsofMana/Content/Paks/pakchunk0-WindowsNoEditor.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/AbioticFactor/AbioticFactor/Content/Paks/pakchunk0-Windows.utoc";
 
-    let mut stream = BufReader::new(File::open(&args.utoc)?);
-    //ser_hex::read("trace.json", &mut stream, |s| read(s, ucas_stream))?;
-    read(&mut stream, args.utoc.with_extension("ucas"))?;
-
-    Ok(())
-}
-
-#[instrument(skip_all)]
-fn read<R: Read, U: AsRef<Path>>(stream: &mut R, ucas: U) -> Result<()> {
-    let ucas = ucas.as_ref();
-    let toc: Toc = stream.ser()?;
-
-    let output = Path::new("zen_out");
+    let toc: Toc = BufReader::new(File::open(&args.utoc)?).ser()?;
+    let ucas = &args.utoc.with_extension("ucas");
 
     let entries = Arc::new(Mutex::new(vec![]));
-
-    //fn process(toc: &Toc, file_name: &str) -> Result<()> {
-    //}
-    use rayon::prelude::*;
 
     toc.file_map.keys().par_bridge().try_for_each_init(
         || (entries.clone(), BufReader::new(File::open(ucas).unwrap())),
         |(entries, ucas), file_name| -> Result<()> {
-            //"FactoryGame/Content/FactoryGame/Interface/UI/InGame/OutputSlotData_Struct.uasset"
             let chunk_info = toc.get_chunk_info(file_name);
-            //dbg!(&chunk_info);
 
-            //println!("{file_name}");
             if chunk_info.id.get_chunk_type() == EIoChunkType::ExportBundleData {
-                //println!("{}", file_name);
                 let data = toc.read(ucas, toc.file_map[file_name])?;
-                //let summary: FPackageFileSummary = .ser()?;
-                //std::fs::write("uasset.uasset", &data)?;
-
-                // WRITE
-                //let path = output.join(file_name);
-                //let dir = path.parent().unwrap();
-                //std::fs::create_dir_all(dir)?;
-                //std::fs::write(path, &data)?;
-                // END WRITE
 
                 let package_name =
                     get_package_name(&data).with_context(|| file_name.to_string())?;
-
-                //println!("{package_name} {file_name} {:?}", chunk_info.id);
 
                 let (path, _ext) = file_name.rsplit_once(".").unwrap();
                 let packagename =
@@ -156,13 +149,48 @@ fn read<R: Read, U: AsRef<Path>>(stream: &mut R, ucas: U) -> Result<()> {
 
     println!("wrote {} entries to {}", manifest.oplog.entries.len(), path);
 
-    //let data = toc.read(&mut ucas_stream, 0)?;
-    //std::fs::write("giga.bin", data)?;
+    Ok(())
+}
 
-    //for block in toc.compression_blocks {
-    //    println!("{block:#?}");
-    //}
-    //dbg!(file_map);
+fn action_list(args: ActionList) -> Result<()> {
+    let toc: Toc = BufReader::new(File::open(&args.utoc)?).ser()?;
+    for f in toc.file_map.keys() {
+        println!("{f}");
+    }
+    Ok(())
+}
+
+fn action_unpack(args: ActionUnpack) -> Result<()> {
+    let mut stream = BufReader::new(File::open(&args.utoc)?);
+    let ucas = &args.utoc.with_extension("ucas");
+
+    let toc: Toc = stream.ser()?;
+
+    let output = args.output;
+
+    // TODO extract entries not found in directory index
+    // TODO output chunk id manifest
+    toc.file_map.keys().par_bridge().try_for_each_init(
+        || BufReader::new(File::open(ucas).unwrap()),
+        |ucas, file_name| -> Result<()> {
+            if args.verbose {
+                println!("{file_name}");
+            }
+            let data = toc.read(ucas, toc.file_map[file_name])?;
+
+            let path = output.join(file_name);
+            let dir = path.parent().unwrap();
+            std::fs::create_dir_all(dir)?;
+            std::fs::write(path, &data)?;
+            Ok(())
+        },
+    )?;
+
+    println!(
+        "unpacked {} files to {}",
+        toc.file_map.len(),
+        output.to_string_lossy()
+    );
 
     Ok(())
 }
