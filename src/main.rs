@@ -9,7 +9,7 @@ mod zen;
 use std::{
     collections::HashMap,
     fs::File,
-    io::{BufReader, Cursor, Read, Seek, SeekFrom},
+    io::{BufReader, Cursor, Read, Seek, SeekFrom, Write},
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -63,6 +63,14 @@ struct ActionExtractLegacy {
 }
 
 #[derive(Parser, Debug)]
+struct ActionGet {
+    #[arg(index = 1)]
+    utoc: PathBuf,
+    #[arg(index = 2)]
+    index: u32,
+}
+
+#[derive(Parser, Debug)]
 enum Action {
     /// Extract manifest from .utoc
     Manifest(ActionManifest),
@@ -74,6 +82,8 @@ enum Action {
     Unpack(ActionUnpack),
     /// Extracts legacy assets from .utoc
     ExtractLegacy(ActionExtractLegacy),
+    /// Get chunk by index and write to stdout
+    Get(ActionGet),
 }
 
 #[derive(Parser, Debug)]
@@ -90,6 +100,7 @@ fn main() -> Result<()> {
         Action::Verify(action) => action_verify(action),
         Action::Unpack(action) => action_unpack(action),
         Action::ExtractLegacy(action) => action_extract_legacy(action),
+        Action::Get(action) => action_get(action),
     }
 }
 
@@ -321,6 +332,19 @@ fn action_extract_legacy(args: ActionExtractLegacy) -> Result<()> {
         count,
         output.to_string_lossy()
     );
+
+    Ok(())
+}
+
+fn action_get(args: ActionGet) -> Result<()> {
+    let mut stream = BufReader::new(File::open(&args.utoc)?);
+    let cas = &args.utoc.with_extension("ucas");
+    let mut cas = BufReader::new(File::open(cas).unwrap());
+
+    let toc: Toc = stream.ser()?;
+
+    let data = toc.read(&mut cas, args.index)?;
+    std::io::stdout().write_all(&data)?;
 
     Ok(())
 }
