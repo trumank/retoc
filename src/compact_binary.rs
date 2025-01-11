@@ -7,7 +7,7 @@ use serde_with::serde_as;
 use strum::FromRepr;
 use tracing::instrument;
 
-use crate::{ReadExt, Readable, ReadableBase};
+use crate::{ReadExt, Readable};
 
 struct Ctx<R: Read> {
     inner: R,
@@ -61,8 +61,7 @@ bitflags::bitflags! {
         const HasFieldName = 0x80;
     }
 }
-impl Readable for ECbFieldTypeFlags {}
-impl ReadableBase for ECbFieldTypeFlags {
+impl Readable for ECbFieldTypeFlags {
     #[instrument(skip_all, name = "ECbFieldType")]
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Self::from_bits(stream.ser::<u8>()?).context("invalid ECbFieldType")

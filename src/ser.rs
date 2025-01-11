@@ -4,12 +4,27 @@ use anyhow::Result;
 use byteorder::{ReadBytesExt, WriteBytesExt, LE};
 use tracing::instrument;
 
-pub(crate) trait ReadableBase {
+pub(crate) trait Readable {
     fn ser<S: Read>(stream: &mut S) -> Result<Self>
     where
         Self: Sized;
+    fn ser_vec<S: Read>(len: usize, stream: &mut S) -> Result<Vec<Self>>
+    where
+        Self: Sized,
+    {
+        read_array(len, stream, Self::ser)
+    }
+    fn ser_array<S: Read, const N: usize>(stream: &mut S) -> Result<[Self; N]>
+    where
+        Self: Sized + Copy + Default,
+    {
+        let mut buf = [Default::default(); N];
+        for i in buf.iter_mut() {
+            *i = Self::ser(stream)?;
+        }
+        Ok(buf)
+    }
 }
-pub(crate) trait Readable: ReadableBase {}
 pub(crate) trait ReadableCtx<C> {
     fn ser<S: Read>(stream: &mut S, ctx: C) -> Result<Self>
     where
@@ -19,7 +34,7 @@ pub(crate) trait ReadableCtx<C> {
 impl<T> ReadExt for T where T: Read {}
 pub(crate) trait ReadExt: Read {
     #[instrument(skip_all)]
-    fn ser<T: ReadableBase>(&mut self) -> Result<T>
+    fn ser<T: Readable>(&mut self) -> Result<T>
     where
         Self: Sized,
     {
@@ -34,101 +49,86 @@ pub(crate) trait ReadExt: Read {
     }
 }
 
-impl<const N: usize> Readable for [u8; N] {}
-impl<const N: usize> ReadableBase for [u8; N] {
+impl<const N: usize, T: Readable + Default + Copy> Readable for [T; N] {
     #[instrument(skip_all, name = "read_fixed_slice")]
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        let mut buf = [0; N];
-        stream.read_exact(&mut buf)?;
-        Ok(buf)
-    }
-}
-impl<const N: usize, T: Readable + Default + Copy> Readable for [T; N] {}
-impl<const N: usize, T: Readable + Default + Copy> ReadableBase for [T; N] {
-    #[instrument(skip_all, name = "read_fixed_slice")]
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        let mut buf = [Default::default(); N];
-        for i in buf.iter_mut() {
-            *i = stream.ser()?;
-        }
-        Ok(buf)
+        T::ser_array(stream)
     }
 }
 
-impl Readable for String {}
-impl ReadableBase for String {
+impl Readable for String {
     fn ser<S: Read>(s: &mut S) -> Result<Self> {
         read_string(s.ser()?, s)
     }
 }
 
-impl<T: Readable> Readable for Vec<T> {}
-impl<T: Readable> ReadableBase for Vec<T> {
+impl<T: Readable> Readable for Vec<T> {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        read_array(stream.read_u32::<LE>()? as usize, stream, T::ser)
+        T::ser_vec(stream.read_u32::<LE>()? as usize, stream)
     }
 }
 impl<T: Readable> ReadableCtx<usize> for Vec<T> {
     fn ser<S: Read>(stream: &mut S, ctx: usize) -> Result<Self> {
-        read_array(ctx, stream, T::ser)
+        T::ser_vec(ctx, stream)
     }
 }
-impl ReadableCtx<usize> for Vec<u8> {
-    fn ser<S: Read>(stream: &mut S, ctx: usize) -> Result<Self> {
-        let mut buf = vec![0; ctx];
+
+impl Readable for u8 {
+    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(stream.read_u8()?)
+    }
+    fn ser_vec<S: Read>(len: usize, stream: &mut S) -> Result<Vec<Self>>
+    where
+        Self: Sized,
+    {
+        let mut buf = vec![0; len];
+        stream.read_exact(&mut buf)?;
+        Ok(buf)
+    }
+    fn ser_array<S: Read, const N: usize>(stream: &mut S) -> Result<[Self; N]>
+    where
+        Self: Sized + Copy + Default,
+    {
+        let mut buf = [0; N];
         stream.read_exact(&mut buf)?;
         Ok(buf)
     }
 }
-
-impl ReadableBase for u8 {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(stream.read_u8()?)
-    }
-}
-impl ReadableBase for i8 {
+impl Readable for i8 {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(stream.read_i8()?)
     }
 }
-impl ReadableBase for u16 {
+impl Readable for u16 {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(stream.read_u16::<LE>()?)
     }
 }
-impl ReadableBase for i16 {
+impl Readable for i16 {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(stream.read_i16::<LE>()?)
     }
 }
-impl ReadableBase for u32 {
+impl Readable for u32 {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(stream.read_u32::<LE>()?)
     }
 }
-impl ReadableBase for i32 {
+impl Readable for i32 {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(stream.read_i32::<LE>()?)
     }
 }
-impl ReadableBase for u64 {
+impl Readable for u64 {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(stream.read_u64::<LE>()?)
     }
 }
-impl ReadableBase for i64 {
+impl Readable for i64 {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(stream.read_i64::<LE>()?)
     }
 }
-// impl Readable for u8 {} special cased for optimized Vec<u8> serialization
-impl Readable for i8 {}
-impl Readable for u16 {}
-impl Readable for i16 {}
-impl Readable for u32 {}
-impl Readable for i32 {}
-impl Readable for u64 {}
-impl Readable for i64 {}
 
 #[instrument(skip_all)]
 pub(crate) fn read_array<S: Read, T, F>(len: usize, stream: &mut S, mut f: F) -> Result<Vec<T>>

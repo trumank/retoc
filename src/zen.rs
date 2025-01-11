@@ -5,7 +5,7 @@ use tracing::instrument;
 
 use crate::{
     name_map::{FMinimalName, FNameMap},
-    ReadExt, Readable, ReadableBase,
+    ReadExt, Readable,
 };
 
 pub(crate) fn get_package_name(data: &[u8]) -> Result<String> {
@@ -21,8 +21,7 @@ pub(crate) struct FPackageFileSummary {
     pub(crate) total_header_size: u32,
     pub(crate) package_name: String,
 }
-impl Readable for FPackageFileSummary {}
-impl ReadableBase for FPackageFileSummary {
+impl Readable for FPackageFileSummary {
     #[instrument(skip_all, name = "FPackageFileSummary")]
     fn ser<S: Read>(s: &mut S) -> Result<Self> {
         let tag = s.ser()?;
@@ -74,8 +73,7 @@ pub(crate) struct FZenPackageSummary {
     dependency_bundle_entries_offset: i32,
     imported_package_names_offset: i32,
 }
-impl Readable for FZenPackageSummary {}
-impl ReadableBase for FZenPackageSummary {
+impl Readable for FZenPackageSummary {
     #[instrument(skip_all, name = "FZenPackageSummary")]
     fn ser<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self {
@@ -99,8 +97,7 @@ pub(crate) struct FZenPackageHeader {
     summary: FZenPackageSummary,
     name_map: FNameMap,
 }
-impl Readable for FZenPackageHeader {}
-impl ReadableBase for FZenPackageHeader {
+impl Readable for FZenPackageHeader {
     #[instrument(skip_all, name = "FZenPackageHeader")]
     fn ser<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self {

@@ -246,8 +246,7 @@ fn action_unpack(args: ActionUnpack) -> Result<()> {
     Ok(())
 }
 
-impl Readable for FIoStoreTocHeader {}
-impl ReadableBase for FIoStoreTocHeader {
+impl Readable for FIoStoreTocHeader {
     #[instrument(skip_all, name = "FIoStoreTocHeader")]
     fn ser<R: Read>(stream: &mut R) -> Result<Self> {
         let res = FIoStoreTocHeader {
@@ -400,8 +399,7 @@ struct TocSignatures {
     block_signature: Vec<u8>,
     chunk_block_signatures: Vec<FSHAHash>,
 }
-impl Readable for Toc {}
-impl ReadableBase for Toc {
+impl Readable for Toc {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         let header = stream.ser()?;
 
@@ -583,8 +581,7 @@ impl TryFrom<Vec<u8>> for FIoChunkId {
         })
     }
 }
-impl Readable for FIoChunkId {}
-impl ReadableBase for FIoChunkId {
+impl Readable for FIoChunkId {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(Self { id: stream.ser()? })
     }
@@ -601,8 +598,7 @@ impl FIoChunkId {
 struct FIoContainerId {
     id: u64,
 }
-impl Readable for FIoContainerId {}
-impl ReadableBase for FIoContainerId {
+impl Readable for FIoContainerId {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(Self { id: stream.ser()? })
     }
@@ -611,8 +607,7 @@ impl ReadableBase for FIoContainerId {
 struct FIoOffsetAndLength {
     data: [u8; 10],
 }
-impl Readable for FIoOffsetAndLength {}
-impl ReadableBase for FIoOffsetAndLength {
+impl Readable for FIoOffsetAndLength {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(Self {
             data: stream.ser()?,
@@ -645,8 +640,7 @@ impl std::fmt::Debug for FIoStoreTocCompressedBlockEntry {
             .finish()
     }
 }
-impl Readable for FIoStoreTocCompressedBlockEntry {}
-impl ReadableBase for FIoStoreTocCompressedBlockEntry {
+impl Readable for FIoStoreTocCompressedBlockEntry {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(Self {
             data: stream.ser()?,
@@ -682,8 +676,7 @@ impl std::fmt::Debug for FIoChunkHash {
         write!(f, ")")
     }
 }
-impl Readable for FIoChunkHash {}
-impl ReadableBase for FIoChunkHash {
+impl Readable for FIoChunkHash {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(Self {
             data: stream.ser()?,
@@ -695,8 +688,7 @@ struct FIoStoreTocEntryMeta {
     chunk_hash: FIoChunkHash,
     flags: FIoStoreTocEntryMetaFlags,
 }
-impl Readable for FIoStoreTocEntryMeta {}
-impl ReadableBase for FIoStoreTocEntryMeta {
+impl Readable for FIoStoreTocEntryMeta {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(Self {
             chunk_hash: stream.ser()?,
@@ -711,8 +703,7 @@ struct FGuid {
     c: u32,
     d: u32,
 }
-impl Readable for FGuid {}
-impl ReadableBase for FGuid {
+impl Readable for FGuid {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(Self {
             a: stream.ser()?,
@@ -725,8 +716,7 @@ impl ReadableBase for FGuid {
 struct FSHAHash {
     data: [u8; 20],
 }
-impl Readable for FSHAHash {}
-impl ReadableBase for FSHAHash {
+impl Readable for FSHAHash {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(Self {
             data: stream.ser()?,
@@ -757,14 +747,12 @@ bitflags! {
         const MemoryMapped = 2;
     }
 }
-impl Readable for EIoContainerFlags {}
-impl ReadableBase for EIoContainerFlags {
+impl Readable for EIoContainerFlags {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Self::from_bits(stream.ser()?).context("invalid EIoContainerFlags value")
     }
 }
-impl Readable for FIoStoreTocEntryMetaFlags {}
-impl ReadableBase for FIoStoreTocEntryMetaFlags {
+impl Readable for FIoStoreTocEntryMetaFlags {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Self::from_bits(stream.ser()?).context("invalid FIoStoreTocEntryMetaFlags value")
     }
@@ -783,8 +771,7 @@ enum EIoStoreTocVersion {
     RemovedOnDemandMetaData,
     ReplaceIoChunkHashWithIoHash,
 }
-impl Readable for EIoStoreTocVersion {}
-impl ReadableBase for EIoStoreTocVersion {
+impl Readable for EIoStoreTocVersion {
     fn ser<S: Read>(stream: &mut S) -> Result<Self> {
         Self::from_repr(stream.ser()?).context("invalid EIoStoreTocVersion value")
     }
@@ -1029,14 +1016,12 @@ mod directory_index {
                     self.0 as usize
                 }
             }
-            impl Readable for Option<$name> {}
-            impl ReadableBase for Option<$name> {
+            impl Readable for Option<$name> {
                 fn ser<S: Read>(stream: &mut S) -> Result<Self> {
                     Ok($name::new(stream.ser()?))
                 }
             }
-            impl Readable for $name {}
-            impl ReadableBase for $name {
+            impl Readable for $name {
                 fn ser<S: Read>(stream: &mut S) -> Result<Self> {
                     Ok(Self(stream.ser()?))
                 }
@@ -1053,8 +1038,7 @@ mod directory_index {
         next_file_entry: Option<IdFile>,
         user_data: u32,
     }
-    impl Readable for FIoFileIndexEntry {}
-    impl ReadableBase for FIoFileIndexEntry {
+    impl Readable for FIoFileIndexEntry {
         fn ser<S: Read>(stream: &mut S) -> Result<Self> {
             Ok(Self {
                 name: stream.ser()?,
@@ -1071,8 +1055,7 @@ mod directory_index {
         next_sibling_entry: Option<IdDir>,
         first_file_entry: Option<IdFile>,
     }
-    impl Readable for FIoDirectoryIndexEntry {}
-    impl ReadableBase for FIoDirectoryIndexEntry {
+    impl Readable for FIoDirectoryIndexEntry {
         fn ser<S: Read>(stream: &mut S) -> Result<Self> {
             Ok(Self {
                 name: stream.ser()?,

@@ -3,14 +3,13 @@ use std::{borrow::Cow, io::Read};
 use anyhow::Result;
 use tracing::instrument;
 
-use crate::{read_array, read_string, ReadExt, Readable, ReadableBase};
+use crate::{read_array, read_string, ReadExt, Readable};
 
 #[derive(Debug)]
 pub(crate) struct FNameMap {
     names: Vec<String>,
 }
-impl Readable for FNameMap {}
-impl ReadableBase for FNameMap {
+impl Readable for FNameMap {
     #[instrument(skip_all, "FNameMap")]
     fn ser<S: Read>(s: &mut S) -> Result<Self> {
         let num: u32 = s.ser()?;
@@ -50,8 +49,7 @@ pub(crate) struct FMappedName {
     number: u32,
 }
 
-impl Readable for FMappedName {}
-impl ReadableBase for FMappedName {
+impl Readable for FMappedName {
     #[instrument(skip_all, name = "FMappedName")]
     fn ser<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self {
@@ -66,8 +64,7 @@ pub(crate) struct FMinimalName {
     index: FNameEntryId,
     number: i32,
 }
-impl Readable for FMinimalName {}
-impl ReadableBase for FMinimalName {
+impl Readable for FMinimalName {
     #[instrument(skip_all, name = "FMinimalName")]
     fn ser<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self {
@@ -81,8 +78,7 @@ impl ReadableBase for FMinimalName {
 struct FNameEntryId {
     value: u32,
 }
-impl Readable for FNameEntryId {}
-impl ReadableBase for FNameEntryId {
+impl Readable for FNameEntryId {
     #[instrument(skip_all, name = "FNameEntryId")]
     fn ser<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self { value: s.ser()? })
