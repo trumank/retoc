@@ -189,16 +189,31 @@ fn action_verify(args: ActionVerify) -> Result<()> {
     toc.chunk_metas.par_iter().enumerate().try_for_each_init(
         || BufReader::new(File::open(ucas).unwrap()),
         |ucas, (i, meta)| -> Result<()> {
+            let chunk_id = toc.chunk_ids[i];
             let data = toc.read(ucas, i as u32)?;
+
+            let chunk_type = chunk_id.get_chunk_type();
+            match chunk_type {
+                EIoChunkType::ExportBundleData => {
+                    let package_name = get_package_name(&data)?;
+                    let package_id = FPackageId::from_name(&package_name);
+                    let id = FIoChunkId::from_package_id(package_id, 0, chunk_type);
+                    if id != chunk_id {
+                        bail!("chunk ID mismatch")
+                    }
+                }
+                _ => {} // TODO
+            }
+
             let hash = blake3::hash(&data);
 
-            println!(
-                "{:>10} {:?} {} {:?}",
-                i,
-                hex::encode(meta.chunk_hash.data),
-                hex::encode(hash.as_bytes()),
-                meta.flags
-            );
+            //println!(
+            //    "{:>10} {:?} {} {:?}",
+            //    i,
+            //    hex::encode(meta.chunk_hash.data),
+            //    hex::encode(hash.as_bytes()),
+            //    meta.flags
+            //);
 
             if meta.chunk_hash.data[..20] != hash.as_bytes()[..20] {
                 bail!("hash mismatch for chunk #{i}")
@@ -207,6 +222,8 @@ fn action_verify(args: ActionVerify) -> Result<()> {
             Ok(())
         },
     )?;
+
+    println!("verified");
 
     Ok(())
 }
@@ -393,6 +410,7 @@ struct Toc {
     directory_index: Option<FIoDirectoryIndexResource>,
     file_map: HashMap<String, u32>,
     file_map_lower: HashMap<String, u32>,
+    chunk_id_map: HashMap<FIoChunkId, u32>,
 }
 struct TocSignatures {
     toc_signature: Vec<u8>,
@@ -434,6 +452,11 @@ impl Readable for Toc {
         } else {
             None
         };
+        let chunk_id_map = chunk_ids
+            .iter()
+            .enumerate()
+            .map(|(i, &chunk_id)| (chunk_id, i as u32))
+            .collect();
 
         Ok(Toc {
             header,
@@ -449,6 +472,7 @@ impl Readable for Toc {
             directory_index,
             file_map,
             file_map_lower,
+            chunk_id_map,
         })
     }
 }
@@ -507,6 +531,12 @@ impl Toc {
             is_compressed: meta.flags.contains(FIoStoreTocEntryMetaFlags::Compressed),
         }
     }
+    fn get_chunk_id_entry_index(&self, chunk_id: FIoChunkId) -> Result<u32> {
+        self.chunk_id_map
+            .get(&chunk_id)
+            .copied()
+            .with_context(|| "container does not contain entry for {chunk_id}")
+    }
     fn read<C: Read + Seek>(&self, cas_stream: &mut C, toc_entry_index: u32) -> Result<Vec<u8>> {
         let offset_and_length = &self.chunk_offset_lengths[toc_entry_index as usize];
         let offset = offset_and_length.get_offset();
@@ -550,6 +580,30 @@ impl Toc {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct FPackageId(u64);
+impl FPackageId {
+    fn from_name(name: &str) -> Self {
+        let bytes = name
+            .to_ascii_lowercase()
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<u8>>();
+        Self(cityhasher::hash(bytes))
+    }
+}
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_package_id() {
+        let package_id = FPackageId::from_name("/ACLPlugin/ACLAnimBoneCompressionSettings");
+        let chunk_id = FIoChunkId::from_package_id(package_id, 0, EIoChunkType::ExportBundleData);
+        dbg!(chunk_id);
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct FIoChunkId {
     id: [u8; 12],
@@ -587,6 +641,13 @@ impl Readable for FIoChunkId {
     }
 }
 impl FIoChunkId {
+    fn from_package_id(package_id: FPackageId, chunk_index: u16, chunk_type: EIoChunkType) -> Self {
+        let mut id = [0; 12];
+        id[0..8].copy_from_slice(&u64::to_le_bytes(package_id.0));
+        id[8..10].copy_from_slice(&u16::to_le_bytes(chunk_index));
+        id[11] = chunk_type as u8;
+        Self { id }
+    }
     fn get_chunk_type(&self) -> EIoChunkType {
         EIoChunkType::from_repr(self.id[11]).unwrap()
     }
