@@ -8,13 +8,13 @@ use std::{
 
 use anyhow::{Context as _, Result};
 
-use crate::{ser::*, FIoChunkId, FIoContainerId, Toc};
+use crate::{ser::*, Config, FIoChunkId, Toc};
 
-pub fn open<P: AsRef<Path>>(path: P) -> Result<Box<dyn IoStoreTrait>> {
+pub fn open<P: AsRef<Path>>(path: P, config: &Config) -> Result<Box<dyn IoStoreTrait>> {
     Ok(if path.as_ref().is_dir() {
-        Box::new(IoStoreBackend::open(path)?)
+        Box::new(IoStoreBackend::open(path, config)?)
     } else {
-        Box::new(IoStoreContainer::open(path)?)
+        Box::new(IoStoreContainer::open(path, config)?)
     })
 }
 
@@ -32,13 +32,13 @@ impl IoStoreBackend {
     pub fn new() -> Result<Self> {
         Ok(Self { containers: vec![] })
     }
-    pub fn open<P: AsRef<Path>>(dir: P) -> Result<Self> {
+    pub fn open<P: AsRef<Path>>(dir: P, config: &Config) -> Result<Self> {
         let mut containers: Vec<Box<dyn IoStoreTrait>> = vec![];
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
             if path.extension() == Some(OsStr::new("utoc")) {
-                containers.push(Box::new(IoStoreContainer::open(path)?));
+                containers.push(Box::new(IoStoreContainer::open(path, config)?));
             }
         }
         Ok(Self { containers })
@@ -68,8 +68,8 @@ pub struct IoStoreContainer {
     cas: Arc<Mutex<BufReader<File>>>,
 }
 impl IoStoreContainer {
-    pub fn open<P: AsRef<Path>>(toc_path: P) -> Result<Self> {
-        let toc: Toc = BufReader::new(File::open(&toc_path)?).de()?;
+    pub fn open<P: AsRef<Path>>(toc_path: P, config: &Config) -> Result<Self> {
+        let toc: Toc = BufReader::new(File::open(&toc_path)?).de_ctx(config)?;
         let cas = BufReader::new(File::open(toc_path.as_ref().with_extension("ucas"))?);
         Ok(Self {
             toc,

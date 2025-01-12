@@ -8,7 +8,9 @@ edition = "2021"
 debug = true
 
 [dependencies]
+aes = "0.8.4"
 anyhow = "1.0.95"
+base64 = "0.22.1"
 bitflags = "2.6.0"
 blake3 = "1.5.5"
 byteorder = "1.5.0"

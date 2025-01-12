@@ -13,9 +13,11 @@ use std::{
     fs::File,
     io::{BufReader, Cursor, Read, Seek, SeekFrom, Write},
     path::PathBuf,
+    str::FromStr,
     sync::{Arc, Mutex},
 };
 
+use aes::cipher::KeyInit as _;
 use anyhow::{bail, Context, Result};
 use bitflags::bitflags;
 use clap::Parser;
@@ -90,23 +92,33 @@ enum Action {
 
 #[derive(Parser, Debug)]
 struct Args {
+    #[arg(short, long)]
+    aes: Option<String>,
     #[command(subcommand)]
     action: Action,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    let mut config = Config::default();
+    if let Some(aes) = args.aes {
+        config
+            .aes_keys
+            .insert(FGuid::default(), AesKey::from_str(&aes)?);
+    }
+
     match args.action {
-        Action::Manifest(action) => action_manifest(action),
-        Action::List(action) => action_list(action),
-        Action::Verify(action) => action_verify(action),
-        Action::Unpack(action) => action_unpack(action),
-        Action::ExtractLegacy(action) => action_extract_legacy(action),
-        Action::Get(action) => action_get(action),
+        Action::Manifest(action) => action_manifest(action, &config),
+        Action::List(action) => action_list(action, &config),
+        Action::Verify(action) => action_verify(action, &config),
+        Action::Unpack(action) => action_unpack(action, &config),
+        Action::ExtractLegacy(action) => action_extract_legacy(action, &config),
+        Action::Get(action) => action_get(action, &config),
     }
 }
 
-fn action_manifest(args: ActionManifest) -> Result<()> {
+fn action_manifest(args: ActionManifest, config: &Config) -> Result<()> {
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Serum/Serum/Content/Paks/pakchunk0-Windows.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Nuclear Nightmare/NuclearNightmare/Content/Paks/NuclearNightmare-Windows.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/The Isle/TheIsle/Content/Paks/pakchunk0-WindowsClient.utoc";
@@ -115,7 +127,7 @@ fn action_manifest(args: ActionManifest) -> Result<()> {
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/VisionsofManaDemo/VisionsofMana/Content/Paks/pakchunk0-WindowsNoEditor.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/AbioticFactor/AbioticFactor/Content/Paks/pakchunk0-Windows.utoc";
 
-    let toc: Toc = BufReader::new(File::open(&args.utoc)?).de()?;
+    let toc: Toc = BufReader::new(File::open(&args.utoc)?).de_ctx(config)?;
     let ucas = &args.utoc.with_extension("ucas");
 
     let entries = Arc::new(Mutex::new(vec![]));
@@ -178,8 +190,8 @@ fn action_manifest(args: ActionManifest) -> Result<()> {
     Ok(())
 }
 
-fn action_list(args: ActionList) -> Result<()> {
-    let iostore = iostore::open(args.utoc)?;
+fn action_list(args: ActionList, config: &Config) -> Result<()> {
+    let iostore = iostore::open(args.utoc, config)?;
 
     for chunk_id in iostore.chunk_ids() {
         let file_name = iostore.file_name(chunk_id);
@@ -193,11 +205,11 @@ fn action_list(args: ActionList) -> Result<()> {
     Ok(())
 }
 
-fn action_verify(args: ActionVerify) -> Result<()> {
+fn action_verify(args: ActionVerify, config: &Config) -> Result<()> {
     let mut stream = BufReader::new(File::open(&args.utoc)?);
     let ucas = &args.utoc.with_extension("ucas");
 
-    let toc: Toc = stream.de()?;
+    let toc: Toc = stream.de_ctx(config)?;
 
     // most of these don't match?!
     //let sigs = &toc.signatures.as_ref().unwrap().chunk_block_signatures;
@@ -263,11 +275,11 @@ fn action_verify(args: ActionVerify) -> Result<()> {
     Ok(())
 }
 
-fn action_unpack(args: ActionUnpack) -> Result<()> {
+fn action_unpack(args: ActionUnpack, config: &Config) -> Result<()> {
     let mut stream = BufReader::new(File::open(&args.utoc)?);
     let ucas = &args.utoc.with_extension("ucas");
 
-    let toc: Toc = stream.de()?;
+    let toc: Toc = stream.de_ctx(config)?;
 
     let output = args.output;
 
@@ -298,8 +310,8 @@ fn action_unpack(args: ActionUnpack) -> Result<()> {
     Ok(())
 }
 
-fn action_extract_legacy(args: ActionExtractLegacy) -> Result<()> {
-    let iostore = iostore::open(args.utoc)?;
+fn action_extract_legacy(args: ActionExtractLegacy, config: &Config) -> Result<()> {
+    let iostore = iostore::open(args.utoc, config)?;
 
     let output = args.output;
 
@@ -334,17 +346,43 @@ fn action_extract_legacy(args: ActionExtractLegacy) -> Result<()> {
     Ok(())
 }
 
-fn action_get(args: ActionGet) -> Result<()> {
+fn action_get(args: ActionGet, config: &Config) -> Result<()> {
     let mut stream = BufReader::new(File::open(&args.utoc)?);
     let cas = &args.utoc.with_extension("ucas");
     let mut cas = BufReader::new(File::open(cas).unwrap());
 
-    let toc: Toc = stream.de()?;
+    let toc: Toc = stream.de_ctx(config)?;
 
     let data = toc.read(&mut cas, args.index)?;
     std::io::stdout().write_all(&data)?;
 
     Ok(())
+}
+
+#[derive(Default)]
+struct Config {
+    aes_keys: HashMap<FGuid, AesKey>,
+}
+
+#[derive(Debug, Clone)]
+struct AesKey(aes::Aes256);
+impl std::str::FromStr for AesKey {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        use aes::cipher::KeyInit;
+        use base64::{engine::general_purpose, Engine as _};
+        let try_parse = |bytes: Vec<_>| aes::Aes256::new_from_slice(&bytes).ok().map(AesKey);
+        hex::decode(s.strip_prefix("0x").unwrap_or(s))
+            .ok()
+            .and_then(try_parse)
+            .or_else(|| {
+                general_purpose::STANDARD_NO_PAD
+                    .decode(s.trim_end_matches('='))
+                    .ok()
+                    .and_then(try_parse)
+            })
+            .context("invalid AES key")
+    }
 }
 
 impl Readable for FIoStoreTocHeader {
@@ -462,8 +500,29 @@ fn read_chunk_block_signatures<R: Read>(
 }
 
 #[instrument(skip_all)]
-fn read_directory_index<R: Read>(stream: &mut R, header: &FIoStoreTocHeader) -> Result<Vec<u8>> {
-    stream.de_ctx(header.directory_index_size as usize)
+fn read_directory_index<R: Read>(
+    stream: &mut R,
+    header: &FIoStoreTocHeader,
+    config: &Config,
+) -> Result<Vec<u8>> {
+    let mut buf: Vec<u8> = stream.de_ctx(header.directory_index_size as usize)?;
+
+    if header
+        .container_flags
+        .contains(EIoContainerFlags::Encrypted)
+    {
+        use aes::cipher::BlockDecrypt;
+
+        let key = config
+            .aes_keys
+            .get(&header.encryption_key_guid)
+            .context("missing encryption key")?;
+        for block in buf.chunks_mut(16) {
+            key.0.decrypt_block(block.into());
+        }
+    }
+
+    Ok(buf)
 }
 
 #[instrument(skip_all)]
@@ -504,7 +563,12 @@ struct TocSignatures {
 }
 impl Readable for Toc {
     fn de<S: Read>(stream: &mut S) -> Result<Self> {
-        let header = stream.de()?;
+        stream.de_ctx(&Config::default())
+    }
+}
+impl ReadableCtx<&Config> for Toc {
+    fn de<S: Read>(stream: &mut S, config: &Config) -> Result<Self> {
+        let header: FIoStoreTocHeader = stream.de()?;
 
         let chunk_ids = read_chunk_ids(stream, &header)?;
         let chunk_offset_lengths = read_chunk_offsets(stream, &header)?;
@@ -514,7 +578,7 @@ impl Readable for Toc {
         let compression_methods = read_compression_methods(stream, &header)?;
 
         let signatures = read_chunk_block_signatures(stream, &header)?;
-        let directory_index = read_directory_index(stream, &header)?; // TODO decrypt
+        let directory_index = read_directory_index(stream, &header, config)?;
         let chunk_metas = read_meta(stream, &header)?;
 
         // build indexes
@@ -844,7 +908,7 @@ impl Readable for FIoStoreTocEntryMeta {
         })
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct FGuid {
     a: u32,
     b: u32,
