@@ -13,6 +13,9 @@ impl Readable for FNameMap {
     #[instrument(skip_all, "FNameMap")]
     fn ser<S: Read>(s: &mut S) -> Result<Self> {
         let num: u32 = s.ser()?;
+        if num == 0 {
+            return Ok(Self { names: vec![] });
+        }
         let _num_string_bytes: u32 = s.ser()?;
         let _hash_version: u64 = s.ser()?;
 

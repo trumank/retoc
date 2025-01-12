@@ -1,4 +1,5 @@
 mod compact_binary;
+mod container_header;
 mod legacy_asset;
 mod manifest;
 mod name_map;
@@ -672,6 +673,11 @@ impl Toc {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct FPackageId(u64);
+impl Readable for FPackageId {
+    fn ser<S: Read>(s: &mut S) -> Result<Self> {
+        Ok(Self(s.ser()?))
+    }
+}
 impl FPackageId {
     fn from_name(name: &str) -> Self {
         let bytes = name
