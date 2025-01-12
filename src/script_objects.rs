@@ -1,6 +1,7 @@
 use std::io::Read;
 
 use anyhow::Result;
+use strum::FromRepr;
 use tracing::instrument;
 
 use crate::{
@@ -23,9 +24,9 @@ fn read_script_objects<S: Read>(s: &mut S) -> Result<()> {
         //);
         //println!("{}:", s.object_name.index.value as usize & 0xffffff);
         println!("{}:", global_name_map.get(s.object_name));
-        println!("  global_index:    {:?}", s.global_index.get());
-        println!("  outer_index:     {:?}", s.outer_index.get());
-        println!("  cdo_class_index: {:?}", s.cdo_class_index.get());
+        println!("  global_index:    {:?}", s.global_index.value());
+        println!("  outer_index:     {:?}", s.outer_index.value());
+        println!("  cdo_class_index: {:?}", s.cdo_class_index.value());
     }
 
     //println!("{:#?}", script_objects);
@@ -58,15 +59,53 @@ impl FScriptObjectEntry {
 struct FPackageObjectIndex {
     type_and_id: u64,
 }
+
+#[derive(Debug, Clone, Copy, FromRepr, PartialEq)]
+enum FPackageObjectIndexType {
+    Export,
+    ScriptImport,
+    PackageImport,
+    Null
+}
+
+struct FPackageImportReference {
+    imported_package_index: u32,
+    imported_public_export_hash_index: u32
+}
+
 impl FPackageObjectIndex {
+    const INDEX_BITS: u64 = 62;
+    const INDEX_MASK: u64 = (1 << FPackageObjectIndex::INDEX_BITS) - 1;
+    const TYPE_SHIFT: u64 = FPackageObjectIndex::INDEX_BITS;
+    const INVALID_ID: u64 = !0;
+
+    fn invalid() -> FPackageObjectIndex {
+        FPackageObjectIndex{type_and_id: FPackageObjectIndex::INVALID_ID }
+    }
+    fn new(kind: FPackageObjectIndexType, value: u64) -> FPackageObjectIndex
+    {
+        FPackageObjectIndex{type_and_id: ((kind as u64) << FPackageObjectIndex::TYPE_SHIFT) | value}
+    }
     #[instrument(skip_all, name = "FPackageObjectIndex")]
     fn read<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self {
             type_and_id: s.de()?,
         })
     }
-    fn get(self) -> Option<u64> {
-        (self.type_and_id != u64::MAX).then_some(self.type_and_id)
+    fn kind(self) -> FPackageObjectIndexType {
+        FPackageObjectIndexType::from_repr((self.type_and_id >> Self::TYPE_SHIFT) as usize).unwrap()
+    }
+    fn value(self) -> Option<u64> {
+        (self.kind() != FPackageObjectIndexType::Null).then_some(self.type_and_id)
+    }
+    fn export(self) -> Option<u32> {
+        (self.kind() == FPackageObjectIndexType::Export).then_some(self.type_and_id as u32)
+    }
+    fn package_import(self) -> Option<FPackageImportReference> {
+        (self.kind() == FPackageObjectIndexType::PackageImport).then_some(FPackageImportReference{
+            imported_package_index: ((self.type_and_id & FPackageObjectIndex::INDEX_MASK) >> 32) as u32,
+            imported_public_export_hash_index: (self.type_and_id as u32)
+        })
     }
 }
 
