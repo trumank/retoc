@@ -114,7 +114,7 @@ fn action_manifest(args: ActionManifest) -> Result<()> {
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/VisionsofManaDemo/VisionsofMana/Content/Paks/pakchunk0-WindowsNoEditor.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/AbioticFactor/AbioticFactor/Content/Paks/pakchunk0-Windows.utoc";
 
-    let toc: Toc = BufReader::new(File::open(&args.utoc)?).ser()?;
+    let toc: Toc = BufReader::new(File::open(&args.utoc)?).de()?;
     let ucas = &args.utoc.with_extension("ucas");
 
     let entries = Arc::new(Mutex::new(vec![]));
@@ -178,7 +178,7 @@ fn action_manifest(args: ActionManifest) -> Result<()> {
 }
 
 fn action_list(args: ActionList) -> Result<()> {
-    let toc: Toc = BufReader::new(File::open(&args.utoc)?).ser()?;
+    let toc: Toc = BufReader::new(File::open(&args.utoc)?).de()?;
     for (i, &chunk_id) in toc.chunk_ids.iter().enumerate() {
         let file_name = toc.file_map_rev.get(&(i as u32));
         println!(
@@ -196,7 +196,7 @@ fn action_verify(args: ActionVerify) -> Result<()> {
     let mut stream = BufReader::new(File::open(&args.utoc)?);
     let ucas = &args.utoc.with_extension("ucas");
 
-    let toc: Toc = stream.ser()?;
+    let toc: Toc = stream.de()?;
 
     // most of these don't match?!
     //let sigs = &toc.signatures.as_ref().unwrap().chunk_block_signatures;
@@ -266,7 +266,7 @@ fn action_unpack(args: ActionUnpack) -> Result<()> {
     let mut stream = BufReader::new(File::open(&args.utoc)?);
     let ucas = &args.utoc.with_extension("ucas");
 
-    let toc: Toc = stream.ser()?;
+    let toc: Toc = stream.de()?;
 
     let output = args.output;
 
@@ -302,7 +302,7 @@ fn action_extract_legacy(args: ActionExtractLegacy) -> Result<()> {
     let cas = &args.utoc.with_extension("ucas");
     let mut cas = BufReader::new(File::open(cas).unwrap());
 
-    let toc: Toc = stream.ser()?;
+    let toc: Toc = stream.de()?;
 
     let output = args.output;
 
@@ -342,7 +342,7 @@ fn action_get(args: ActionGet) -> Result<()> {
     let cas = &args.utoc.with_extension("ucas");
     let mut cas = BufReader::new(File::open(cas).unwrap());
 
-    let toc: Toc = stream.ser()?;
+    let toc: Toc = stream.de()?;
 
     let data = toc.read(&mut cas, args.index)?;
     std::io::stdout().write_all(&data)?;
@@ -352,31 +352,31 @@ fn action_get(args: ActionGet) -> Result<()> {
 
 impl Readable for FIoStoreTocHeader {
     #[instrument(skip_all, name = "FIoStoreTocHeader")]
-    fn ser<R: Read>(stream: &mut R) -> Result<Self> {
+    fn de<R: Read>(stream: &mut R) -> Result<Self> {
         let res = FIoStoreTocHeader {
-            toc_magic: stream.ser()?,
-            version: stream.ser()?,
-            reserved0: stream.ser()?,
-            reserved1: stream.ser()?,
-            toc_header_size: stream.ser()?,
-            toc_entry_count: stream.ser()?,
-            toc_compressed_block_entry_count: stream.ser()?,
-            toc_compressed_block_entry_size: stream.ser()?,
-            compression_method_name_count: stream.ser()?,
-            compression_method_name_length: stream.ser()?,
-            compression_block_size: stream.ser()?,
-            directory_index_size: stream.ser()?,
-            partition_count: stream.ser()?,
-            container_id: stream.ser()?,
-            encryption_key_guid: stream.ser()?,
-            container_flags: stream.ser()?,
-            reserved3: stream.ser()?,
-            reserved4: stream.ser()?,
-            toc_chunk_perfect_hash_seeds_count: stream.ser()?,
-            partition_size: stream.ser()?,
-            toc_chunks_without_perfect_hash_count: stream.ser()?,
-            reserved7: stream.ser()?,
-            reserved8: stream.ser()?,
+            toc_magic: stream.de()?,
+            version: stream.de()?,
+            reserved0: stream.de()?,
+            reserved1: stream.de()?,
+            toc_header_size: stream.de()?,
+            toc_entry_count: stream.de()?,
+            toc_compressed_block_entry_count: stream.de()?,
+            toc_compressed_block_entry_size: stream.de()?,
+            compression_method_name_count: stream.de()?,
+            compression_method_name_length: stream.de()?,
+            compression_block_size: stream.de()?,
+            directory_index_size: stream.de()?,
+            partition_count: stream.de()?,
+            container_id: stream.de()?,
+            encryption_key_guid: stream.de()?,
+            container_flags: stream.de()?,
+            reserved3: stream.de()?,
+            reserved4: stream.de()?,
+            toc_chunk_perfect_hash_seeds_count: stream.de()?,
+            partition_size: stream.de()?,
+            toc_chunks_without_perfect_hash_count: stream.de()?,
+            reserved7: stream.de()?,
+            reserved8: stream.de()?,
         };
         assert_eq!(&res.toc_magic, b"-==--==--==--==-");
         assert_eq!(res.toc_header_size, 0x90);
@@ -386,7 +386,7 @@ impl Readable for FIoStoreTocHeader {
 
 #[instrument(skip_all)]
 fn read_chunk_ids<R: Read>(stream: &mut R, header: &FIoStoreTocHeader) -> Result<Vec<FIoChunkId>> {
-    stream.ser_ctx(header.toc_entry_count as usize)
+    stream.de_ctx(header.toc_entry_count as usize)
 }
 
 #[instrument(skip_all)]
@@ -394,7 +394,7 @@ fn read_chunk_offsets<R: Read>(
     stream: &mut R,
     header: &FIoStoreTocHeader,
 ) -> Result<Vec<FIoOffsetAndLength>> {
-    stream.ser_ctx(header.toc_entry_count as usize)
+    stream.de_ctx(header.toc_entry_count as usize)
 }
 
 #[instrument(skip_all)]
@@ -412,9 +412,9 @@ fn read_hash_map<R: Read>(
         perfect_hash_seeds_count = header.toc_chunk_perfect_hash_seeds_count;
         chunks_without_perfect_hash_count = 0;
     }
-    let chunk_perfect_hash_seeds = stream.ser_ctx(perfect_hash_seeds_count as usize)?;
+    let chunk_perfect_hash_seeds = stream.de_ctx(perfect_hash_seeds_count as usize)?;
     let chunk_indices_without_perfect_hash =
-        stream.ser_ctx(chunks_without_perfect_hash_count as usize)?;
+        stream.de_ctx(chunks_without_perfect_hash_count as usize)?;
 
     Ok((chunk_perfect_hash_seeds, chunk_indices_without_perfect_hash))
 }
@@ -424,7 +424,7 @@ fn read_compression_blocks<R: Read>(
     stream: &mut R,
     header: &FIoStoreTocHeader,
 ) -> Result<Vec<FIoStoreTocCompressedBlockEntry>> {
-    stream.ser_ctx(header.toc_compressed_block_entry_count as usize)
+    stream.de_ctx(header.toc_compressed_block_entry_count as usize)
 }
 
 #[instrument(skip_all)]
@@ -436,7 +436,7 @@ fn read_compression_methods<R: Read>(
     for _ in 0..header.compression_method_name_count {
         names.push(String::from_utf8(
             stream
-                .ser_ctx::<Vec<u8>, _>(header.compression_method_name_length as usize)?
+                .de_ctx::<Vec<u8>, _>(header.compression_method_name_length as usize)?
                 .into_iter()
                 .take_while(|&b| b != 0)
                 .collect(),
@@ -452,12 +452,12 @@ fn read_chunk_block_signatures<R: Read>(
 ) -> Result<Option<TocSignatures>> {
     let is_signed = header.container_flags.contains(EIoContainerFlags::Signed);
     Ok(if is_signed {
-        let size = stream.ser::<u32>()? as usize;
+        let size = stream.de::<u32>()? as usize;
         Some(TocSignatures {
-            toc_signature: stream.ser_ctx(size)?,
-            block_signature: stream.ser_ctx(size)?,
+            toc_signature: stream.de_ctx(size)?,
+            block_signature: stream.de_ctx(size)?,
             chunk_block_signatures: stream
-                .ser_ctx(header.toc_compressed_block_entry_count as usize)?,
+                .de_ctx(header.toc_compressed_block_entry_count as usize)?,
         })
     } else {
         None
@@ -466,7 +466,7 @@ fn read_chunk_block_signatures<R: Read>(
 
 #[instrument(skip_all)]
 fn read_directory_index<R: Read>(stream: &mut R, header: &FIoStoreTocHeader) -> Result<Vec<u8>> {
-    stream.ser_ctx(header.directory_index_size as usize)
+    stream.de_ctx(header.directory_index_size as usize)
 }
 
 #[instrument(skip_all)]
@@ -475,7 +475,7 @@ fn read_meta<S: Read>(
     header: &FIoStoreTocHeader,
 ) -> Result<Vec<FIoStoreTocEntryMeta>> {
     read_array(header.toc_entry_count as usize, stream, |s| {
-        let res = s.ser()?;
+        let res = s.de()?;
         if header.version >= EIoStoreTocVersion::ReplaceIoChunkHashWithIoHash {
             s.read_exact(&mut [0; 3])?;
         }
@@ -506,8 +506,8 @@ struct TocSignatures {
     chunk_block_signatures: Vec<FSHAHash>,
 }
 impl Readable for Toc {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        let header = stream.ser()?;
+    fn de<S: Read>(stream: &mut S) -> Result<Self> {
+        let header = stream.de()?;
 
         let chunk_ids = read_chunk_ids(stream, &header)?;
         let chunk_offset_lengths = read_chunk_offsets(stream, &header)?;
@@ -674,8 +674,8 @@ impl Toc {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct FPackageId(u64);
 impl Readable for FPackageId {
-    fn ser<S: Read>(s: &mut S) -> Result<Self> {
-        Ok(Self(s.ser()?))
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        Ok(Self(s.de()?))
     }
 }
 impl FPackageId {
@@ -732,8 +732,8 @@ impl TryFrom<Vec<u8>> for FIoChunkId {
     }
 }
 impl Readable for FIoChunkId {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(Self { id: stream.ser()? })
+    fn de<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(Self { id: stream.de()? })
     }
 }
 impl FIoChunkId {
@@ -756,8 +756,8 @@ struct FIoContainerId {
     id: u64,
 }
 impl Readable for FIoContainerId {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(Self { id: stream.ser()? })
+    fn de<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(Self { id: stream.de()? })
     }
 }
 #[derive(Debug, Clone, Copy)]
@@ -765,10 +765,8 @@ struct FIoOffsetAndLength {
     data: [u8; 10],
 }
 impl Readable for FIoOffsetAndLength {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(Self {
-            data: stream.ser()?,
-        })
+    fn de<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(Self { data: stream.de()? })
     }
 }
 impl FIoOffsetAndLength {
@@ -798,10 +796,8 @@ impl std::fmt::Debug for FIoStoreTocCompressedBlockEntry {
     }
 }
 impl Readable for FIoStoreTocCompressedBlockEntry {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(Self {
-            data: stream.ser()?,
-        })
+    fn de<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(Self { data: stream.de()? })
     }
 }
 impl FIoStoreTocCompressedBlockEntry {
@@ -834,10 +830,8 @@ impl std::fmt::Debug for FIoChunkHash {
     }
 }
 impl Readable for FIoChunkHash {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(Self {
-            data: stream.ser()?,
-        })
+    fn de<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(Self { data: stream.de()? })
     }
 }
 #[derive(Debug)]
@@ -846,10 +840,10 @@ struct FIoStoreTocEntryMeta {
     flags: FIoStoreTocEntryMetaFlags,
 }
 impl Readable for FIoStoreTocEntryMeta {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+    fn de<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(Self {
-            chunk_hash: stream.ser()?,
-            flags: stream.ser()?,
+            chunk_hash: stream.de()?,
+            flags: stream.de()?,
         })
     }
 }
@@ -861,12 +855,12 @@ struct FGuid {
     d: u32,
 }
 impl Readable for FGuid {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+    fn de<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(Self {
-            a: stream.ser()?,
-            b: stream.ser()?,
-            c: stream.ser()?,
-            d: stream.ser()?,
+            a: stream.de()?,
+            b: stream.de()?,
+            c: stream.de()?,
+            d: stream.de()?,
         })
     }
 }
@@ -874,10 +868,8 @@ struct FSHAHash {
     data: [u8; 20],
 }
 impl Readable for FSHAHash {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(Self {
-            data: stream.ser()?,
-        })
+    fn de<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(Self { data: stream.de()? })
     }
 }
 impl std::fmt::Debug for FSHAHash {
@@ -905,13 +897,13 @@ bitflags! {
     }
 }
 impl Readable for EIoContainerFlags {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        Self::from_bits(stream.ser()?).context("invalid EIoContainerFlags value")
+    fn de<S: Read>(stream: &mut S) -> Result<Self> {
+        Self::from_bits(stream.de()?).context("invalid EIoContainerFlags value")
     }
 }
 impl Readable for FIoStoreTocEntryMetaFlags {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        Self::from_bits(stream.ser()?).context("invalid FIoStoreTocEntryMetaFlags value")
+    fn de<S: Read>(stream: &mut S) -> Result<Self> {
+        Self::from_bits(stream.de()?).context("invalid FIoStoreTocEntryMetaFlags value")
     }
 }
 
@@ -929,8 +921,8 @@ enum EIoStoreTocVersion {
     ReplaceIoChunkHashWithIoHash,
 }
 impl Readable for EIoStoreTocVersion {
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        Self::from_repr(stream.ser()?).context("invalid EIoStoreTocVersion value")
+    fn de<S: Read>(stream: &mut S) -> Result<Self> {
+        Self::from_repr(stream.de()?).context("invalid EIoStoreTocVersion value")
     }
 }
 
@@ -1025,10 +1017,10 @@ mod directory_index {
     impl FIoDirectoryIndexResource {
         pub fn read<S: Read>(stream: &mut S) -> Result<Self> {
             Ok(Self {
-                mount_point: stream.ser()?,
-                directory_entries: stream.ser()?,
-                file_entries: stream.ser()?,
-                string_table: stream.ser()?,
+                mount_point: stream.de()?,
+                directory_entries: stream.de()?,
+                file_entries: stream.de()?,
+                string_table: stream.de()?,
             })
         }
         pub fn iter_root<F>(&self, mut visitor: F)
@@ -1174,13 +1166,13 @@ mod directory_index {
                 }
             }
             impl Readable for Option<$name> {
-                fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-                    Ok($name::new(stream.ser()?))
+                fn de<S: Read>(stream: &mut S) -> Result<Self> {
+                    Ok($name::new(stream.de()?))
                 }
             }
             impl Readable for $name {
-                fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-                    Ok(Self(stream.ser()?))
+                fn de<S: Read>(stream: &mut S) -> Result<Self> {
+                    Ok(Self(stream.de()?))
                 }
             }
         };
@@ -1196,11 +1188,11 @@ mod directory_index {
         user_data: u32,
     }
     impl Readable for FIoFileIndexEntry {
-        fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        fn de<S: Read>(stream: &mut S) -> Result<Self> {
             Ok(Self {
-                name: stream.ser()?,
-                next_file_entry: stream.ser()?,
-                user_data: stream.ser()?,
+                name: stream.de()?,
+                next_file_entry: stream.de()?,
+                user_data: stream.de()?,
             })
         }
     }
@@ -1213,12 +1205,12 @@ mod directory_index {
         first_file_entry: Option<IdFile>,
     }
     impl Readable for FIoDirectoryIndexEntry {
-        fn ser<S: Read>(stream: &mut S) -> Result<Self> {
+        fn de<S: Read>(stream: &mut S) -> Result<Self> {
             Ok(Self {
-                name: stream.ser()?,
-                first_child_entry: stream.ser()?,
-                next_sibling_entry: stream.ser()?,
-                first_file_entry: stream.ser()?,
+                name: stream.de()?,
+                first_child_entry: stream.de()?,
+                next_sibling_entry: stream.de()?,
+                first_file_entry: stream.de()?,
             })
         }
     }

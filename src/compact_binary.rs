@@ -63,8 +63,8 @@ bitflags::bitflags! {
 }
 impl Readable for ECbFieldTypeFlags {
     #[instrument(skip_all, name = "ECbFieldType")]
-    fn ser<S: Read>(stream: &mut S) -> Result<Self> {
-        Self::from_bits(stream.ser::<u8>()?).context("invalid ECbFieldType")
+    fn de<S: Read>(stream: &mut S) -> Result<Self> {
+        Self::from_bits(stream.de::<u8>()?).context("invalid ECbFieldType")
     }
 }
 impl ECbFieldTypeFlags {
@@ -118,7 +118,7 @@ enum FieldValue {
 #[instrument(skip_all)]
 fn read_string<S: Read>(stream: &mut S) -> Result<String> {
     let size = read_var_uint(stream)? as usize;
-    Ok(String::from_utf8(stream.ser_ctx(size)?)?)
+    Ok(String::from_utf8(stream.de_ctx(size)?)?)
 }
 
 #[instrument(skip_all)]
@@ -128,7 +128,7 @@ fn read_compact_binary<S: Read>(stream: &mut S) -> Result<Field> {
 #[instrument(skip_all)]
 fn read_field<S: Read>(stream: &mut Ctx<S>, mut tag: ECbFieldTypeFlags) -> Result<Field> {
     if tag.has_field_type() {
-        tag = stream.ser()?;
+        tag = stream.de()?;
     }
     let name = if tag.has_field_name() {
         Some(read_string(stream)?)
@@ -158,7 +158,7 @@ fn read_field<S: Read>(stream: &mut Ctx<S>, mut tag: ECbFieldTypeFlags) -> Resul
                 let mut fields = IndexMap::new();
                 if size > 0 {
                     let start = stream.read;
-                    let tag: ECbFieldTypeFlags = stream.ser()?;
+                    let tag: ECbFieldTypeFlags = stream.de()?;
                     while stream.read < start + size {
                         let field = read_field(stream, tag)?;
                         fields.insert(field.name.unwrap(), field.value);
@@ -178,7 +178,7 @@ fn read_field<S: Read>(stream: &mut Ctx<S>, mut tag: ECbFieldTypeFlags) -> Resul
             ECbFieldType::UniformArray => {
                 let size = varint::read_var_uint(stream)?;
                 let count = varint::read_var_uint(stream)?;
-                let tag: ECbFieldTypeFlags = stream.ser()?;
+                let tag: ECbFieldTypeFlags = stream.de()?;
                 let mut fields = vec![];
                 for _ in 0..count {
                     fields.push(read_field(stream, tag)?.value);
@@ -195,13 +195,13 @@ fn read_field<S: Read>(stream: &mut Ctx<S>, mut tag: ECbFieldTypeFlags) -> Resul
             //ECbFieldType::BoolTrue = 0x0d,
             //ECbFieldType::ObjectAttachment = 0x0e,
             ECbFieldType::BinaryAttachment => {
-                FieldValue::BinaryAttachment(stream.ser::<[u8; 20]>()?)
+                FieldValue::BinaryAttachment(stream.de::<[u8; 20]>()?)
             }
             //ECbFieldType::Hash = 0x10,
             //ECbFieldType::Uuid = 0x11,
             //ECbFieldType::DateTime = 0x12,
             //ECbFieldType::TimeSpan = 0x13,
-            ECbFieldType::ObjectId => FieldValue::ObjectId(stream.ser::<[u8; 12]>()?),
+            ECbFieldType::ObjectId => FieldValue::ObjectId(stream.de::<[u8; 12]>()?),
             //ECbFieldType::CustomById = 0x1e,
             //ECbFieldType::CustomByName = 0x1f,
             _ => todo!("{tag:?}"),
@@ -268,13 +268,13 @@ mod varint {
 
     #[instrument(skip_all)]
     pub fn read_var_uint<S: Read>(stream: &mut S) -> Result<u64> {
-        let lead: u8 = stream.ser()?;
+        let lead: u8 = stream.de()?;
         let byte_count = lead.leading_ones();
 
         let mut value = (lead & (0xff >> byte_count)) as u64;
         for _ in 0..byte_count {
             value <<= 8;
-            value |= stream.ser::<u8>()? as u64;
+            value |= stream.de::<u8>()? as u64;
         }
         Ok(value)
     }

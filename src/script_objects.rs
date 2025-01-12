@@ -5,13 +5,14 @@ use tracing::instrument;
 
 use crate::{
     name_map::{FMinimalName, FNameMap},
-    read_array, ReadExt,
+    read_array,
+    ser::*,
 };
 
 #[instrument(skip_all)]
 fn read_script_objects<S: Read>(s: &mut S) -> Result<()> {
-    let global_name_map: FNameMap = s.ser()?;
-    let num_script_objects: u32 = s.ser()?;
+    let global_name_map: FNameMap = s.de()?;
+    let num_script_objects: u32 = s.de()?;
 
     let script_objects = read_array(num_script_objects as usize, s, FScriptObjectEntry::read)?;
 
@@ -45,7 +46,7 @@ impl FScriptObjectEntry {
     fn read<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self {
             //mapped: FMappedName::read(s)?,
-            object_name: s.ser()?,
+            object_name: s.de()?,
             global_index: FPackageObjectIndex::read(s)?,
             outer_index: FPackageObjectIndex::read(s)?,
             cdo_class_index: FPackageObjectIndex::read(s)?,
@@ -61,7 +62,7 @@ impl FPackageObjectIndex {
     #[instrument(skip_all, name = "FPackageObjectIndex")]
     fn read<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self {
-            type_and_id: s.ser()?,
+            type_and_id: s.de()?,
         })
     }
     fn get(self) -> Option<u64> {

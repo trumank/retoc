@@ -3,7 +3,7 @@ use std::{borrow::Cow, io::Read};
 use anyhow::Result;
 use tracing::instrument;
 
-use crate::{read_array, read_string, ReadExt, Readable};
+use crate::{read_array, read_string, ser::*};
 
 #[derive(Debug)]
 pub(crate) struct FNameMap {
@@ -11,18 +11,18 @@ pub(crate) struct FNameMap {
 }
 impl Readable for FNameMap {
     #[instrument(skip_all, "FNameMap")]
-    fn ser<S: Read>(s: &mut S) -> Result<Self> {
-        let num: u32 = s.ser()?;
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        let num: u32 = s.de()?;
         if num == 0 {
             return Ok(Self { names: vec![] });
         }
-        let _num_string_bytes: u32 = s.ser()?;
-        let _hash_version: u64 = s.ser()?;
+        let _num_string_bytes: u32 = s.de()?;
+        let _hash_version: u64 = s.de()?;
 
         let _use_saved_hashes = false; // TODO check CanUseSavedHashes(HashVersion)
 
-        let _hash_bytes: Vec<u8> = s.ser_ctx(num as usize * 8)?;
-        let lengths = read_array(num as usize, s, |s| Ok(u16::from_be_bytes(s.ser()?)))?;
+        let _hash_bytes: Vec<u8> = s.de_ctx(num as usize * 8)?;
+        let lengths = read_array(num as usize, s, |s| Ok(u16::from_be_bytes(s.de()?)))?;
         let names: Vec<_> = lengths
             .iter()
             .map(|&l| {
@@ -54,10 +54,10 @@ pub(crate) struct FMappedName {
 
 impl Readable for FMappedName {
     #[instrument(skip_all, name = "FMappedName")]
-    fn ser<S: Read>(s: &mut S) -> Result<Self> {
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self {
-            index: s.ser()?,
-            number: s.ser()?,
+            index: s.de()?,
+            number: s.de()?,
         })
     }
 }
@@ -69,10 +69,10 @@ pub(crate) struct FMinimalName {
 }
 impl Readable for FMinimalName {
     #[instrument(skip_all, name = "FMinimalName")]
-    fn ser<S: Read>(s: &mut S) -> Result<Self> {
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self {
-            index: s.ser()?,
-            number: s.ser()?,
+            index: s.de()?,
+            number: s.de()?,
         })
     }
 }
@@ -83,7 +83,7 @@ struct FNameEntryId {
 }
 impl Readable for FNameEntryId {
     #[instrument(skip_all, name = "FNameEntryId")]
-    fn ser<S: Read>(s: &mut S) -> Result<Self> {
-        Ok(Self { value: s.ser()? })
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        Ok(Self { value: s.de()? })
     }
 }

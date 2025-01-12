@@ -9,7 +9,7 @@ use crate::{
 };
 
 pub(crate) fn get_package_name(data: &[u8]) -> Result<String> {
-    let header: FZenPackageHeader = std::io::Cursor::new(data).ser()?;
+    let header: FZenPackageHeader = std::io::Cursor::new(data).de()?;
     Ok(header.name_map.get(header.summary.name).to_string())
 }
 
@@ -23,31 +23,31 @@ pub(crate) struct FPackageFileSummary {
 }
 impl Readable for FPackageFileSummary {
     #[instrument(skip_all, name = "FPackageFileSummary")]
-    fn ser<S: Read>(s: &mut S) -> Result<Self> {
-        let tag = s.ser()?;
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        let tag = s.de()?;
         assert_eq!(tag, 0x9e2a83c1);
 
-        let legacy_file_version: i32 = dbg!(s.ser()?);
+        let legacy_file_version: i32 = dbg!(s.de()?);
 
         if legacy_file_version != -4 {
-            let _legacy_ue3_version: i32 = s.ser()?;
+            let _legacy_ue3_version: i32 = s.de()?;
         }
-        let file_version_ue4 = s.ser()?;
+        let file_version_ue4 = s.de()?;
         assert_eq!(file_version_ue4, 0);
         let file_version_ue5 = if legacy_file_version <= -8 {
-            Some(s.ser()?)
+            Some(s.de()?)
         } else {
             None
         };
         assert_eq!(file_version_ue5, Some(0));
-        let _file_version_licensee_ue: u32 = s.ser()?;
+        let _file_version_licensee_ue: u32 = s.de()?;
         if legacy_file_version <= -2 {
-            let custom_versions: u32 = s.ser()?; // empty (unversioned)
+            let custom_versions: u32 = s.de()?; // empty (unversioned)
             assert_eq!(custom_versions, 0);
         }
 
-        let total_header_size = s.ser()?;
-        let package_name = s.ser()?;
+        let total_header_size = s.de()?;
+        let package_name = s.de()?;
 
         Ok(Self {
             tag,
@@ -76,20 +76,20 @@ pub(crate) struct FZenPackageSummary {
 }
 impl Readable for FZenPackageSummary {
     #[instrument(skip_all, name = "FZenPackageSummary")]
-    fn ser<S: Read>(s: &mut S) -> Result<Self> {
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self {
-            has_versioning_info: s.ser()?,
-            header_size: s.ser()?,
-            name: s.ser()?,
-            package_flags: s.ser()?,
-            cooked_header_size: s.ser()?,
-            imported_public_export_hashes_offset: s.ser()?,
-            import_map_offset: s.ser()?,
-            export_map_offset: s.ser()?,
-            export_bundle_entries_offset: s.ser()?,
-            dependency_bundle_headers_offset: s.ser()?,
-            dependency_bundle_entries_offset: s.ser()?,
-            imported_package_names_offset: s.ser()?,
+            has_versioning_info: s.de()?,
+            header_size: s.de()?,
+            name: s.de()?,
+            package_flags: s.de()?,
+            cooked_header_size: s.de()?,
+            imported_public_export_hashes_offset: s.de()?,
+            import_map_offset: s.de()?,
+            export_map_offset: s.de()?,
+            export_bundle_entries_offset: s.de()?,
+            dependency_bundle_headers_offset: s.de()?,
+            dependency_bundle_entries_offset: s.de()?,
+            imported_package_names_offset: s.de()?,
         })
     }
 }
@@ -101,10 +101,10 @@ pub(crate) struct FZenPackageHeader {
 }
 impl Readable for FZenPackageHeader {
     #[instrument(skip_all, name = "FZenPackageHeader")]
-    fn ser<S: Read>(s: &mut S) -> Result<Self> {
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self {
-            summary: s.ser()?,
-            name_map: s.ser()?,
+            summary: s.de()?,
+            name_map: s.de()?,
         })
     }
 }
@@ -122,7 +122,7 @@ mod test {
             "bad.uasset",
         )?);
 
-        let header = ser_hex::read("trace.json", &mut stream, FZenPackageHeader::ser)?;
+        let header = ser_hex::read("trace.json", &mut stream, FZenPackageHeader::de)?;
         header.name_map.get(header.summary.name);
 
         //dbg!(field);

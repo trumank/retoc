@@ -27,22 +27,22 @@ struct FIoContainerHeader {
 }
 impl Readable for FIoContainerHeader {
     #[instrument(skip_all, name = "FIoContainerHeader")]
-    fn ser<S: Read>(s: &mut S) -> Result<Self> {
-        let signature: u32 = s.ser()?;
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        let signature: u32 = s.de()?;
         if signature != 0x496f436e {
             bail!("invalid ContainerHeader signature")
         }
 
-        let version: EIoContainerHeaderVersion = s.ser()?;
+        let version: EIoContainerHeaderVersion = s.de()?;
 
-        let container_id = s.ser()?;
-        let package_ids: Vec<_> = s.ser()?;
-        let store_entries = s.ser_ctx(package_ids.len())?;
-        let optional_segment_package_ids = s.ser()?;
-        let optional_segment_store_entries = s.ser()?;
-        let redirect_name_map = s.ser()?;
-        let localized_packages = s.ser()?;
-        let package_redirects = s.ser()?;
+        let container_id = s.de()?;
+        let package_ids: Vec<_> = s.de()?;
+        let store_entries = s.de_ctx(package_ids.len())?;
+        let optional_segment_package_ids = s.de()?;
+        let optional_segment_store_entries = s.de()?;
+        let redirect_name_map = s.de()?;
+        let localized_packages = s.de()?;
+        let package_redirects = s.de()?;
 
         // TODO SoftPackageReferences
 
@@ -69,8 +69,8 @@ enum EIoContainerHeaderVersion {
     SoftPackageReferences = 4,
 }
 impl Readable for EIoContainerHeaderVersion {
-    fn ser<S: Read>(s: &mut S) -> Result<Self> {
-        let value = s.ser()?;
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        let value = s.de()?;
         Self::from_repr(value).with_context(|| format!("invalid EIoStoreTocVersion value: {value}"))
     }
 }
@@ -81,10 +81,10 @@ struct FIoContainerHeaderLocalizedPackage {
     source_package_name: FMinimalName,
 }
 impl Readable for FIoContainerHeaderLocalizedPackage {
-    fn ser<S: Read>(s: &mut S) -> Result<Self> {
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self {
-            source_package_id: s.ser()?,
-            source_package_name: s.ser()?,
+            source_package_id: s.de()?,
+            source_package_name: s.de()?,
         })
     }
 }
@@ -96,11 +96,11 @@ struct FIoContainerHeaderPackageRedirect {
     source_package_name: FMinimalName,
 }
 impl Readable for FIoContainerHeaderPackageRedirect {
-    fn ser<S: Read>(s: &mut S) -> Result<Self> {
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self {
-            source_package_id: s.ser()?,
-            target_package_id: s.ser()?,
-            source_package_name: s.ser()?,
+            source_package_id: s.de()?,
+            target_package_id: s.de()?,
+            source_package_name: s.de()?,
         })
     }
 }
@@ -111,14 +111,14 @@ struct StoreEntries {
     shader_map_hashes: HashMap<u32, Vec<FSHAHash>>,
 }
 impl ReadableCtx<usize> for StoreEntries {
-    fn ser<S: Read>(s: &mut S, package_count: usize) -> Result<Self> {
-        let buffer: Vec<u8> = s.ser()?;
+    fn de<S: Read>(s: &mut S, package_count: usize) -> Result<Self> {
+        let buffer: Vec<u8> = s.de()?;
         let mut cur = Cursor::new(buffer);
 
         let mut imported_packages = HashMap::new();
         let mut shader_map_hashes = HashMap::new();
 
-        let entries: Vec<FFilePackageStoreEntry> = ReadExt::ser_ctx(&mut cur, package_count)?;
+        let entries: Vec<FFilePackageStoreEntry> = cur.de_ctx(package_count)?;
         for (i, entry) in entries.iter().enumerate() {
             let offset = i * std::mem::size_of::<FFilePackageStoreEntry>();
 
@@ -128,7 +128,7 @@ impl ReadableCtx<usize> for StoreEntries {
                     + entry.imported_packages.offset_to_data_from_this as usize
                     + std::mem::offset_of!(FFilePackageStoreEntry, imported_packages);
                 cur.seek(SeekFrom::Start(offset as u64))?;
-                let array: Vec<_> = ReadExt::ser_ctx(&mut cur, num)?;
+                let array: Vec<_> = cur.de_ctx(num)?;
                 imported_packages.insert(i as u32, array);
             }
 
@@ -138,7 +138,7 @@ impl ReadableCtx<usize> for StoreEntries {
                     + entry.shader_map_hashes.offset_to_data_from_this as usize
                     + std::mem::offset_of!(FFilePackageStoreEntry, shader_map_hashes);
                 cur.seek(SeekFrom::Start(offset as u64))?;
-                let array: Vec<_> = ReadExt::ser_ctx(&mut cur, num)?;
+                let array: Vec<_> = cur.de_ctx(num)?;
                 shader_map_hashes.insert(i as u32, array);
             }
         }
@@ -156,10 +156,10 @@ struct TFilePackageStoreEntryCArrayView<T> {
     _phantom: PhantomData<T>,
 }
 impl<T> Readable for TFilePackageStoreEntryCArrayView<T> {
-    fn ser<S: Read>(s: &mut S) -> Result<Self> {
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self {
-            array_num: s.ser()?,
-            offset_to_data_from_this: s.ser()?,
+            array_num: s.de()?,
+            offset_to_data_from_this: s.de()?,
             _phantom: Default::default(),
         })
     }
@@ -171,10 +171,10 @@ struct FFilePackageStoreEntry {
     shader_map_hashes: TFilePackageStoreEntryCArrayView<FSHAHash>,
 }
 impl Readable for FFilePackageStoreEntry {
-    fn ser<S: Read>(s: &mut S) -> Result<Self> {
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self {
-            imported_packages: s.ser()?,
-            shader_map_hashes: s.ser()?,
+            imported_packages: s.de()?,
+            shader_map_hashes: s.de()?,
         })
     }
 }
@@ -189,7 +189,7 @@ mod test {
     fn test_container_header() -> Result<()> {
         let mut stream = BufReader::new(File::open("containerheader.bin")?);
 
-        let header = ser_hex::read("trace.json", &mut stream, FIoContainerHeader::ser)?;
+        let header = ser_hex::read("trace.json", &mut stream, FIoContainerHeader::de)?;
         dbg!(header.store_entries.shader_map_hashes);
 
         Ok(())
