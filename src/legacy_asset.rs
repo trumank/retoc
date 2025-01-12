@@ -1,19 +1,15 @@
-use std::{
-    io::{Cursor, Read, Seek},
-    path::Path,
-};
+use std::{io::Cursor, path::Path};
 
-use crate::{ser::*, zen::FZenPackageHeader, Toc};
+use crate::{iostore::IoStoreTrait, ser::*, zen::FZenPackageHeader, FIoChunkId};
 use anyhow::Result;
 use byteorder::{WriteBytesExt as _, LE};
 
-pub(crate) fn build_legacy<C: Read + Seek, P: AsRef<Path>>(
-    toc: &Toc,
-    cas: &mut C,
-    toc_entry_index: u32,
+pub(crate) fn build_legacy<P: AsRef<Path>>(
+    iostore: &dyn IoStoreTrait,
+    chunk_id: FIoChunkId,
     out_path: P,
 ) -> Result<()> {
-    let mut zen_data = Cursor::new(toc.read(cas, toc_entry_index)?);
+    let mut zen_data = Cursor::new(iostore.read(chunk_id)?);
 
     let mut out_buffer = vec![];
     let mut cur = Cursor::new(&mut out_buffer);

@@ -299,35 +299,31 @@ fn action_unpack(args: ActionUnpack) -> Result<()> {
 }
 
 fn action_extract_legacy(args: ActionExtractLegacy) -> Result<()> {
-    let mut stream = BufReader::new(File::open(&args.utoc)?);
-    let cas = &args.utoc.with_extension("ucas");
-    let mut cas = BufReader::new(File::open(cas).unwrap());
-
-    let toc: Toc = stream.de()?;
+    let iostore = iostore::open(args.utoc)?;
 
     let output = args.output;
 
     let mut count = 0;
-    toc.file_map
-        .iter()
-        .try_for_each(|(file_name, &index)| -> Result<()> {
-            if let Some(filter) = &args.filter {
-                if !file_name.contains(filter) {
-                    return Ok(());
+    iostore.chunk_ids().try_for_each(|chunk_id| -> Result<()> {
+        if chunk_id.get_chunk_type() == EIoChunkType::ExportBundleData {
+            if let Some(file_name) = iostore.file_name(chunk_id) {
+                if let Some(filter) = &args.filter {
+                    if !file_name.contains(filter) {
+                        return Ok(());
+                    }
                 }
-            }
-            if toc.chunk_ids[index as usize].get_chunk_type() == EIoChunkType::ExportBundleData {
                 if args.verbose {
                     println!("{file_name}");
                 }
                 let path = output.join(file_name);
                 let dir = path.parent().unwrap();
                 std::fs::create_dir_all(dir)?;
-                legacy_asset::build_legacy(&toc, &mut cas, index, path)?;
+                legacy_asset::build_legacy(&*iostore, chunk_id, path)?;
                 count += 1;
             }
-            Ok(())
-        })?;
+        }
+        Ok(())
+    })?;
 
     println!(
         "unpacked {} legacy assets to {}",
