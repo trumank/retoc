@@ -185,7 +185,7 @@ fn action_list(args: ActionList) -> Result<()> {
         let file_name = iostore.file_name(chunk_id);
         println!(
             "{}  {:20}  {}",
-            hex::encode(chunk_id.get_chunk_id()),
+            hex::encode(chunk_id.id),
             chunk_id.get_chunk_type().as_ref(),
             file_name.unwrap_or("-")
         );
