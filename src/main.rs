@@ -1,5 +1,6 @@
 mod compact_binary;
 mod container_header;
+mod iostore;
 mod legacy_asset;
 mod manifest;
 mod name_map;
@@ -178,15 +179,15 @@ fn action_manifest(args: ActionManifest) -> Result<()> {
 }
 
 fn action_list(args: ActionList) -> Result<()> {
-    let toc: Toc = BufReader::new(File::open(&args.utoc)?).de()?;
-    for (i, &chunk_id) in toc.chunk_ids.iter().enumerate() {
-        let file_name = toc.file_map_rev.get(&(i as u32));
+    let iostore = iostore::open(args.utoc)?;
+
+    for chunk_id in iostore.chunk_ids() {
+        let file_name = iostore.file_name(chunk_id);
         println!(
-            "{:>10}  {}  {:20}  {}",
-            i,
+            "{}  {:20}  {}",
             hex::encode(chunk_id.get_chunk_id()),
             chunk_id.get_chunk_type().as_ref(),
-            file_name.map(String::as_str).unwrap_or("-")
+            file_name.unwrap_or("-")
         );
     }
     Ok(())
