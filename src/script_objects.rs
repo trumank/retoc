@@ -1,4 +1,5 @@
-use std::io::{Read, Seek};
+use std::io::Read;
+use std::io::Seek;
 
 use anyhow::Result;
 use strum::FromRepr;

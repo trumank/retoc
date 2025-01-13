@@ -5,11 +5,12 @@ use strum::FromRepr;
 use tracing::instrument;
 
 use crate::{name_map::{FMinimalName, FNameMap}, FGuid, ReadExt, Readable};
+use crate::name_map::read_name_batch;
 use crate::script_objects::FPackageObjectIndex;
 use crate::ser::ReadableCtx;
 
 pub(crate) fn get_package_name(data: &[u8]) -> Result<String> {
-    let header: FZenPackageHeader = FZenPackageHeader::de(&mut Cursor::new(data))?;
+    let header: FZenPackageHeader = FZenPackageHeader::deserialize(&mut Cursor::new(data))?;
     Ok(header.name_map.get(header.summary.name).to_string())
 }
 
@@ -213,6 +214,67 @@ impl Readable for FExportMapEntry {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, FromRepr)]
+#[repr(u32)]
+enum EExportCommandType {
+    Create,
+    Serialize
+}
+#[derive(Debug)]
+#[repr(C)] // Needed to determine the number of export bundle entries
+struct FExportBundleEntry {
+    local_export_index: u32,
+    command_type: EExportCommandType,
+}
+impl Readable for FExportBundleEntry {
+    #[instrument(skip_all, name = "FExportBundleEntry")]
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        Ok(Self{
+            local_export_index: s.de()?,
+            command_type: EExportCommandType::from_repr(s.de()?).unwrap()
+        })
+    }
+}
+
+#[derive(Debug)]
+#[repr(C)] // Needed to determine the number of bundle headers
+struct FDependencyBundleHeader
+{
+    first_entry_index: i32,
+    // Note that this is defined as uint32 EntryCount[ExportCommandType_Count][ExportCommandType_Count], but this is a really awkward definition to work with,
+    // so here it is defined as 4 individual properties: [Create][Create], [Create][Serialize], [Serialize][Create] and [Serialize][Serialize]
+    create_before_create_dependencies: u32,
+    create_before_serialize_dependencies: u32,
+    serialize_before_create_dependencies: u32,
+    serialize_before_serialize_dependencies: u32,
+}
+impl Readable for FDependencyBundleHeader {
+    #[instrument(skip_all, name = "FDependencyBundleHeader")]
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        Ok(Self{
+            first_entry_index: s.de()?,
+            create_before_create_dependencies: s.de()?,
+            create_before_serialize_dependencies: s.de()?,
+            serialize_before_create_dependencies: s.de()?,
+            serialize_before_serialize_dependencies: s.de()?,
+        })
+    }
+}
+
+#[derive(Debug)]
+#[repr(C)] // Needed to determine the number of bundle entries
+struct FDependencyBundleEntry {
+    local_import_or_export_index: i32,
+}
+impl Readable for FDependencyBundleEntry {
+    #[instrument(skip_all, name = "FDependencyBundleEntry")]
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        Ok(Self{
+            local_import_or_export_index: s.de()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, FromRepr)]
 #[repr(i32)]
 enum EUnrealEngineObjectUE5Version {
     DataResources = 1009,
@@ -227,10 +289,14 @@ pub(crate) struct FZenPackageHeader {
     imported_public_export_hashes: Vec<u64>,
     import_map: Vec<FPackageObjectIndex>,
     export_map: Vec<FExportMapEntry>,
+    export_bundle_entries: Vec<FExportBundleEntry>,
+    dependency_bundle_headers: Vec<FDependencyBundleHeader>,
+    dependency_bundle_entries: Vec<FDependencyBundleEntry>,
+    imported_package_names: Vec<String>,
 }
 impl FZenPackageHeader {
     #[instrument(skip_all, name = "FZenPackageHeader")]
-    pub(crate) fn de<S: Read + Seek>(s: &mut S) -> Result<Self> {
+    pub(crate) fn deserialize<S: Read + Seek>(s: &mut S) -> Result<Self> {
 
         let package_start_offset = s.stream_position()?;
         let summary: FZenPackageSummary = s.de()?;
@@ -261,6 +327,40 @@ impl FZenPackageHeader {
         s.seek(SeekFrom::Start(export_map_start_offset))?;
         let export_map: Vec<FExportMapEntry> = s.de_ctx(export_map_count)?;
 
+        let export_bundle_entries_count = (summary.dependency_bundle_headers_offset - summary.export_bundle_entries_offset) as usize / size_of::<FExportBundleEntry>();
+        let export_bundle_entries_start_offset = package_start_offset + summary.dependency_bundle_headers_offset as u64;
+        let expected_export_bundle_entries_count = export_map_count * 2; // Each export must have Create and Serialize
+        assert_eq!(export_bundle_entries_count, expected_export_bundle_entries_count, "Expected to have Create and Serialize commands in export bundle for each export in the package. Got only {} export bundle entries with {} exports",
+            export_bundle_entries_count, export_map_count);
+
+        s.seek(SeekFrom::Start(export_bundle_entries_start_offset))?;
+        let export_bundle_entries: Vec<FExportBundleEntry> = s.de_ctx(export_bundle_entries_count)?;
+
+        let dependency_bundle_headers_count = (summary.dependency_bundle_entries_offset - summary.dependency_bundle_headers_offset) as usize / size_of::<FDependencyBundleHeader>();
+        let dependency_bundle_headers_start_offset = package_start_offset + summary.dependency_bundle_headers_offset as u64;
+        assert_eq!(dependency_bundle_headers_count, export_map_count, "Expected to have as many dependency bundle headers as the number of exports. Got {} dependency bundle headers for {} exports", dependency_bundle_headers_count, export_map_count);
+
+        s.seek(SeekFrom::Start(dependency_bundle_headers_start_offset))?;
+        let dependency_bundle_headers = s.de_ctx(dependency_bundle_headers_count)?;
+
+        let dependency_bundle_entries_count = (summary.imported_package_names_offset - summary.dependency_bundle_entries_offset) as usize / size_of::<FDependencyBundleEntry>();
+        let dependency_bundle_entries_start_offset = package_start_offset + summary.dependency_bundle_entries_offset as u64;
+
+        s.seek(SeekFrom::Start(dependency_bundle_entries_start_offset))?;
+        let dependency_bundle_entries = s.de_ctx(dependency_bundle_entries_count)?;
+
+        // This is technically not necessary to read, but that data can be used for verification and debugging
+        let imported_package_names_start_offset = package_start_offset + summary.imported_package_names_offset as u64;
+        s.seek(SeekFrom::Start(imported_package_names_start_offset))?;
+
+        let mut imported_package_names: Vec<String> = read_name_batch(s)?;
+        let imported_package_name_numbers: Vec<i32> = s.de_ctx(imported_package_names.len())?;
+        for (index, item) in imported_package_names.iter_mut().enumerate() {
+            if imported_package_name_numbers[index] != 0 {
+                *item = format!("{item}_{}", imported_package_name_numbers[index] - 1)
+            }
+        }
+
         Ok(Self{
             summary,
             versioning_info,
@@ -268,7 +368,11 @@ impl FZenPackageHeader {
             bulk_data,
             imported_public_export_hashes,
             import_map,
-            export_map
+            export_map,
+            export_bundle_entries,
+            dependency_bundle_headers,
+            dependency_bundle_entries,
+            imported_package_names,
         })
     }
 }

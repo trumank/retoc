@@ -5,6 +5,29 @@ use tracing::instrument;
 
 use crate::{read_array, read_string, ser::*};
 
+pub(crate) fn read_name_batch<S: Read>(s: &mut S) -> Result<Vec<String>> {
+    let num: u32 = s.de()?;
+    if num == 0 {
+        return Ok(vec![]);
+    }
+    let _num_string_bytes: u32 = s.de()?;
+    let _hash_version: u64 = s.de()?;
+
+    let _use_saved_hashes = false; // TODO check CanUseSavedHashes(HashVersion)
+
+    let _hash_bytes: Vec<u8> = s.de_ctx(num as usize * 8)?;
+    let lengths = read_array(num as usize, s, |s| Ok(u16::from_be_bytes(s.de()?)))?;
+    let names: Vec<_> = lengths
+        .iter()
+        .map(|&l| {
+            let utf16 = l & 0x8000 != 0; // check high bit
+            let l = (l & !0x8000) as i32; // reset high bit
+            read_string(if utf16 { -l } else { l }, s)
+        })
+        .collect::<Result<_>>()?;
+    Ok(names)
+}
+
 #[derive(Debug)]
 pub(crate) struct FNameMap {
     names: Vec<String>,
@@ -12,26 +35,7 @@ pub(crate) struct FNameMap {
 impl Readable for FNameMap {
     #[instrument(skip_all, "FNameMap")]
     fn de<S: Read>(s: &mut S) -> Result<Self> {
-        let num: u32 = s.de()?;
-        if num == 0 {
-            return Ok(Self { names: vec![] });
-        }
-        let _num_string_bytes: u32 = s.de()?;
-        let _hash_version: u64 = s.de()?;
-
-        let _use_saved_hashes = false; // TODO check CanUseSavedHashes(HashVersion)
-
-        let _hash_bytes: Vec<u8> = s.de_ctx(num as usize * 8)?;
-        let lengths = read_array(num as usize, s, |s| Ok(u16::from_be_bytes(s.de()?)))?;
-        let names: Vec<_> = lengths
-            .iter()
-            .map(|&l| {
-                let utf16 = l & 0x8000 != 0; // check high bit
-                let l = (l & !0x8000) as i32; // reset high bit
-                read_string(if utf16 { -l } else { l }, s)
-            })
-            .collect::<Result<_>>()?;
-
+        let names: Vec<String> = read_name_batch(s)?;
         Ok(Self { names })
     }
 }

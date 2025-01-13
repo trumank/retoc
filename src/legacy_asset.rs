@@ -14,7 +14,7 @@ pub(crate) fn build_legacy<P: AsRef<Path>>(
     let mut out_buffer = vec![];
     let mut cur = Cursor::new(&mut out_buffer);
 
-    let zen_summary = FZenPackageHeader::de(&mut zen_data)?;
+    let zen_summary = FZenPackageHeader::deserialize(&mut zen_data)?;
 
     dbg!(zen_summary);
 
