@@ -71,7 +71,7 @@ struct ActionGet {
     #[arg(index = 1)]
     utoc: PathBuf,
     #[arg(index = 2)]
-    index: u32,
+    chunk_id: FIoChunkId,
 }
 
 #[derive(Parser, Debug)]
@@ -347,15 +347,9 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: &Config) -> Result<(
 }
 
 fn action_get(args: ActionGet, config: &Config) -> Result<()> {
-    let mut stream = BufReader::new(File::open(&args.utoc)?);
-    let cas = &args.utoc.with_extension("ucas");
-    let mut cas = BufReader::new(File::open(cas).unwrap());
-
-    let toc: Toc = stream.de_ctx(config)?;
-
-    let data = toc.read(&mut cas, args.index)?;
+    let iostore = iostore::open(args.utoc, config)?;
+    let data = iostore.read(args.chunk_id)?;
     std::io::stdout().write_all(&data)?;
-
     Ok(())
 }
 
@@ -790,6 +784,17 @@ impl TryFrom<Vec<u8>> for FIoChunkId {
         Ok(Self {
             id: value.try_into()?,
         })
+    }
+}
+impl FromStr for FIoChunkId {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let id = hex::decode(s)
+            .ok()
+            .and_then(|bytes| bytes.try_into().ok())
+            .context("expected 12 byte hex string")?;
+        Ok(FIoChunkId { id })
     }
 }
 impl Readable for FIoChunkId {
