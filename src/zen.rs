@@ -328,7 +328,7 @@ impl FZenPackageHeader {
         let export_map: Vec<FExportMapEntry> = s.de_ctx(export_map_count)?;
 
         let export_bundle_entries_count = (summary.dependency_bundle_headers_offset - summary.export_bundle_entries_offset) as usize / size_of::<FExportBundleEntry>();
-        let export_bundle_entries_start_offset = package_start_offset + summary.dependency_bundle_headers_offset as u64;
+        let export_bundle_entries_start_offset = package_start_offset + summary.export_bundle_entries_offset as u64;
         let expected_export_bundle_entries_count = export_map_count * 2; // Each export must have Create and Serialize
         assert_eq!(export_bundle_entries_count, expected_export_bundle_entries_count, "Expected to have Create and Serialize commands in export bundle for each export in the package. Got only {} export bundle entries with {} exports",
             export_bundle_entries_count, export_map_count);
@@ -390,7 +390,7 @@ mod test {
             "bad.uasset",
         )?);
 
-        let header = ser_hex::read("trace.json", &mut stream, FZenPackageHeader::de)?;
+        let header = ser_hex::read("trace.json", &mut stream, FZenPackageHeader::deserialize)?;
         header.name_map.get(header.summary.name);
 
         //dbg!(field);
