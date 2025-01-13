@@ -969,7 +969,7 @@ checksum = "a3f0bf26fd526d2a95683cd0f87bf103b8539e2ca1ef48ce002d67aad59aa0b4"
 [[package]]
 name = "ser-hex"
 version = "0.1.0"
-source = "git+https://github.com/trumank/ser-hex#5e210cadb176a212106efea50f3a557b7a0991b6"
+source = "git+https://github.com/trumank/ser-hex#ca33a96d18696ccc28a897ec805196ecf585eee0"
 dependencies = [
  "anyhow",
  "base64",
