@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::io::{Read, Seek};
 
 use anyhow::Result;
 use strum::FromRepr;
@@ -48,27 +48,29 @@ impl FScriptObjectEntry {
         Ok(Self {
             //mapped: FMappedName::read(s)?,
             object_name: s.de()?,
-            global_index: FPackageObjectIndex::read(s)?,
-            outer_index: FPackageObjectIndex::read(s)?,
-            cdo_class_index: FPackageObjectIndex::read(s)?,
+            global_index: s.de()?,
+            outer_index: s.de()?,
+            cdo_class_index: s.de()?,
         })
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct FPackageObjectIndex {
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[repr(C)] // Needed for sizeof to determine number of entries in package header
+pub(crate) struct FPackageObjectIndex {
     type_and_id: u64,
 }
 
-#[derive(Debug, Clone, Copy, FromRepr, PartialEq)]
-enum FPackageObjectIndexType {
+#[derive(Debug, Clone, Copy, PartialEq, FromRepr)]
+pub(crate) enum FPackageObjectIndexType {
     Export,
     ScriptImport,
     PackageImport,
     Null
 }
 
-struct FPackageImportReference {
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub(crate) struct FPackageImportReference {
     imported_package_index: u32,
     imported_public_export_hash_index: u32
 }
@@ -86,12 +88,6 @@ impl FPackageObjectIndex {
     {
         FPackageObjectIndex{type_and_id: ((kind as u64) << FPackageObjectIndex::TYPE_SHIFT) | value}
     }
-    #[instrument(skip_all, name = "FPackageObjectIndex")]
-    fn read<S: Read>(s: &mut S) -> Result<Self> {
-        Ok(Self {
-            type_and_id: s.de()?,
-        })
-    }
     fn kind(self) -> FPackageObjectIndexType {
         FPackageObjectIndexType::from_repr((self.type_and_id >> Self::TYPE_SHIFT) as usize).unwrap()
     }
@@ -105,6 +101,14 @@ impl FPackageObjectIndex {
         (self.kind() == FPackageObjectIndexType::PackageImport).then_some(FPackageImportReference{
             imported_package_index: ((self.type_and_id & FPackageObjectIndex::INDEX_MASK) >> 32) as u32,
             imported_public_export_hash_index: (self.type_and_id as u32)
+        })
+    }
+}
+impl Readable for FPackageObjectIndex {
+    #[instrument(skip_all, name = "FPackageObjectIndex")]
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        Ok(Self {
+            type_and_id: s.de()?,
         })
     }
 }

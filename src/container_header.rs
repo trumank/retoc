@@ -166,6 +166,7 @@ impl<T> Readable for TFilePackageStoreEntryCArrayView<T> {
 }
 
 #[derive(Debug)]
+#[repr(C)] // Needed to determine the number of package store entries
 struct FFilePackageStoreEntry {
     imported_packages: TFilePackageStoreEntryCArrayView<FPackageId>,
     shader_map_hashes: TFilePackageStoreEntryCArrayView<FSHAHash>,

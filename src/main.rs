@@ -908,7 +908,7 @@ impl Readable for FIoStoreTocEntryMeta {
         })
     }
 }
-#[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct FGuid {
     a: u32,
     b: u32,
