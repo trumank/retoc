@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::collections::HashSet;
 use tracing::instrument;
+use crate::container_header::{StoreEntry, StoreEntryRef};
 use crate::name_map::FMappedName;
 use crate::script_objects::{FPackageObjectIndex, FPackageObjectIndexType, FScriptObjectEntry, ZenScriptObjects};
 
@@ -907,17 +908,18 @@ impl FLegacyPackageHeader {
 }
 
 // Cache that stores the packages that were retrieved for the purpose of dependency resolution, to avoid loading and parsing them multiple times
-#[derive(Debug)]
-pub(crate) struct FZenPackageHeaderCache {
+pub(crate) struct FZenPackageContext<'a> {
+    store_access: &'a dyn IoStoreTrait,
     script_objects_loaded: bool,
     script_objects: Option<ZenScriptObjects>,
     script_objects_resolved_as_classes: HashSet<FPackageObjectIndex>,
     package_headers_cache: HashMap<FPackageId, Rc<FZenPackageHeader>>,
     packages_failed_load: HashSet<FPackageId>,
 }
-impl FZenPackageHeaderCache {
-    pub(crate) fn create() -> Self {
+impl<'aaaaaaaaaaaaaaaaa> FZenPackageContext<'aaaaaaaaaaaaaaaaa> {
+    pub(crate) fn create(store_access: &'aaaaaaaaaaaaaaaaa dyn IoStoreTrait) -> FZenPackageContext<'aaaaaaaaaaaaaaaaa> {
         Self {
+            store_access,
             script_objects_loaded: false,
             script_objects: None,
             script_objects_resolved_as_classes: HashSet::new(),
@@ -925,13 +927,13 @@ impl FZenPackageHeaderCache {
             packages_failed_load: HashSet::new()
         }
     }
-    fn load_script_objects(&mut self, store_access: &dyn IoStoreTrait) -> Result<()> {
+    fn load_script_objects(&mut self) -> Result<()> {
         // Only attempt to load script objects once
         if !self.script_objects_loaded {
             self.script_objects_loaded = true;
 
             let script_objects_id = FIoChunkId::create(0, 0, EIoChunkType::ScriptObjects);
-            let script_objects_data = store_access.read(script_objects_id)?;
+            let script_objects_data = self.store_access.read(script_objects_id)?;
             let script_objects: ZenScriptObjects = Cursor::new(script_objects_data).de()?;
 
             // Do a quick check over all script objects to track which ones are being pointed to by the CDOs. These are 100% UClasses
@@ -963,7 +965,7 @@ impl FZenPackageHeaderCache {
     fn is_script_object_class(&self, script_object_index: FPackageObjectIndex) -> bool {
         self.script_objects_resolved_as_classes.contains(&script_object_index)
     }
-    fn lookup(&mut self, store_access: &dyn IoStoreTrait, package_id: FPackageId) -> Result<Rc<FZenPackageHeader>> {
+    fn lookup(&mut self, package_id: FPackageId) -> Result<Rc<FZenPackageHeader>> {
 
         // If we already have a package in the cache, return it
         if let Some(existing_package) = self.package_headers_cache.get(&package_id) {
@@ -976,21 +978,26 @@ impl FZenPackageHeaderCache {
 
         // Optional package segments cannot be imported from other packages, and optional segments are also not supported outside of editor. So ChunkIndex is always 0
         let package_chunk_id = FIoChunkId::from_package_id(package_id, 0, EIoChunkType::ExportBundleData);
-        let package_data = store_access.read(package_chunk_id);
+        let package_data = self.store_access.read(package_chunk_id);
+        let package_store_entry_ref = self.store_access.package_store_entry(package_id);
 
         // Mark the package as failed load if it's chunk failed to load
         if let Err(read_error) = package_data {
             self.packages_failed_load.insert(package_id);
             return Err(read_error)
         }
+        if package_store_entry_ref.is_none() {
+            self.packages_failed_load.insert(package_id);
+            return Err(anyhow!("Failed to find Package Store Entry for Package Id {}", package_id));
+        }
 
         let mut zen_package_buffer = Cursor::new(package_data?);
-        let zen_package_header = FZenPackageHeader::deserialize(&mut zen_package_buffer);
+        let zen_package_header = FZenPackageHeader::deserialize(&mut zen_package_buffer, StoreEntryRef::to_owned(&package_store_entry_ref.unwrap()));
 
         // Mark the package as failed if we failed to parse the header
-        if zen_package_header.is_err() {
+        if let Err(header_error) = zen_package_header {
             self.packages_failed_load.insert(package_id);
-            return Err(zen_package_header.unwrap_err());
+            return Err(header_error);
         }
 
         // Move the package header into a shared pointer and store it into the map
@@ -1011,10 +1018,9 @@ impl ResolvedZenImport {
     const OBJECT_CLASS_NAME: &'static str = "Object";
     const CLASS_CLASS_NAME: &'static str = "Class";
     const PACKAGE_CLASS_NAME: &'static str = "Package";
-
 }
 
-fn resolve_script_import(package_cache: &FZenPackageHeaderCache, import: FPackageObjectIndex) -> Result<ResolvedZenImport> {
+fn resolve_script_import(package_cache: &FZenPackageContext, import: FPackageObjectIndex) -> Result<ResolvedZenImport> {
 
     let script_object = package_cache.find_script_object(import)?;
     let object_name = package_cache.resolve_script_object_name(script_object.object_name)?;
@@ -1074,12 +1080,16 @@ fn resolve_script_import(package_cache: &FZenPackageHeaderCache, import: FPackag
     })
 }
 
-fn resolve_package_import(package_cache: &mut FZenPackageHeaderCache, package_header: &FZenPackageHeader, import: FPackageObjectIndex) -> Result<ResolvedZenImport> {
+fn resolve_package_import(package_cache: &mut FZenPackageContext, package_header: &FZenPackageHeader, import: FPackageObjectIndex) -> Result<ResolvedZenImport> {
 
     let package_import = import.package_import().ok_or_else(|| { anyhow!("Failed to resolve import {} as package import", import) })?;
 
     // Make sure package index points to a valid index in the imported packages
-
+    if package_import.imported_package_index as usize >= package_header.imported_packages.len() {
+        bail!("Imported Package index out of bounds for import {}: package index is {}, but package has only {} imports total",
+            import, package_import.imported_package_index, package_header.imported_packages.len());
+    }
+    let package_id: FPackageId = package_header.imported_packages[package_import.imported_package_index as usize];
 
     // Make sure the hash index points to a valid hash in the package header
     if package_import.imported_public_export_hash_index as usize >= package_header.imported_public_export_hashes.len() {
@@ -1088,11 +1098,13 @@ fn resolve_package_import(package_cache: &mut FZenPackageHeaderCache, package_he
     }
     let public_export_hash: u64 = package_header.imported_public_export_hashes[package_import.imported_public_export_hash_index as usize];
 
-    // TODO @trumank
-    bail!("Cannot retrieve package index, need a way to retrieve store entry for zen package from the container")
+    // Resolve the imported package, and abort if we cannot resolve it
+    let resolved_import_package = package_cache.lookup(package_id)?;
+
+    bail!("WIP");
 }
 
-fn resolve_generic_zen_import(package_cache: &mut FZenPackageHeaderCache, package_header: &FZenPackageHeader, import: FPackageObjectIndex) -> Result<ResolvedZenImport> {
+fn resolve_generic_zen_import(package_cache: &mut FZenPackageContext, package_header: &FZenPackageHeader, import: FPackageObjectIndex) -> Result<ResolvedZenImport> {
     match import.kind()
     {
         FPackageObjectIndexType::ScriptImport => resolve_script_import(package_cache, import),
@@ -1103,18 +1115,13 @@ fn resolve_generic_zen_import(package_cache: &mut FZenPackageHeaderCache, packag
 }
 
 pub(crate) fn build_legacy<P: AsRef<Path>>(
-    store_access: &dyn IoStoreTrait,
-    chunk_id: FIoChunkId,
+    package_context: &mut FZenPackageContext,
+    package_id: FPackageId,
     out_path: P,
-    package_header_cache: &mut FZenPackageHeaderCache,
     fallback_package_file_version: Option<FPackageFileVersion>,
 ) -> Result<()> {
-    let mut zen_data = Cursor::new(store_access.read(chunk_id)?);
 
-    let mut out_buffer = vec![];
-    let mut cur = Cursor::new(&mut out_buffer);
-
-    let zen_summary: FZenPackageHeader = FZenPackageHeader::deserialize(&mut zen_data)?;
+    let zen_summary: Rc<FZenPackageHeader> = package_context.lookup(package_id)?;
 
     // Populate package summary with basic data
     let mut legacy_package_summary = FPackageFileSummary::default();
@@ -1175,12 +1182,15 @@ pub(crate) fn build_legacy<P: AsRef<Path>>(
     }).collect();
 
     // Make sure script objects are loaded before we can continue
-    package_header_cache.load_script_objects(store_access)?;
+    package_context.load_script_objects()?;
 
     dbg!(zen_summary);
 
+    let mut out_buffer: Vec<u8> = Vec::new();
+    let mut cursor = Cursor::new(&mut out_buffer);
+
     // arch's sandbox
-    cur.write_u32::<LE>(0xa687562)?;
+    cursor.write_u32::<LE>(0xa687562)?;
 
     std::fs::write(out_path, out_buffer)?;
 

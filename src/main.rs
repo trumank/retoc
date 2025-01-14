@@ -17,13 +17,14 @@ use std::{
     str::FromStr,
     sync::{Arc, Mutex},
 };
-
+use std::fmt::{Display, Formatter};
 use aes::cipher::KeyInit as _;
 use anyhow::{bail, Context, Result};
 use bitflags::{bitflags, Flags};
 use clap::Parser;
 use iostore::IoStoreTrait;
 use rayon::prelude::*;
+use serde::Serializer;
 use ser::*;
 use strum::{AsRefStr, FromRepr};
 use tracing::instrument;
@@ -384,7 +385,7 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: &Config) -> Result<(
     let package_file_version: Option<FPackageFileVersion> = Some(FPackageFileVersion::create_ue5(
         EUnrealEngineObjectUE5Version::PropertyTagCompleteTypeName,
     ));
-    let mut package_header_cache = FZenPackageHeaderCache::create();
+    let mut package_context = FZenPackageContext::create(iostore.as_ref());
 
     let mut count = 0;
     iostore.chunks().try_for_each(|chunk| -> Result<()> {
@@ -401,11 +402,12 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: &Config) -> Result<(
                 let path = output.join(file_name);
                 let dir = path.parent().unwrap();
                 std::fs::create_dir_all(dir)?;
+                // TODO @trumank: Iterate over package IDs from store entries instead
+                bail!("FIXME");
                 legacy_asset::build_legacy(
-                    &*iostore,
-                    chunk.id(),
+                    &mut package_context,
+                    FPackageId(0),
                     path,
-                    &mut package_header_cache,
                     package_file_version,
                 )?;
                 count += 1;
@@ -817,6 +819,11 @@ impl Readable for FPackageId {
 impl Writeable for FPackageId {
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
         s.ser(&self.0)
+    }
+}
+impl Display for FPackageId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.serialize_u64(self.0)
     }
 }
 impl FPackageId {
@@ -1255,7 +1262,7 @@ enum EIoChunkType {
     //ContainerHeader = 0xa,
 }
 
-use crate::legacy_asset::FZenPackageHeaderCache;
+use crate::legacy_asset::FZenPackageContext;
 use crate::zen::{EUnrealEngineObjectUE5Version, FPackageFileVersion};
 use directory_index::*;
 use zen::get_package_name;

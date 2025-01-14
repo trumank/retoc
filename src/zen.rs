@@ -7,10 +7,11 @@ use tracing::instrument;
 use crate::name_map::read_name_batch;
 use crate::script_objects::FPackageObjectIndex;
 use crate::ser::{WriteExt, Writeable};
-use crate::{name_map::{FMappedName, FNameMap}, FGuid, ReadExt, Readable};
+use crate::{name_map::{FMappedName, FNameMap}, FGuid, FPackageId, FSHAHash, ReadExt, Readable};
+use crate::container_header::{StoreEntry};
 
 pub(crate) fn get_package_name(data: &[u8]) -> Result<String> {
-    let header: FZenPackageHeader = FZenPackageHeader::deserialize(&mut Cursor::new(data))?;
+    let header: FZenPackageHeader = FZenPackageHeader::deserialize(&mut Cursor::new(data), StoreEntry::default())?;
     Ok(header.name_map.get(header.summary.name).to_string())
 }
 
@@ -371,10 +372,12 @@ pub(crate) struct FZenPackageHeader {
     pub(crate) dependency_bundle_headers: Vec<FDependencyBundleHeader>,
     pub(crate) dependency_bundle_entries: Vec<FDependencyBundleEntry>,
     pub(crate) imported_package_names: Vec<String>,
+    pub(crate) imported_packages: Vec<FPackageId>,
+    pub(crate) shader_map_hashes: Vec<FSHAHash>,
 }
 impl FZenPackageHeader {
     #[instrument(skip_all, name = "FZenPackageHeader")]
-    pub(crate) fn deserialize<S: Read + Seek>(s: &mut S) -> Result<Self> {
+    pub(crate) fn deserialize<S: Read + Seek>(s: &mut S, store_entry: StoreEntry) -> Result<Self> {
 
         let package_start_offset = s.stream_position()?;
         let summary: FZenPackageSummary = s.de()?;
@@ -451,6 +454,8 @@ impl FZenPackageHeader {
             dependency_bundle_headers,
             dependency_bundle_entries,
             imported_package_names,
+            imported_packages: store_entry.imported_packages,
+            shader_map_hashes: store_entry.shader_map_hashes,
         })
     }
 }
@@ -468,7 +473,7 @@ mod test {
             "bad.uasset",
         )?);
 
-        let header = ser_hex::read("trace.json", &mut stream, FZenPackageHeader::deserialize)?;
+        let header = ser_hex::read("trace.json", &mut stream, |x| { FZenPackageHeader::deserialize(x, StoreEntry::default()) })?;
         header.name_map.get(header.summary.name);
 
         //dbg!(field);
