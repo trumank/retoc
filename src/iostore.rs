@@ -2,7 +2,7 @@ use std::{
     ffi::OsStr,
     fs::File,
     io::BufReader,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
@@ -21,8 +21,24 @@ pub fn open<P: AsRef<Path>>(path: P, config: &Config) -> Result<Box<dyn IoStoreT
 pub trait IoStoreTrait {
     fn read(&self, chunk_id: FIoChunkId) -> Result<Vec<u8>>;
     fn has_chunk_id(&self, chunk_id: FIoChunkId) -> bool;
-    fn chunk_ids(&self) -> Box<dyn Iterator<Item = FIoChunkId> + '_>;
+    fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + '_>;
     fn file_name(&self, chunk_id: FIoChunkId) -> Option<&str>;
+}
+
+pub struct ChunkInfo<'a> {
+    id: FIoChunkId,
+    container: &'a IoStoreContainer,
+}
+impl ChunkInfo<'_> {
+    pub fn id(&self) -> FIoChunkId {
+        self.id
+    }
+    pub fn file_name(&self) -> Option<&str> {
+        self.container.file_name(self.id)
+    }
+    pub fn container(&self) -> &IoStoreContainer {
+        self.container
+    }
 }
 
 struct IoStoreBackend {
@@ -55,8 +71,8 @@ impl IoStoreTrait for IoStoreBackend {
     fn has_chunk_id(&self, chunk_id: FIoChunkId) -> bool {
         self.containers.iter().any(|c| c.has_chunk_id(chunk_id))
     }
-    fn chunk_ids(&self) -> Box<dyn Iterator<Item = FIoChunkId> + '_> {
-        Box::new(self.containers.iter().flat_map(|c| c.chunk_ids()))
+    fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + '_> {
+        Box::new(self.containers.iter().flat_map(|c| c.chunks()))
     }
     fn file_name(&self, chunk_id: FIoChunkId) -> Option<&str> {
         self.containers.iter().find_map(|c| c.file_name(chunk_id))
@@ -64,17 +80,28 @@ impl IoStoreTrait for IoStoreBackend {
 }
 
 pub struct IoStoreContainer {
+    name: Option<String>,
+    path: PathBuf,
     toc: Toc,
     cas: Arc<Mutex<BufReader<File>>>,
 }
 impl IoStoreContainer {
     pub fn open<P: AsRef<Path>>(toc_path: P, config: &Config) -> Result<Self> {
-        let toc: Toc = BufReader::new(File::open(&toc_path)?).de_ctx(config)?;
+        let path = toc_path.as_ref().to_path_buf();
+        let toc: Toc = BufReader::new(File::open(&path)?).de_ctx(config)?;
         let cas = BufReader::new(File::open(toc_path.as_ref().with_extension("ucas"))?);
         Ok(Self {
+            name: path.file_stem().map(|f| f.to_string_lossy().into()),
+            path,
             toc,
             cas: Arc::new(Mutex::new(cas)),
         })
+    }
+    pub fn container_path(&self) -> &Path {
+        self.path.as_ref()
+    }
+    pub fn container_name(&self) -> Option<&str> {
+        self.name.as_deref()
     }
 }
 impl IoStoreTrait for IoStoreContainer {
@@ -87,8 +114,11 @@ impl IoStoreTrait for IoStoreContainer {
     fn has_chunk_id(&self, chunk_id: FIoChunkId) -> bool {
         self.toc.chunk_id_map.contains_key(&chunk_id)
     }
-    fn chunk_ids(&self) -> Box<dyn Iterator<Item = FIoChunkId> + '_> {
-        Box::new(self.toc.chunk_ids.iter().copied())
+    fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + '_> {
+        Box::new(self.toc.chunks.iter().map(|&id| ChunkInfo {
+            id,
+            container: self,
+        }))
     }
     fn file_name(&self, chunk_id: FIoChunkId) -> Option<&str> {
         self.toc

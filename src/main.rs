@@ -158,7 +158,7 @@ fn action_manifest(args: ActionManifest, config: &Config) -> Result<()> {
                     let bulk_path = format!("{path}.ubulk");
                     if let Some(&bulk) = toc.file_map_lower.get(&bulk_path.to_ascii_lowercase()) {
                         entry.bulkdata.push(manifest::ChunkData {
-                            id: toc.chunk_ids[bulk as usize],
+                            id: toc.chunks[bulk as usize],
                             filename: bulk_path,
                         });
                     }
@@ -193,13 +193,13 @@ fn action_manifest(args: ActionManifest, config: &Config) -> Result<()> {
 fn action_list(args: ActionList, config: &Config) -> Result<()> {
     let iostore = iostore::open(args.utoc, config)?;
 
-    for chunk_id in iostore.chunk_ids() {
-        let file_name = iostore.file_name(chunk_id);
+    for chunk in iostore.chunks() {
         println!(
-            "{}  {:20}  {}",
-            hex::encode(chunk_id.id),
-            chunk_id.get_chunk_type().as_ref(),
-            file_name.unwrap_or("-")
+            "{:30}  {}  {:20}  {}",
+            chunk.container().container_name().unwrap_or("-"),
+            hex::encode(chunk.id()),
+            chunk.id().get_chunk_type().as_ref(),
+            chunk.file_name().unwrap_or("-")
         );
     }
     Ok(())
@@ -236,7 +236,7 @@ fn action_verify(args: ActionVerify, config: &Config) -> Result<()> {
     toc.chunk_metas.par_iter().enumerate().try_for_each_init(
         || BufReader::new(File::open(ucas).unwrap()),
         |ucas, (i, meta)| -> Result<()> {
-            let chunk_id = toc.chunk_ids[i];
+            let chunk_id = toc.chunks[i];
             let data = toc.read(ucas, i as u32)?;
 
             let chunk_type = chunk_id.get_chunk_type();
@@ -316,9 +316,9 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: &Config) -> Result<(
     let output = args.output;
 
     let mut count = 0;
-    iostore.chunk_ids().try_for_each(|chunk_id| -> Result<()> {
-        if chunk_id.get_chunk_type() == EIoChunkType::ExportBundleData {
-            if let Some(file_name) = iostore.file_name(chunk_id) {
+    iostore.chunks().try_for_each(|chunk| -> Result<()> {
+        if chunk.id().get_chunk_type() == EIoChunkType::ExportBundleData {
+            if let Some(file_name) = chunk.file_name() {
                 if let Some(filter) = &args.filter {
                     if !file_name.contains(filter) {
                         return Ok(());
@@ -330,7 +330,7 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: &Config) -> Result<(
                 let path = output.join(file_name);
                 let dir = path.parent().unwrap();
                 std::fs::create_dir_all(dir)?;
-                legacy_asset::build_legacy(&*iostore, chunk_id, path)?;
+                legacy_asset::build_legacy(&*iostore, chunk.id(), path)?;
                 count += 1;
             }
         }
@@ -535,7 +535,7 @@ fn read_meta<S: Read>(
 
 struct Toc {
     header: FIoStoreTocHeader,
-    chunk_ids: Vec<FIoChunkId>,
+    chunks: Vec<FIoChunkId>,
     chunk_offset_lengths: Vec<FIoOffsetAndLength>,
     chunk_perfect_hash_seeds: Vec<i32>,
     chunk_indices_without_perfect_hash: Vec<i32>,
@@ -605,7 +605,7 @@ impl ReadableCtx<&Config> for Toc {
 
         Ok(Toc {
             header,
-            chunk_ids,
+            chunks: chunk_ids,
             chunk_offset_lengths,
             chunk_perfect_hash_seeds,
             chunk_indices_without_perfect_hash,
@@ -658,7 +658,7 @@ impl Toc {
             }
         }
 
-        let id = self.chunk_ids[toc_entry_index];
+        let id = self.chunks[toc_entry_index];
 
         FIoStoreTocChunkInfo {
             id,
