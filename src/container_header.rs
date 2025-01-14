@@ -150,6 +150,7 @@ impl ReadableCtx<usize> for StoreEntries {
 }
 
 #[derive(Debug)]
+#[repr(C)]
 struct TFilePackageStoreEntryCArrayView<T> {
     array_num: u32,
     offset_to_data_from_this: u32,

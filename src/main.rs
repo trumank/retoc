@@ -1,6 +1,7 @@
 mod compact_binary;
 mod container_header;
 mod iostore;
+mod iostore_writer;
 mod legacy_asset;
 mod manifest;
 mod name_map;
@@ -55,6 +56,22 @@ struct ActionUnpack {
 }
 
 #[derive(Parser, Debug)]
+struct ActionUnpackRaw {
+    #[arg(index = 1)]
+    utoc: PathBuf,
+    #[arg(index = 2)]
+    output: PathBuf,
+}
+
+#[derive(Parser, Debug)]
+struct ActionPackRaw {
+    #[arg(index = 2)]
+    input: PathBuf,
+    #[arg(index = 1)]
+    utoc: PathBuf,
+}
+
+#[derive(Parser, Debug)]
 struct ActionExtractLegacy {
     #[arg(index = 1)]
     utoc: PathBuf,
@@ -84,6 +101,12 @@ enum Action {
     Verify(ActionVerify),
     /// Extracts chunks (files) from .utoc
     Unpack(ActionUnpack),
+
+    /// Extracts raw chunks from container
+    UnpackRaw(ActionUnpackRaw),
+    /// Packs directory of raw chunks into container
+    PackRaw(ActionPackRaw),
+
     /// Extracts legacy assets from .utoc
     ExtractLegacy(ActionExtractLegacy),
     /// Get chunk by index and write to stdout
@@ -113,6 +136,10 @@ fn main() -> Result<()> {
         Action::List(action) => action_list(action, &config),
         Action::Verify(action) => action_verify(action, &config),
         Action::Unpack(action) => action_unpack(action, &config),
+
+        Action::UnpackRaw(action) => action_unpack_raw(action, &config),
+        Action::PackRaw(action) => action_pack_raw(action, &config),
+
         Action::ExtractLegacy(action) => action_extract_legacy(action, &config),
         Action::Get(action) => action_get(action, &config),
     }
@@ -307,6 +334,33 @@ fn action_unpack(args: ActionUnpack, config: &Config) -> Result<()> {
         output.to_string_lossy()
     );
 
+    Ok(())
+}
+
+fn action_unpack_raw(args: ActionUnpackRaw, config: &Config) -> Result<()> {
+    let iostore = iostore::open(args.utoc, config)?;
+
+    let output = args.output;
+    let chunks_dir = output.join("chunks");
+
+    std::fs::create_dir(&output)?;
+    std::fs::create_dir(&chunks_dir)?;
+
+    for chunk in iostore.chunks() {
+        let data = chunk.read()?;
+        std::fs::write(chunks_dir.join(hex::encode(chunk.id())), data)?;
+    }
+
+    println!(
+        "unpacked {} chunks to {}",
+        iostore.chunks().count(),
+        output.to_string_lossy()
+    );
+
+    Ok(())
+}
+
+fn action_pack_raw(args: ActionPackRaw, config: &Config) -> Result<()> {
     Ok(())
 }
 
@@ -533,6 +587,7 @@ fn read_meta<S: Read>(
     })
 }
 
+#[derive(Default)]
 struct Toc {
     header: FIoStoreTocHeader,
     chunks: Vec<FIoChunkId>,
@@ -626,6 +681,9 @@ fn align(value: u64, alignment: u64) -> u64 {
     (value + alignment - 1) & !(alignment - 1)
 }
 impl Toc {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
     //fn get_chunk_info(&self, toc_entry_index: u32) {
     fn get_chunk_info(&self, file_name: &str) -> FIoStoreTocChunkInfo {
         let toc_entry_index = self.file_map[file_name] as usize;
@@ -733,6 +791,11 @@ impl Readable for FPackageId {
         Ok(Self(s.de()?))
     }
 }
+impl Writeable for FPackageId {
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(self.0)
+    }
+}
 impl FPackageId {
     fn from_name(name: &str) -> Self {
         let bytes = name
@@ -802,6 +865,11 @@ impl Readable for FIoChunkId {
         Ok(Self { id: stream.de()? })
     }
 }
+impl Writeable for FIoChunkId {
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(self.id)
+    }
+}
 impl FIoChunkId {
     fn from_package_id(package_id: FPackageId, chunk_index: u16, chunk_type: EIoChunkType) -> Self {
         let mut id = [0; 12];
@@ -817,7 +885,7 @@ impl FIoChunkId {
         self.id[0..11].try_into().unwrap()
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct FIoContainerId {
     id: u64,
 }
@@ -826,13 +894,23 @@ impl Readable for FIoContainerId {
         Ok(Self { id: stream.de()? })
     }
 }
+impl Writeable for FIoContainerId {
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(self.id)
+    }
+}
 #[derive(Debug, Clone, Copy)]
 struct FIoOffsetAndLength {
     data: [u8; 10],
 }
 impl Readable for FIoOffsetAndLength {
-    fn de<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(Self { data: stream.de()? })
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        Ok(Self { data: s.de()? })
+    }
+}
+impl Writeable for FIoOffsetAndLength {
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(self.data)
     }
 }
 impl FIoOffsetAndLength {
@@ -840,9 +918,17 @@ impl FIoOffsetAndLength {
         let d = self.data;
         u64::from_be_bytes([0, 0, 0, d[0], d[1], d[2], d[3], d[4]])
     }
+    fn set_offset(&mut self, offset: u64) {
+        let bytes = offset.to_be_bytes();
+        self.data[0..5].copy_from_slice(&bytes[0..5]);
+    }
     fn get_length(&self) -> u64 {
         let d = self.data;
         u64::from_be_bytes([0, 0, 0, d[5], d[6], d[7], d[8], d[9]])
+    }
+    fn set_length(&mut self, offset: u64) {
+        let bytes = offset.to_be_bytes();
+        self.data[5..10].copy_from_slice(&bytes[0..5]);
     }
 }
 struct FIoStoreTocCompressedBlockEntry {
@@ -871,16 +957,28 @@ impl FIoStoreTocCompressedBlockEntry {
         let d = self.data;
         u64::from_le_bytes([d[0], d[1], d[2], d[3], d[4], 0, 0, 0])
     }
+    fn set_offset(&mut self, value: u64) {
+        self.data[0..5].copy_from_slice(&value.to_le_bytes()[0..5]);
+    }
     fn get_compressed_size(&self) -> u32 {
         let d = self.data;
         u32::from_le_bytes([d[5], d[6], d[7], 0])
+    }
+    fn set_compressed_size(&mut self, value: u32) {
+        self.data[5..8].copy_from_slice(&value.to_le_bytes()[0..3]);
     }
     fn get_uncompressed_size(&self) -> u32 {
         let d = self.data;
         u32::from_le_bytes([d[8], d[9], d[10], 0])
     }
+    fn set_uncompressed_size(&mut self, value: u32) {
+        self.data[8..11].copy_from_slice(&value.to_le_bytes()[0..3]);
+    }
     fn get_compression_method_index(&self) -> u8 {
         self.data[11]
+    }
+    fn set_compression_method_index(&mut self, value: u8) {
+        self.data[11] = value;
     }
 }
 struct FIoChunkHash {
@@ -947,6 +1045,11 @@ impl Readable for FSHAHash {
         Ok(Self { data: stream.de()? })
     }
 }
+impl Writeable for FSHAHash {
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(self.data)
+    }
+}
 impl std::fmt::Debug for FSHAHash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "FSHAHash(")?;
@@ -958,7 +1061,7 @@ impl std::fmt::Debug for FSHAHash {
 }
 
 bitflags! {
-    #[derive(Debug)]
+    #[derive(Debug, Default)]
     struct EIoContainerFlags: u8 {
         const Compressed = 0b0001;
         const Encrypted  = 0b0010;
@@ -982,9 +1085,10 @@ impl Readable for FIoStoreTocEntryMetaFlags {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
 #[repr(u8)]
 enum EIoStoreTocVersion {
+    #[default]
     Invalid,
     Initial,
     DirectoryIndex,
@@ -1000,8 +1104,13 @@ impl Readable for EIoStoreTocVersion {
         Self::from_repr(stream.de()?).context("invalid EIoStoreTocVersion value")
     }
 }
+impl Writeable for EIoStoreTocVersion {
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(*self as u8)
+    }
+}
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct FIoStoreTocHeader {
     toc_magic: [u8; 16],
     version: EIoStoreTocVersion,

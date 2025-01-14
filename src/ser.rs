@@ -77,6 +77,11 @@ impl<const N: usize, T: Readable + Default + Copy> Readable for [T; N] {
         T::de_array(stream)
     }
 }
+impl<const N: usize, T: Writeable> Writeable for [T; N] {
+    fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
+        T::ser_array(self, stream)
+    }
+}
 
 impl Readable for String {
     fn de<S: Read>(s: &mut S) -> Result<Self> {

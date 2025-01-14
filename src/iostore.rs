@@ -33,11 +33,14 @@ impl ChunkInfo<'_> {
     pub fn id(&self) -> FIoChunkId {
         self.id
     }
+    pub fn container(&self) -> &IoStoreContainer {
+        self.container
+    }
     pub fn file_name(&self) -> Option<&str> {
         self.container.file_name(self.id)
     }
-    pub fn container(&self) -> &IoStoreContainer {
-        self.container
+    pub fn read(&self) -> Result<Vec<u8>> {
+        self.container.read(self.id)
     }
 }
 
