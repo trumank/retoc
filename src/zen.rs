@@ -1,4 +1,4 @@
-use std::io::{Cursor, Read, Seek, SeekFrom};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 
 use anyhow::Result;
 use strum::FromRepr;
@@ -7,7 +7,7 @@ use tracing::instrument;
 use crate::{name_map::{FMinimalName, FNameMap}, FGuid, ReadExt, Readable};
 use crate::name_map::read_name_batch;
 use crate::script_objects::FPackageObjectIndex;
-use crate::ser::ReadableCtx;
+use crate::ser::{WriteExt, Writeable};
 
 pub(crate) fn get_package_name(data: &[u8]) -> Result<String> {
     let header: FZenPackageHeader = FZenPackageHeader::deserialize(&mut Cursor::new(data))?;
@@ -97,7 +97,7 @@ impl Readable for FZenPackageSummary {
 
 #[derive(Debug, Clone, Copy, PartialEq, FromRepr)]
 #[repr(u32)]
-enum EZenPackageVersion {
+pub(crate) enum EZenPackageVersion {
     Initial,
     DataResourceTable,
     ImportedPackageNames,
@@ -105,10 +105,10 @@ enum EZenPackageVersion {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-struct FPackageFileVersion
+pub(crate) struct FPackageFileVersion
 {
-    file_version_ue4: i32,
-    file_version_ue5: i32,
+    pub(crate) file_version_ue4: i32,
+    pub(crate) file_version_ue5: i32,
 }
 impl Readable for FPackageFileVersion {
     #[instrument(skip_all, name = "FPackageFileVersion")]
@@ -121,7 +121,7 @@ impl Readable for FPackageFileVersion {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Default)]
-struct FCustomVersion
+pub(crate) struct FCustomVersion
 {
     key: FGuid,
     version: i32,
@@ -135,9 +135,17 @@ impl Readable for FCustomVersion {
         })
     }
 }
+impl Writeable for FCustomVersion {
+    #[instrument(skip_all, name = "FCustomVersion")]
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(self.key)?;
+        s.ser(self.version)?;
+        Ok({})
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
-struct FZenPackageVersioningInfo
+pub(crate) struct FZenPackageVersioningInfo
 {
     zen_version: EZenPackageVersion,
     package_file_version: FPackageFileVersion,
@@ -260,10 +268,47 @@ impl Readable for FDependencyBundleHeader {
     }
 }
 
+#[derive(Debug, Copy, Clone, Default)]
+pub(crate) struct FPackageIndex {
+    index: i32, // positive is index into the export map, negative is index into import map, zero is none
+}
+impl FPackageIndex {
+    fn create_null() -> FPackageIndex { FPackageIndex{index: 0} }
+    fn create_import(import_index: u32) -> FPackageIndex { FPackageIndex{index: -(import_index as i32) - 1 } }
+    fn create_export(export_index: u32) -> FPackageIndex { FPackageIndex{index: (export_index as i32) + 1 } }
+
+    fn is_import(&self) -> bool { self.index < 0 }
+    fn is_export(&self) -> bool { self.index > 0 }
+    fn is_null(&self) -> bool { self.index == 0 }
+
+    fn to_import_index(&self) -> u32 {
+        assert!(self.index < 0);
+        (-self.index - 1) as u32
+    }
+    fn to_export_index(&self) -> u32 {
+        assert!(self.index > 0);
+        (self.index - 1) as u32
+    }
+}
+impl Readable for FPackageIndex {
+    #[instrument(skip_all, name = "FPackageIndex")]
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        Ok(Self{
+            index: s.de()?,
+        })
+    }
+}
+impl Writeable for FPackageIndex {
+    #[instrument(skip_all, name = "FPackageIndex")]
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(self.index)
+    }
+}
+
 #[derive(Debug)]
 #[repr(C)] // Needed to determine the number of bundle entries
 struct FDependencyBundleEntry {
-    local_import_or_export_index: i32,
+    local_import_or_export_index: FPackageIndex,
 }
 impl Readable for FDependencyBundleEntry {
     #[instrument(skip_all, name = "FDependencyBundleEntry")]
@@ -274,10 +319,30 @@ impl Readable for FDependencyBundleEntry {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, FromRepr)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, FromRepr)]
 #[repr(i32)]
-enum EUnrealEngineObjectUE5Version {
+pub(crate) enum EUnrealEngineObjectUE5Version {
+    InitialVersion = 1000,
+    NamesReferencedFromExportData = 1001,
+    PayloadTOC = 1002,
+    OptionalResources = 1003,
+    LargeWorldCoordinates = 1004,
+    RemoveObjectExportPackageGUID = 1005,
+    TrackObjectExportIsInherited = 1006,
+    FSoftObjectPathRemoveAssetPathNames = 1007,
+    AddSoftObjectPathList = 1008,
     DataResources = 1009,
+    ScriptSerializationOffset = 1010,
+    PropertyTagExtensionAndOverridableSerialization = 1011,
+    PropertyTagCompleteTypeName = 1012,
+    AssetRegistryPackageBuildDependencies = 1013,
+}
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, FromRepr)]
+#[repr(i32)]
+pub(crate) enum EUnrealEngineObjectUE4Version {
+    NonOuterPackageImport = 520,
+    AssetRegistryDependencyFlags = 521,
+    CorrectLicenseeFlag = 522,
 }
 
 #[derive(Debug)]

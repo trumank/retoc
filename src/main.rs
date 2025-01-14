@@ -930,6 +930,15 @@ impl Readable for FGuid {
         })
     }
 }
+impl Writeable for FGuid {
+    fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
+        stream.ser(self.a)?;
+        stream.ser(self.b)?;
+        stream.ser(self.c)?;
+        stream.ser(self.d)?;
+        Ok({})
+    }
+}
 struct FSHAHash {
     data: [u8; 20],
 }

@@ -105,6 +105,16 @@ impl<T: Writeable> Writeable for Vec<T> {
     }
 }
 
+impl Readable for bool {
+    fn de<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(stream.read_i8()? != 0)
+    }
+}
+impl Writeable for bool {
+    fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
+        Ok(stream.write_i8(if *self { 1 } else { 0 })?)
+    }
+}
 impl Readable for u8 {
     fn de<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(stream.read_u8()?)

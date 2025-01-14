@@ -1,5 +1,5 @@
 use std::{borrow::Cow, io::Read};
-
+use std::io::Write;
 use anyhow::Result;
 use tracing::instrument;
 
@@ -66,10 +66,10 @@ impl Readable for FMappedName {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct FMinimalName {
-    index: FNameEntryId,
-    number: i32,
+    pub(crate) index: FNameEntryId,
+    pub(crate) number: i32,
 }
 impl Readable for FMinimalName {
     #[instrument(skip_all, name = "FMinimalName")]
@@ -80,14 +80,29 @@ impl Readable for FMinimalName {
         })
     }
 }
+impl Writeable for FMinimalName
+{
+    #[instrument(skip_all, name = "FMinimalName")]
+    fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
+        stream.ser(self.index)?;
+        stream.ser(self.number)?;
+        Ok({})
+    }
+}
 
-#[derive(Debug, Clone, Copy)]
-struct FNameEntryId {
-    value: u32,
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct FNameEntryId {
+    pub(crate) value: u32,
 }
 impl Readable for FNameEntryId {
     #[instrument(skip_all, name = "FNameEntryId")]
     fn de<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self { value: s.de()? })
+    }
+}
+impl Writeable for FNameEntryId {
+    #[instrument(skip_all, name = "FNameEntryId")]
+    fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
+        stream.ser(self.value)
     }
 }
