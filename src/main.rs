@@ -368,6 +368,9 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: &Config) -> Result<(
     let iostore = iostore::open(args.utoc, config)?;
 
     let output = args.output;
+    // TODO @trumank make this an option. Right now it is UE 5.4
+    let package_file_version: Option<FPackageFileVersion> = Some(FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::PropertyTagCompleteTypeName));
+    let mut package_header_cache = FZenPackageHeaderCache::create();
 
     let mut count = 0;
     iostore.chunks().try_for_each(|chunk| -> Result<()> {
@@ -384,7 +387,7 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: &Config) -> Result<(
                 let path = output.join(file_name);
                 let dir = path.parent().unwrap();
                 std::fs::create_dir_all(dir)?;
-                legacy_asset::build_legacy(&*iostore, chunk.id(), path)?;
+                legacy_asset::build_legacy(&*iostore, chunk.id(), path, &mut package_header_cache, package_file_version)?;
                 count += 1;
             }
         }
@@ -1188,6 +1191,9 @@ enum EIoChunkType {
 
 use directory_index::*;
 use zen::get_package_name;
+use crate::legacy_asset::FZenPackageHeaderCache;
+use crate::zen::{EUnrealEngineObjectUE5Version, FPackageFileVersion};
+
 mod directory_index {
     use super::*;
 

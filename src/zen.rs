@@ -4,10 +4,10 @@ use anyhow::Result;
 use strum::FromRepr;
 use tracing::instrument;
 
-use crate::{name_map::{FMinimalName, FNameMap}, FGuid, ReadExt, Readable};
 use crate::name_map::read_name_batch;
 use crate::script_objects::FPackageObjectIndex;
 use crate::ser::{WriteExt, Writeable};
+use crate::{name_map::{FMappedName, FNameMap}, FGuid, ReadExt, Readable};
 
 pub(crate) fn get_package_name(data: &[u8]) -> Result<String> {
     let header: FZenPackageHeader = FZenPackageHeader::deserialize(&mut Cursor::new(data))?;
@@ -62,11 +62,11 @@ impl Readable for FPackageFileSummary {
 
 #[derive(Debug)]
 pub(crate) struct FZenPackageSummary {
-    has_versioning_info: u32,
-    header_size: u32,
-    name: FMinimalName,
-    package_flags: u32,
-    cooked_header_size: u32,
+    pub(crate) has_versioning_info: u32,
+    pub(crate) header_size: u32,
+    pub(crate) name: FMappedName,
+    pub(crate) package_flags: u32,
+    pub(crate) cooked_header_size: u32,
     imported_public_export_hashes_offset: i32,
     import_map_offset: i32,
     export_map_offset: i32,
@@ -110,6 +110,11 @@ pub(crate) struct FPackageFileVersion
     pub(crate) file_version_ue4: i32,
     pub(crate) file_version_ue5: i32,
 }
+impl FPackageFileVersion {
+    pub(crate) fn create_ue4(version: EUnrealEngineObjectUE4Version) -> Self { FPackageFileVersion{file_version_ue4: version as i32, file_version_ue5: 0} }
+    pub(crate) fn create_ue5(version: EUnrealEngineObjectUE5Version) -> Self { FPackageFileVersion{file_version_ue4: EUnrealEngineObjectUE4Version::CorrectLicenseeFlag as i32, file_version_ue5: version as i32} }
+    pub(crate) fn is_ue5(self) -> bool { self.file_version_ue5 != 0 }
+}
 impl Readable for FPackageFileVersion {
     #[instrument(skip_all, name = "FPackageFileVersion")]
     fn de<S: Read>(s: &mut S) -> Result<Self> {
@@ -119,12 +124,20 @@ impl Readable for FPackageFileVersion {
         })
     }
 }
+impl Writeable for FPackageFileVersion {
+    #[instrument(skip_all, name = "FPackageFileVersion")]
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(self.file_version_ue4)?;
+        s.ser(self.file_version_ue5)?;
+        Ok({})
+    }
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, Default)]
 pub(crate) struct FCustomVersion
 {
-    key: FGuid,
-    version: i32,
+    pub(crate) key: FGuid,
+    pub(crate) version: i32,
 }
 impl Readable for FCustomVersion {
     #[instrument(skip_all, name = "FCustomVersion")]
@@ -147,10 +160,10 @@ impl Writeable for FCustomVersion {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct FZenPackageVersioningInfo
 {
-    zen_version: EZenPackageVersion,
-    package_file_version: FPackageFileVersion,
-    licensee_version: i32,
-    custom_versions: Vec<FCustomVersion>,
+    pub(crate) zen_version: EZenPackageVersion,
+    pub(crate) package_file_version: FPackageFileVersion,
+    pub(crate) licensee_version: i32,
+    pub(crate) custom_versions: Vec<FCustomVersion>,
 }
 impl Readable for FZenPackageVersioningInfo {
     #[instrument(skip_all, name = "FZenPackageVersioningInfo")]
@@ -168,10 +181,10 @@ impl Readable for FZenPackageVersioningInfo {
 #[derive(Debug)]
 #[repr(C)] // Needed to determine the number of bulk data entries
 pub(crate) struct FBulkDataMapEntry {
-    serial_offset: i64,
-    duplicate_serial_offset: i64,
-    serial_size: i64,
-    flags: u32,
+    pub(crate) serial_offset: i64,
+    pub(crate) duplicate_serial_offset: i64,
+    pub(crate) serial_size: i64,
+    pub(crate) flags: u32,
     pad: u32,
 }
 impl Readable for FBulkDataMapEntry {
@@ -190,16 +203,16 @@ impl Readable for FBulkDataMapEntry {
 #[derive(Debug)]
 #[repr(C)] // Needed to determine the number of export entries
 pub(crate) struct FExportMapEntry {
-    cooked_serial_offset: u64,
-    cooked_serial_size: u64,
-    object_name: FMinimalName,
-    outer_index: FPackageObjectIndex,
-    class_index: FPackageObjectIndex,
-    super_index: FPackageObjectIndex,
-    template_index: FPackageObjectIndex,
-    public_export_hash: u64,
-    object_flags: u32,
-    filter_flags: u8,
+    pub(crate) cooked_serial_offset: u64,
+    pub(crate) cooked_serial_size: u64,
+    pub(crate) object_name: FMappedName,
+    pub(crate) outer_index: FPackageObjectIndex,
+    pub(crate) class_index: FPackageObjectIndex,
+    pub(crate) super_index: FPackageObjectIndex,
+    pub(crate) template_index: FPackageObjectIndex,
+    pub(crate) public_export_hash: u64,
+    pub(crate) object_flags: u32,
+    pub(crate) filter_flags: u8,
     padding: [u8; 3],
 }
 impl Readable for FExportMapEntry {
@@ -223,15 +236,15 @@ impl Readable for FExportMapEntry {
 
 #[derive(Debug, Clone, Copy, PartialEq, FromRepr)]
 #[repr(u32)]
-enum EExportCommandType {
+pub(crate) enum EExportCommandType {
     Create,
     Serialize
 }
 #[derive(Debug)]
 #[repr(C)] // Needed to determine the number of export bundle entries
 struct FExportBundleEntry {
-    local_export_index: u32,
-    command_type: EExportCommandType,
+    pub(crate) local_export_index: u32,
+    pub(crate) command_type: EExportCommandType,
 }
 impl Readable for FExportBundleEntry {
     #[instrument(skip_all, name = "FExportBundleEntry")]
@@ -247,13 +260,13 @@ impl Readable for FExportBundleEntry {
 #[repr(C)] // Needed to determine the number of bundle headers
 struct FDependencyBundleHeader
 {
-    first_entry_index: i32,
+    pub(crate) first_entry_index: i32,
     // Note that this is defined as uint32 EntryCount[ExportCommandType_Count][ExportCommandType_Count], but this is a really awkward definition to work with,
     // so here it is defined as 4 individual properties: [Create][Create], [Create][Serialize], [Serialize][Create] and [Serialize][Serialize]
-    create_before_create_dependencies: u32,
-    create_before_serialize_dependencies: u32,
-    serialize_before_create_dependencies: u32,
-    serialize_before_serialize_dependencies: u32,
+    pub(crate) create_before_create_dependencies: u32,
+    pub(crate) create_before_serialize_dependencies: u32,
+    pub(crate) serialize_before_create_dependencies: u32,
+    pub(crate) serialize_before_serialize_dependencies: u32,
 }
 impl Readable for FDependencyBundleHeader {
     #[instrument(skip_all, name = "FDependencyBundleHeader")]
@@ -273,19 +286,19 @@ pub(crate) struct FPackageIndex {
     index: i32, // positive is index into the export map, negative is index into import map, zero is none
 }
 impl FPackageIndex {
-    fn create_null() -> FPackageIndex { FPackageIndex{index: 0} }
-    fn create_import(import_index: u32) -> FPackageIndex { FPackageIndex{index: -(import_index as i32) - 1 } }
-    fn create_export(export_index: u32) -> FPackageIndex { FPackageIndex{index: (export_index as i32) + 1 } }
+    pub(crate) fn create_null() -> FPackageIndex { FPackageIndex{index: 0} }
+    pub(crate) fn create_import(import_index: u32) -> FPackageIndex { FPackageIndex{index: -(import_index as i32) - 1 } }
+    pub(crate) fn create_export(export_index: u32) -> FPackageIndex { FPackageIndex{index: (export_index as i32) + 1 } }
 
-    fn is_import(&self) -> bool { self.index < 0 }
-    fn is_export(&self) -> bool { self.index > 0 }
-    fn is_null(&self) -> bool { self.index == 0 }
+    pub(crate) fn is_import(&self) -> bool { self.index < 0 }
+    pub(crate) fn is_export(&self) -> bool { self.index > 0 }
+    pub(crate) fn is_null(&self) -> bool { self.index == 0 }
 
-    fn to_import_index(&self) -> u32 {
+    pub(crate) fn to_import_index(&self) -> u32 {
         assert!(self.index < 0);
         (-self.index - 1) as u32
     }
-    fn to_export_index(&self) -> u32 {
+    pub(crate) fn to_export_index(&self) -> u32 {
         assert!(self.index > 0);
         (self.index - 1) as u32
     }
@@ -308,7 +321,7 @@ impl Writeable for FPackageIndex {
 #[derive(Debug)]
 #[repr(C)] // Needed to determine the number of bundle entries
 struct FDependencyBundleEntry {
-    local_import_or_export_index: FPackageIndex,
+    pub(crate) local_import_or_export_index: FPackageIndex,
 }
 impl Readable for FDependencyBundleEntry {
     #[instrument(skip_all, name = "FDependencyBundleEntry")]
@@ -347,17 +360,17 @@ pub(crate) enum EUnrealEngineObjectUE4Version {
 
 #[derive(Debug)]
 pub(crate) struct FZenPackageHeader {
-    summary: FZenPackageSummary,
-    versioning_info: Option<FZenPackageVersioningInfo>,
-    name_map: FNameMap,
-    bulk_data: Vec<FBulkDataMapEntry>,
-    imported_public_export_hashes: Vec<u64>,
-    import_map: Vec<FPackageObjectIndex>,
-    export_map: Vec<FExportMapEntry>,
-    export_bundle_entries: Vec<FExportBundleEntry>,
-    dependency_bundle_headers: Vec<FDependencyBundleHeader>,
-    dependency_bundle_entries: Vec<FDependencyBundleEntry>,
-    imported_package_names: Vec<String>,
+    pub(crate) summary: FZenPackageSummary,
+    pub(crate) versioning_info: Option<FZenPackageVersioningInfo>,
+    pub(crate) name_map: FNameMap,
+    pub(crate) bulk_data: Vec<FBulkDataMapEntry>,
+    pub(crate) imported_public_export_hashes: Vec<u64>,
+    pub(crate) import_map: Vec<FPackageObjectIndex>,
+    pub(crate) export_map: Vec<FExportMapEntry>,
+    pub(crate) export_bundle_entries: Vec<FExportBundleEntry>,
+    pub(crate) dependency_bundle_headers: Vec<FDependencyBundleHeader>,
+    pub(crate) dependency_bundle_entries: Vec<FDependencyBundleEntry>,
+    pub(crate) imported_package_names: Vec<String>,
 }
 impl FZenPackageHeader {
     #[instrument(skip_all, name = "FZenPackageHeader")]

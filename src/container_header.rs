@@ -9,10 +9,11 @@ use strum::FromRepr;
 use tracing::instrument;
 
 use crate::{
-    name_map::{FMinimalName, FNameMap},
+    name_map::{FNameMap},
     ser::*,
     FIoContainerId, FPackageId, FSHAHash, ReadExt,
 };
+use crate::name_map::FMappedName;
 
 #[derive(Debug)]
 struct FIoContainerHeader {
@@ -59,7 +60,7 @@ impl Readable for FIoContainerHeader {
     }
 }
 
-#[derive(Debug, FromRepr)]
+#[derive(Debug, Copy, Clone, PartialEq, FromRepr)]
 #[repr(u32)]
 enum EIoContainerHeaderVersion {
     Initial = 0,
@@ -78,7 +79,7 @@ impl Readable for EIoContainerHeaderVersion {
 #[derive(Debug)]
 struct FIoContainerHeaderLocalizedPackage {
     source_package_id: FPackageId,
-    source_package_name: FMinimalName,
+    source_package_name: FMappedName,
 }
 impl Readable for FIoContainerHeaderLocalizedPackage {
     fn de<S: Read>(s: &mut S) -> Result<Self> {
@@ -93,7 +94,7 @@ impl Readable for FIoContainerHeaderLocalizedPackage {
 struct FIoContainerHeaderPackageRedirect {
     source_package_id: FPackageId,
     target_package_id: FPackageId,
-    source_package_name: FMinimalName,
+    source_package_name: FMappedName,
 }
 impl Readable for FIoContainerHeaderPackageRedirect {
     fn de<S: Read>(s: &mut S) -> Result<Self> {

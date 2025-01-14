@@ -1,12 +1,39 @@
-use crate::name_map::FMinimalName;
-use crate::zen::{EUnrealEngineObjectUE4Version, EUnrealEngineObjectUE5Version, FCustomVersion, FPackageFileVersion, FPackageIndex};
-use crate::{iostore::IoStoreTrait, ser::*, zen::FZenPackageHeader, FGuid, FIoChunkId};
+use crate::zen::{EUnrealEngineObjectUE4Version, EUnrealEngineObjectUE5Version, FCustomVersion, FPackageFileVersion, FPackageIndex, FZenPackageVersioningInfo};
+use crate::{iostore::IoStoreTrait, ser::*, zen::FZenPackageHeader, EIoChunkType, FGuid, FIoChunkId, FPackageId};
 use anyhow::{anyhow, bail, Result};
 use byteorder::{WriteBytesExt as _, LE};
 use std::borrow::Cow;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::{io::Cursor, path::Path};
+use std::collections::HashMap;
+use std::rc::Rc;
+use std::collections::HashSet;
 use tracing::instrument;
+use crate::script_objects::{FPackageObjectIndex, FPackageObjectIndexType};
+
+#[derive(Debug, Copy, Clone, Default)]
+struct FMinimalName {
+    index: u32,
+    number: i32,
+}
+impl Readable for FMinimalName {
+    #[instrument(skip_all, name = "FMinimalName")]
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        Ok(Self {
+            index: s.de()?,
+            number: s.de()?,
+        })
+    }
+}
+impl Writeable for FMinimalName
+{
+    #[instrument(skip_all, name = "FMinimalName")]
+    fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
+        stream.ser(self.index)?;
+        stream.ser(self.number)?;
+        Ok({})
+    }
+}
 
 #[derive(Debug, Copy, Clone, Default)]
 struct FCountOffsetPair {
@@ -158,7 +185,7 @@ impl Writeable for FLegacyPackageVersioningInfo {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 #[repr(u32)]
 pub(crate) enum EPackageFlags {
     Cooked = 0x00000200,
@@ -439,13 +466,13 @@ impl FPackageFileSummary {
     }
 }
 
-#[derive(Debug, Clone)]
-struct FLegacyPackageNameMap {
+#[derive(Debug, Clone, Default)]
+struct FPackageNameMap {
     names: Vec<String>
 }
-impl FLegacyPackageNameMap {
-    #[instrument(skip_all, name = "FLegacyPackageNameMap")]
-    fn read<S: Read + Seek>(stream: &mut S, summary: &FPackageFileSummary) -> Result<FLegacyPackageNameMap> {
+impl FPackageNameMap {
+    #[instrument(skip_all, name = "FPackageNameMap")]
+    fn read<S: Read + Seek>(stream: &mut S, summary: &FPackageFileSummary) -> Result<FPackageNameMap> {
 
         stream.seek(SeekFrom::Start(summary.names.offset as u64))?;
 
@@ -460,7 +487,7 @@ impl FLegacyPackageNameMap {
         Ok(Self{names})
     }
 
-    #[instrument(skip_all, name = "FLegacyPackageNameMap")]
+    #[instrument(skip_all, name = "FPackageNameMap")]
     fn write<S: Write + Seek>(&self, stream: &mut S, summary: &mut FPackageFileSummary, package_summary_offset: u64) -> Result<()> {
 
         // Tell the summary where the names start and how many there are
@@ -482,7 +509,7 @@ impl FLegacyPackageNameMap {
     }
 
     fn get(&self, name: FMinimalName) -> Cow<'_, str> {
-        let bare_name = &self.names[name.index.value as usize];
+        let bare_name = &self.names[name.index as usize];
         if name.number != 0 {
             format!("{bare_name}_{}", name.number - 1).into()
         } else {
@@ -723,10 +750,10 @@ impl Writeable for FObjectDataResource {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct FLegacyPackageHeader {
     summary: FPackageFileSummary,
-    name_map: FLegacyPackageNameMap,
+    name_map: FPackageNameMap,
     imports: Vec<FObjectImport>,
     exports: Vec<FObjectExport>,
     preload_dependencies: Vec<FPackageIndex>,
@@ -743,7 +770,7 @@ impl FLegacyPackageHeader {
         let package_summary: FPackageFileSummary = FPackageFileSummary::deserialize(s, Some(package_file_version))?;
 
         // Deserialize name map
-        let name_map: FLegacyPackageNameMap = FLegacyPackageNameMap::read(s, &package_summary)?;
+        let name_map: FPackageNameMap = FPackageNameMap::read(s, &package_summary)?;
 
         // Deserialize import map
         let imports_start_offset = package_summary_offset + package_summary.imports.offset as u64;
@@ -797,7 +824,7 @@ impl FLegacyPackageHeader {
         FPackageFileSummary::serialize(&package_summary, s)?;
 
         // Write name map. It directly follows the package summary
-        FLegacyPackageNameMap::write(&self.name_map, s, &mut package_summary, package_summary_offset)?;
+        FPackageNameMap::write(&self.name_map, s, &mut package_summary, package_summary_offset)?;
 
         // Write soft object paths offset. We do not actually write any soft object paths because they must be serialized inline for cooked assets,
         // because zen header cannot preserve object paths that are not serialized inline
@@ -878,17 +905,129 @@ impl FLegacyPackageHeader {
     }
 }
 
+// Cache that stores the packages that were retrieved for the purpose of dependency resolution, to avoid loading and parsing them multiple times
+#[derive(Debug)]
+pub(crate) struct FZenPackageHeaderCache {
+    package_headers_cache: HashMap<FPackageId, Rc<FZenPackageHeader>>,
+    packages_failed_load: HashSet<FPackageId>,
+}
+impl FZenPackageHeaderCache {
+    pub(crate) fn create() -> Self { Self{ package_headers_cache: HashMap::new(), packages_failed_load: HashSet::new() } }
+    fn lookup(&mut self, store_access: &dyn IoStoreTrait, package_id: FPackageId) -> Result<Rc<FZenPackageHeader>> {
+
+        // If we already have a package in the cache, return it
+        if let Some(existing_package) = self.package_headers_cache.get(&package_id) {
+            return Ok(existing_package.clone());
+        }
+        // If we have previously attempted to load a package and failed, return that
+        if self.packages_failed_load.contains(&package_id) {
+            return Err(anyhow!("Package has failed loading previously"));
+        }
+
+        // Optional package segments cannot be imported from other packages, and optional segments are also not supported outside of editor. So ChunkIndex is always 0
+        let package_chunk_id = FIoChunkId::from_package_id(package_id, 0, EIoChunkType::ExportBundleData);
+        let package_data = store_access.read(package_chunk_id);
+
+        // Mark the package as failed load if it's chunk failed to load
+        if let Err(read_error) = package_data {
+            self.packages_failed_load.insert(package_id);
+            return Err(read_error)
+        }
+
+        let mut zen_package_buffer = Cursor::new(package_data?);
+        let zen_package_header = FZenPackageHeader::deserialize(&mut zen_package_buffer);
+
+        // Mark the package as failed if we failed to parse the header
+        if zen_package_header.is_err() {
+            self.packages_failed_load.insert(package_id);
+            return Err(zen_package_header.unwrap_err());
+        }
+
+        // Move the package header into a shared pointer and store it into the map
+        let shared_package_header: Rc<FZenPackageHeader> = Rc::new(zen_package_header?);
+        self.package_headers_cache.insert(package_id, shared_package_header.clone());
+        Ok(shared_package_header)
+    }
+}
+
+struct ResolvedZenImport {
+    class_package: String,
+    class_name: String,
+    outer: Option<Box<ResolvedZenImport>>,
+    index: FPackageObjectIndex,
+}
+
 pub(crate) fn build_legacy<P: AsRef<Path>>(
     iostore: &dyn IoStoreTrait,
     chunk_id: FIoChunkId,
     out_path: P,
+    package_header_cache: &mut FZenPackageHeaderCache,
+    fallback_package_file_version: Option<FPackageFileVersion>,
 ) -> Result<()> {
     let mut zen_data = Cursor::new(iostore.read(chunk_id)?);
 
     let mut out_buffer = vec![];
     let mut cur = Cursor::new(&mut out_buffer);
 
-    let zen_summary = FZenPackageHeader::deserialize(&mut zen_data)?;
+    let zen_summary: FZenPackageHeader = FZenPackageHeader::deserialize(&mut zen_data)?;
+
+    // Populate package summary with basic data
+    let mut legacy_package_summary = FPackageFileSummary::default();
+    legacy_package_summary.package_name = zen_summary.name_map.get(zen_summary.summary.name).to_string();
+    legacy_package_summary.package_flags = zen_summary.summary.package_flags;
+    legacy_package_summary.package_guid = FGuid{a: 0, b: 0, c: 0, d: 0};
+    legacy_package_summary.package_source = 0;
+
+    // If zen package has versioning data, we can transfer it to the package. Otherwise, the package is written unversioned
+    // However, we still need to know the package file version to determine the disk format of the legacy package
+    if zen_summary.versioning_info.is_some() {
+        let zen_versions: &FZenPackageVersioningInfo = zen_summary.versioning_info.as_ref().unwrap();
+
+        legacy_package_summary.versioning_info = FLegacyPackageVersioningInfo{
+            legacy_file_version: 0,
+            package_file_version: zen_versions.package_file_version,
+            licensee_version: zen_versions.licensee_version,
+            custom_versions: zen_versions.custom_versions.clone(),
+            is_unversioned: false,
+        };
+    }
+    else {
+        // TODO: Derive package file version from Zen. This has to be done in FZenPackageVersioningInfo since there are parsing differences for zen asset
+        if fallback_package_file_version.is_none() {
+            bail!("Cannot build legacy asset from unversioned zen asset without explicit package file version. Please provide explicit package file version");
+        }
+        legacy_package_summary.versioning_info = FLegacyPackageVersioningInfo{
+            legacy_file_version: 0,
+            package_file_version: fallback_package_file_version.unwrap(),
+            is_unversioned: true,
+            ..FLegacyPackageVersioningInfo::default()
+        };
+    }
+
+    // Create legacy package header
+    let mut legacy_package = FLegacyPackageHeader{summary: legacy_package_summary, ..FLegacyPackageHeader::default()};
+
+    // Copy the names from the zen container. Name map format is the same on the high level
+    legacy_package.name_map = FPackageNameMap{ names: zen_summary.name_map.copy_raw_names() };
+
+    // Copy data resources
+    legacy_package.data_resources = zen_summary.bulk_data.iter().map(|zen_bulk_data| {
+        // Zen also does not serialize outer_index, so we will write Null as outer index. Luckily, this information is not needed in runtime.
+        let outer_index: FPackageIndex = FPackageIndex::create_null();
+        // Note that Zen does not support compressed bulk data, so raw_size == serial_size
+        let raw_size = zen_bulk_data.serial_size;
+        // FObjectDataResource::Flags are always 0 for cooked packages, they are not used in runtime and never written when cooking
+        let flags: u32 = 0;
+        // Copy legacy bulk data flags from zen directly
+        let legacy_bulk_data_flags = zen_bulk_data.flags;
+
+        return FObjectDataResource{flags,
+            serial_offset: zen_bulk_data.serial_offset,
+            duplicate_serial_offset: zen_bulk_data.duplicate_serial_offset,
+            serial_size: zen_bulk_data.serial_size,
+            raw_size, outer_index, legacy_bulk_data_flags
+        };
+    }).collect();
 
     dbg!(zen_summary);
 
@@ -934,12 +1073,12 @@ fn try_derive_package_file_version_from_package<S: Read + Seek>(s: &mut S, packa
     // Try these package versions for the supported engine versions. First version to read the full header size and not overflow is the presumed package version
     let package_versions_to_try: Vec<FPackageFileVersion> = vec![
         // Note that AssetRegistryPackageBuildDependencies and PropertyTagCompleteTypeName cannot be told apart, so package will always assume 5.5 instead of 5.4
-        FPackageFileVersion{ file_version_ue4: EUnrealEngineObjectUE4Version::CorrectLicenseeFlag as i32, file_version_ue5: EUnrealEngineObjectUE5Version::AssetRegistryPackageBuildDependencies as i32 }, // UE 5.5
-        FPackageFileVersion{ file_version_ue4: EUnrealEngineObjectUE4Version::CorrectLicenseeFlag as i32, file_version_ue5: EUnrealEngineObjectUE5Version::PropertyTagCompleteTypeName as i32 }, // UE 5.4
-        FPackageFileVersion{ file_version_ue4: EUnrealEngineObjectUE4Version::CorrectLicenseeFlag as i32, file_version_ue5: EUnrealEngineObjectUE5Version::DataResources as i32 }, // UE 5.3 and 5.2
-        FPackageFileVersion{ file_version_ue4: EUnrealEngineObjectUE4Version::CorrectLicenseeFlag as i32, file_version_ue5: EUnrealEngineObjectUE5Version::AddSoftObjectPathList as i32 }, // UE 5.1
-        FPackageFileVersion{ file_version_ue4: EUnrealEngineObjectUE4Version::CorrectLicenseeFlag as i32, file_version_ue5: EUnrealEngineObjectUE5Version::LargeWorldCoordinates as i32 }, // UE 5.0
-        FPackageFileVersion{ file_version_ue4: EUnrealEngineObjectUE4Version::CorrectLicenseeFlag as i32, file_version_ue5: 0 }, // UE 4.27 and 4.26
+        FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::AssetRegistryPackageBuildDependencies), // UE 5.5
+        FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::PropertyTagCompleteTypeName), // UE 5.4
+        FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::DataResources), // UE 5.3 and 5.2
+        FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::AddSoftObjectPathList), // UE 5.1
+        FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::LargeWorldCoordinates), // UE 5.0
+        FPackageFileVersion::create_ue4(EUnrealEngineObjectUE4Version::CorrectLicenseeFlag), // UE 4.27 and 4.26
     ];
 
     // Try to read the package summary for each version, and read at least one import and one export
@@ -947,7 +1086,7 @@ fn try_derive_package_file_version_from_package<S: Read + Seek>(s: &mut S, packa
     for package_version in package_versions_to_try {
 
         let mut read_cursor = Cursor::new(header_read_payload.clone());
-        let mut package_summary_or_error: Result<FPackageFileSummary> = FPackageFileSummary::deserialize(&mut read_cursor, Some(package_version));
+        let package_summary_or_error: Result<FPackageFileSummary> = FPackageFileSummary::deserialize(&mut read_cursor, Some(package_version));
         let current_cursor_position = read_cursor.position() as usize;
 
         // If we failed to read the package summary, try again with another version

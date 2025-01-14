@@ -1,6 +1,7 @@
 use std::{borrow::Cow, io::Read};
 use std::io::Write;
 use anyhow::Result;
+use strum::FromRepr;
 use tracing::instrument;
 
 use crate::{read_array, read_string, ser::*};
@@ -28,7 +29,7 @@ pub(crate) fn read_name_batch<S: Read>(s: &mut S) -> Result<Vec<String>> {
     Ok(names)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct FNameMap {
     names: Vec<String>,
 }
@@ -40,69 +41,60 @@ impl Readable for FNameMap {
     }
 }
 impl FNameMap {
-    pub(crate) fn get(&self, name: FMinimalName) -> Cow<'_, str> {
-        let n = &self.names[name.index.value as usize & 0xff_ffff];
+    pub(crate) fn get(&self, name: FMappedName) -> Cow<'_, str> {
+        let n = &self.names[name.index() as usize];
         if name.number != 0 {
             format!("{n}_{}", name.number - 1).into()
         } else {
             n.into()
         }
     }
+    pub(crate) fn copy_raw_names(&self) -> Vec<String> { self.names.clone() }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, FromRepr)]
+#[repr(u32)]
+enum EMappedNameType {
+    Package = 0,
+    Container = 1,
+    Global = 2,
+}
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct FMappedName {
-    index: u32,
-    number: u32,
+    index_and_type: u32,
+    pub(crate) number: u32,
 }
-
+impl FMappedName {
+    const INDEX_BITS: u32 = 30;
+    const INDEX_MASK: u32 = (1 << Self::INDEX_BITS) - 1;
+    const TYPE_MASK: u32 = !Self::INDEX_MASK;
+    const TYPE_SHIFT: u32 = Self::INDEX_BITS;
+    pub(crate) fn create(index: u32, kind: EMappedNameType, number: u32) -> Self {
+        let shifted_type: u32 = (kind as u32) << Self::TYPE_SHIFT;
+        let index_and_type: u32 = (index & Self::INDEX_MASK) | (shifted_type & Self::TYPE_MASK);
+        FMappedName{index_and_type, number}
+    }
+    pub(crate) fn index(self) -> u32 { self.index_and_type & Self::INDEX_MASK }
+    pub(crate) fn kind(self) -> EMappedNameType {
+        let kind: u32 = (self.index_and_type & Self::TYPE_MASK) >> Self::TYPE_SHIFT;
+        EMappedNameType::from_repr(kind).unwrap()
+    }
+}
 impl Readable for FMappedName {
     #[instrument(skip_all, name = "FMappedName")]
     fn de<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self {
-            index: s.de()?,
+            index_and_type: s.de()?,
             number: s.de()?,
         })
     }
 }
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct FMinimalName {
-    pub(crate) index: FNameEntryId,
-    pub(crate) number: i32,
-}
-impl Readable for FMinimalName {
-    #[instrument(skip_all, name = "FMinimalName")]
-    fn de<S: Read>(s: &mut S) -> Result<Self> {
-        Ok(Self {
-            index: s.de()?,
-            number: s.de()?,
-        })
-    }
-}
-impl Writeable for FMinimalName
+impl Writeable for FMappedName
 {
     #[instrument(skip_all, name = "FMinimalName")]
     fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
-        stream.ser(self.index)?;
+        stream.ser(self.index_and_type)?;
         stream.ser(self.number)?;
         Ok({})
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct FNameEntryId {
-    pub(crate) value: u32,
-}
-impl Readable for FNameEntryId {
-    #[instrument(skip_all, name = "FNameEntryId")]
-    fn de<S: Read>(s: &mut S) -> Result<Self> {
-        Ok(Self { value: s.de()? })
-    }
-}
-impl Writeable for FNameEntryId {
-    #[instrument(skip_all, name = "FNameEntryId")]
-    fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
-        stream.ser(self.value)
     }
 }
