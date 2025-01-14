@@ -9,14 +9,13 @@ use strum::FromRepr;
 use tracing::instrument;
 
 use crate::{
-    name_map::{FNameMap},
+    name_map::{FMappedName, FNameMap},
     ser::*,
     FIoContainerId, FPackageId, FSHAHash, ReadExt,
 };
-use crate::name_map::FMappedName;
 
 #[derive(Debug)]
-struct FIoContainerHeader {
+pub(crate) struct FIoContainerHeader {
     container_id: FIoContainerId,
     package_ids: Vec<FPackageId>,
     store_entries: StoreEntries,
@@ -25,6 +24,8 @@ struct FIoContainerHeader {
     redirect_name_map: FNameMap,
     localized_packages: Vec<FIoContainerHeaderLocalizedPackage>,
     package_redirects: Vec<FIoContainerHeaderPackageRedirect>,
+
+    package_entry_map: HashMap<FPackageId, u32>,
 }
 impl Readable for FIoContainerHeader {
     #[instrument(skip_all, name = "FIoContainerHeader")]
@@ -47,6 +48,12 @@ impl Readable for FIoContainerHeader {
 
         // TODO SoftPackageReferences
 
+        let package_entry_map = package_ids
+            .iter()
+            .enumerate()
+            .map(|(i, &id)| (id, i as u32))
+            .collect();
+
         Ok(Self {
             container_id,
             package_ids,
@@ -56,7 +63,15 @@ impl Readable for FIoContainerHeader {
             redirect_name_map,
             localized_packages,
             package_redirects,
+            package_entry_map,
         })
+    }
+}
+impl FIoContainerHeader {
+    pub(crate) fn get_store_entry(&self, package_id: FPackageId) -> Option<StoreEntryRef> {
+        // TODO handle redirects?
+        let index = *self.package_entry_map.get(&package_id)?;
+        Some(self.store_entries.get_ref(index))
     }
 }
 
@@ -107,9 +122,31 @@ impl Readable for FIoContainerHeaderPackageRedirect {
 }
 
 #[derive(Debug)]
+pub(crate) struct StoreEntryRef<'a> {
+    pub(crate) imported_packages: &'a [FPackageId],
+    pub(crate) shader_map_hashes: &'a [FSHAHash],
+}
+
+#[derive(Debug)]
 struct StoreEntries {
     imported_packages: HashMap<u32, Vec<FPackageId>>,
     shader_map_hashes: HashMap<u32, Vec<FSHAHash>>,
+}
+impl StoreEntries {
+    fn get_ref(&self, index: u32) -> StoreEntryRef {
+        StoreEntryRef {
+            imported_packages: self
+                .imported_packages
+                .get(&index)
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
+            shader_map_hashes: self
+                .shader_map_hashes
+                .get(&index)
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
+        }
+    }
 }
 impl ReadableCtx<usize> for StoreEntries {
     fn de<S: Read>(s: &mut S, package_count: usize) -> Result<Self> {

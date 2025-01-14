@@ -22,6 +22,7 @@ use aes::cipher::KeyInit as _;
 use anyhow::{bail, Context, Result};
 use bitflags::bitflags;
 use clap::Parser;
+use iostore::IoStoreTrait;
 use rayon::prelude::*;
 use ser::*;
 use strum::{AsRefStr, FromRepr};
@@ -221,12 +222,23 @@ fn action_list(args: ActionList, config: &Config) -> Result<()> {
     let iostore = iostore::open(args.utoc, config)?;
 
     for chunk in iostore.chunks() {
+        let id = chunk.id();
+        let chunk_type = id.get_chunk_type();
+        //let package_store_entry = if chunk_type == EIoChunkType::ExportBundleData {
+        //    let package_id = FPackageId(u64::from_le_bytes(id.id[0..8].try_into().unwrap()));
+        //    let entry = chunk.container().package_store_entry(package_id).unwrap();
+        //    format!("{entry:?}")
+        //} else {
+        //    "-".to_string()
+        //};
+
         println!(
             "{:30}  {}  {:20}  {}",
             chunk.container().container_name().unwrap_or("-"),
-            hex::encode(chunk.id()),
-            chunk.id().get_chunk_type().as_ref(),
-            chunk.file_name().unwrap_or("-")
+            hex::encode(id),
+            chunk_type.as_ref(),
+            chunk.file_name().unwrap_or("-"),
+            //package_store_entry,
         );
     }
     Ok(())
@@ -369,7 +381,9 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: &Config) -> Result<(
 
     let output = args.output;
     // TODO @trumank make this an option. Right now it is UE 5.4
-    let package_file_version: Option<FPackageFileVersion> = Some(FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::PropertyTagCompleteTypeName));
+    let package_file_version: Option<FPackageFileVersion> = Some(FPackageFileVersion::create_ue5(
+        EUnrealEngineObjectUE5Version::PropertyTagCompleteTypeName,
+    ));
     let mut package_header_cache = FZenPackageHeaderCache::create();
 
     let mut count = 0;
@@ -387,7 +401,13 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: &Config) -> Result<(
                 let path = output.join(file_name);
                 let dir = path.parent().unwrap();
                 std::fs::create_dir_all(dir)?;
-                legacy_asset::build_legacy(&*iostore, chunk.id(), path, &mut package_header_cache, package_file_version)?;
+                legacy_asset::build_legacy(
+                    &*iostore,
+                    chunk.id(),
+                    path,
+                    &mut package_header_cache,
+                    package_file_version,
+                )?;
                 count += 1;
             }
         }
@@ -1192,10 +1212,10 @@ enum EIoChunkType {
     //ContainerHeader = 0xa,
 }
 
-use directory_index::*;
-use zen::get_package_name;
 use crate::legacy_asset::FZenPackageHeaderCache;
 use crate::zen::{EUnrealEngineObjectUE5Version, FPackageFileVersion};
+use directory_index::*;
+use zen::get_package_name;
 
 mod directory_index {
     use super::*;

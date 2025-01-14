@@ -8,7 +8,11 @@ use std::{
 
 use anyhow::{Context as _, Result};
 
-use crate::{ser::*, Config, FIoChunkId, Toc};
+use crate::{
+    container_header::{FIoContainerHeader, StoreEntryRef},
+    ser::*,
+    Config, EIoChunkType, FIoChunkId, FPackageId, Toc,
+};
 
 pub fn open<P: AsRef<Path>>(path: P, config: &Config) -> Result<Box<dyn IoStoreTrait>> {
     Ok(if path.as_ref().is_dir() {
@@ -23,6 +27,7 @@ pub trait IoStoreTrait {
     fn has_chunk_id(&self, chunk_id: FIoChunkId) -> bool;
     fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + '_>;
     fn file_name(&self, chunk_id: FIoChunkId) -> Option<&str>;
+    fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntryRef>;
 }
 
 pub struct ChunkInfo<'a> {
@@ -80,6 +85,11 @@ impl IoStoreTrait for IoStoreBackend {
     fn file_name(&self, chunk_id: FIoChunkId) -> Option<&str> {
         self.containers.iter().find_map(|c| c.file_name(chunk_id))
     }
+    fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntryRef> {
+        self.containers
+            .iter()
+            .find_map(|c| c.package_store_entry(package_id))
+    }
 }
 
 pub struct IoStoreContainer {
@@ -87,18 +97,36 @@ pub struct IoStoreContainer {
     path: PathBuf,
     toc: Toc,
     cas: Arc<Mutex<BufReader<File>>>,
+
+    container_header: Option<FIoContainerHeader>,
 }
 impl IoStoreContainer {
     pub fn open<P: AsRef<Path>>(toc_path: P, config: &Config) -> Result<Self> {
         let path = toc_path.as_ref().to_path_buf();
         let toc: Toc = BufReader::new(File::open(&path)?).de_ctx(config)?;
         let cas = BufReader::new(File::open(toc_path.as_ref().with_extension("ucas"))?);
-        Ok(Self {
+
+        let mut container = Self {
             name: path.file_stem().map(|f| f.to_string_lossy().into()),
             path,
             toc,
             cas: Arc::new(Mutex::new(cas)),
-        })
+
+            container_header: None,
+        };
+
+        // TODO avoid linear search for header
+        // TODO populate header lazily?
+        let header_chunk = container
+            .chunks()
+            .find(|info| info.id().get_chunk_type() == EIoChunkType::ContainerHeader);
+        if let Some(header_chunk) = header_chunk {
+            let data = container.read(header_chunk.id())?;
+            let header = FIoContainerHeader::de(&mut std::io::Cursor::new(data))?;
+            container.container_header = Some(header);
+        }
+
+        Ok(container)
     }
     pub fn container_path(&self) -> &Path {
         self.path.as_ref()
@@ -129,5 +157,10 @@ impl IoStoreTrait for IoStoreContainer {
             .get(&chunk_id)
             .and_then(|index| self.toc.file_map_rev.get(index))
             .map(String::as_str)
+    }
+    fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntryRef> {
+        self.container_header
+            .as_ref()
+            .and_then(|header| header.get_store_entry(package_id))
     }
 }
