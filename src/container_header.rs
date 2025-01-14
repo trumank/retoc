@@ -126,6 +126,19 @@ pub(crate) struct StoreEntryRef<'a> {
     pub(crate) imported_packages: &'a [FPackageId],
     pub(crate) shader_map_hashes: &'a [FSHAHash],
 }
+#[derive(Debug)]
+pub(crate) struct StoreEntry{
+    pub(crate) imported_packages: Vec<FPackageId>,
+    pub(crate) shader_map_hashes: Vec<FSHAHash>,
+}
+impl StoreEntryRef<'_> {
+    fn to_owned(&self) -> StoreEntry {
+        StoreEntry {
+            imported_packages: self.imported_packages.to_vec(),
+            shader_map_hashes: self.shader_map_hashes.to_vec(),
+        }
+    }
+}
 
 #[derive(Debug)]
 struct StoreEntries {

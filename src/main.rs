@@ -1095,6 +1095,7 @@ impl Writeable for FGuid {
         Ok({})
     }
 }
+#[derive(Default, Clone, Copy)]
 struct FSHAHash {
     data: [u8; 20],
 }
