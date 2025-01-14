@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 use std::io::Read;
 use std::io::Seek;
 
 use anyhow::Result;
+use serde::Serializer;
 use strum::FromRepr;
 use tracing::instrument;
 
@@ -12,7 +14,7 @@ use crate::{
     ser::*,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct ZenScriptObjects {
     pub(crate) global_name_map: FNameMap,
     pub(crate) script_objects: Vec<FScriptObjectEntry>,
@@ -69,8 +71,8 @@ pub(crate) enum FPackageObjectIndexType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub(crate) struct FPackageImportReference {
-    imported_package_index: u32,
-    imported_public_export_hash_index: u32
+    pub(crate) imported_package_index: u32,
+    pub(crate) imported_public_export_hash_index: u32
 }
 
 impl FPackageObjectIndex {
@@ -101,6 +103,7 @@ impl FPackageObjectIndex {
             imported_public_export_hash_index: (self.type_and_id as u32)
         })
     }
+    pub(crate) fn is_null(self) -> bool { self.kind() == FPackageObjectIndexType::Null }
 }
 impl Readable for FPackageObjectIndex {
     #[instrument(skip_all, name = "FPackageObjectIndex")]
@@ -108,6 +111,11 @@ impl Readable for FPackageObjectIndex {
         Ok(Self {
             type_and_id: s.de()?,
         })
+    }
+}
+impl Display for FPackageObjectIndex {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.serialize_u64(self.type_and_id)
     }
 }
 

@@ -1,7 +1,7 @@
 use std::{borrow::Cow, io::Read};
 use std::io::Write;
 use anyhow::Result;
-use strum::FromRepr;
+use strum::{Display, FromRepr};
 use tracing::instrument;
 
 use crate::{read_array, read_string, ser::*};
@@ -29,7 +29,7 @@ pub(crate) fn read_name_batch<S: Read>(s: &mut S) -> Result<Vec<String>> {
     Ok(names)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct FNameMap {
     names: Vec<String>,
 }
@@ -52,7 +52,7 @@ impl FNameMap {
     pub(crate) fn copy_raw_names(&self) -> Vec<String> { self.names.clone() }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, FromRepr)]
+#[derive(Debug, Clone, Copy, PartialEq, Display, FromRepr)]
 #[repr(u32)]
 enum EMappedNameType {
     Package = 0,

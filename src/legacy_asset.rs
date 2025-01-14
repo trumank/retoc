@@ -9,7 +9,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::collections::HashSet;
 use tracing::instrument;
-use crate::script_objects::{FPackageObjectIndex, FPackageObjectIndexType};
+use crate::name_map::FMappedName;
+use crate::script_objects::{FPackageObjectIndex, FPackageObjectIndexType, FScriptObjectEntry, ZenScriptObjects};
 
 #[derive(Debug, Copy, Clone, Default)]
 struct FMinimalName {
@@ -908,11 +909,60 @@ impl FLegacyPackageHeader {
 // Cache that stores the packages that were retrieved for the purpose of dependency resolution, to avoid loading and parsing them multiple times
 #[derive(Debug)]
 pub(crate) struct FZenPackageHeaderCache {
+    script_objects_loaded: bool,
+    script_objects: Option<ZenScriptObjects>,
+    script_objects_resolved_as_classes: HashSet<FPackageObjectIndex>,
     package_headers_cache: HashMap<FPackageId, Rc<FZenPackageHeader>>,
     packages_failed_load: HashSet<FPackageId>,
 }
 impl FZenPackageHeaderCache {
-    pub(crate) fn create() -> Self { Self{ package_headers_cache: HashMap::new(), packages_failed_load: HashSet::new() } }
+    pub(crate) fn create() -> Self {
+        Self {
+            script_objects_loaded: false,
+            script_objects: None,
+            script_objects_resolved_as_classes: HashSet::new(),
+            package_headers_cache: HashMap::new(),
+            packages_failed_load: HashSet::new()
+        }
+    }
+    fn load_script_objects(&mut self, store_access: &dyn IoStoreTrait) -> Result<()> {
+        // Only attempt to load script objects once
+        if !self.script_objects_loaded {
+            self.script_objects_loaded = true;
+
+            let script_objects_id = FIoChunkId::create(0, 0, EIoChunkType::ScriptObjects);
+            let script_objects_data = store_access.read(script_objects_id)?;
+            let script_objects: ZenScriptObjects = Cursor::new(script_objects_data).de()?;
+
+            // Do a quick check over all script objects to track which ones are being pointed to by the CDOs. These are 100% UClasses
+            for script_object in &script_objects.script_objects {
+                if script_object.cdo_class_index.kind() != FPackageObjectIndexType::Null {
+                    self.script_objects_resolved_as_classes.insert(script_object.cdo_class_index);
+                }
+            }
+            self.script_objects = Some(script_objects);
+        }
+        // Make sure the loading has succeeded, otherwise we cannot parse any packages
+        else if self.script_objects.is_none() {
+            bail!("Failed to load script objects from the archive");
+        }
+        Ok({})
+    }
+    fn find_script_object(&self, script_object_index: FPackageObjectIndex) -> Result<FScriptObjectEntry> {
+        if script_object_index.kind() != FPackageObjectIndexType::ScriptImport {
+            bail!("Package Object index that is not a ScriptImport passed to resolve_script_import: {}", script_object_index);
+        }
+        let script_objects: &ZenScriptObjects = self.script_objects.as_ref().ok_or_else(|| { anyhow!("Failed to read script objects") })?;
+        let script_object_entry = script_objects.script_object_lookup.get(&script_object_index).ok_or_else(|| { anyhow!("Failed to find script object with ID {}", script_object_index) })?;
+        Ok(script_object_entry.clone())
+    }
+    fn resolve_script_object_name(&self, script_object_name: FMappedName) -> Result<String> {
+        let script_objects: &ZenScriptObjects = self.script_objects.as_ref().ok_or_else(|| { anyhow!("Failed to read script objects") })?;
+        Ok(script_objects.global_name_map.get(script_object_name).to_string())
+    }
+    fn is_script_object_class(&self, script_object_index: FPackageObjectIndex) -> bool {
+        self.script_objects_resolved_as_classes.contains(&script_object_index)
+    }
     fn lookup(&mut self, store_access: &dyn IoStoreTrait, package_id: FPackageId) -> Result<Rc<FZenPackageHeader>> {
 
         // If we already have a package in the cache, return it
@@ -953,18 +1003,113 @@ impl FZenPackageHeaderCache {
 struct ResolvedZenImport {
     class_package: String,
     class_name: String,
+    object_name: String,
     outer: Option<Box<ResolvedZenImport>>,
-    index: FPackageObjectIndex,
+}
+impl ResolvedZenImport {
+    const CORE_OBJECT_PACKAGE_NAME: &'static str = "/Script/CoreUObject";
+    const OBJECT_CLASS_NAME: &'static str = "Object";
+    const CLASS_CLASS_NAME: &'static str = "Class";
+    const PACKAGE_CLASS_NAME: &'static str = "Package";
+
+}
+
+fn resolve_script_import(package_cache: &FZenPackageHeaderCache, import: FPackageObjectIndex) -> Result<ResolvedZenImport> {
+
+    let script_object = package_cache.find_script_object(import)?;
+    let object_name = package_cache.resolve_script_object_name(script_object.object_name)?;
+
+    // If this is a native package (outer is null), we know that it's type is /Script/CoreUObject.Package
+    if script_object.outer_index.is_null() {
+
+        return Ok(ResolvedZenImport{
+            class_package: ResolvedZenImport::CORE_OBJECT_PACKAGE_NAME.to_string(),
+            class_name: ResolvedZenImport::PACKAGE_CLASS_NAME.to_string(),
+            outer: None, object_name,
+        })
+    }
+    if script_object.outer_index.kind() != FPackageObjectIndexType::ScriptImport {
+        bail!("Outer script object {} for import {} is not a script import", script_object.outer_index, import);
+    }
+
+    // Resolve outer index
+    let resolved_outer_import = resolve_script_import(&package_cache, script_object.outer_index)?;
+
+    // If this object is known to be a UClass because a CDO is pointing at it, it's type is UClass
+    if package_cache.is_script_object_class(import) {
+
+        return Ok(ResolvedZenImport{
+            class_package: ResolvedZenImport::CORE_OBJECT_PACKAGE_NAME.to_string(),
+            class_name: ResolvedZenImport::CLASS_CLASS_NAME.to_string(),
+            outer: Some(Box::new(resolved_outer_import)), object_name,
+        })
+    }
+
+    // If this object is parented to the package, starts with Default__ and has a CDO class index, it's a CDO, and it points to it's class
+    let is_cdo_object = resolved_outer_import.outer.is_none() && object_name.starts_with("Default__");
+    if is_cdo_object && !script_object.cdo_class_index.is_null() {
+
+        // Resolve CDO class name and outer package. Class must always be 1 level deep in the package
+        let resolved_class = resolve_script_import(&package_cache, script_object.cdo_class_index)?;
+        let resolved_class_package = resolved_class.outer.ok_or_else(|| { anyhow!("Failed to resolve CDO class package") })?;
+        if !resolved_class_package.outer.is_none() {
+            bail!("Resolved CDO class outer was not a UPackage for class {} of CDO {}", script_object.cdo_class_index, import);
+        }
+        return Ok(ResolvedZenImport{
+            class_package: resolved_class_package.object_name,
+            class_name: resolved_class.object_name,
+            outer: Some(Box::new(resolved_outer_import)), object_name,
+        })
+    }
+
+    // This is not a CDO object, not a UClass, and not a UPackage
+    // This could be a UFunction or UScriptStruct if it's top level, UFunction if it's child of UClass, or completely anything if it's child of a CDO
+    // Since we cannot differentiate between these cases, the safest class name to emit for the import is /Script/CoreUObject.Object
+    // The class for import must adhere to the type of the imported object, which Object always does, and in runtime the game does not need that precise of an information
+    // of the import class to resolve native imports.
+    Ok(ResolvedZenImport{
+        class_package: ResolvedZenImport::CORE_OBJECT_PACKAGE_NAME.to_string(),
+        class_name: ResolvedZenImport::OBJECT_CLASS_NAME.to_string(),
+        outer: Some(Box::new(resolved_outer_import)), object_name,
+    })
+}
+
+fn resolve_package_import(package_cache: &mut FZenPackageHeaderCache, package_header: &FZenPackageHeader, import: FPackageObjectIndex) -> Result<ResolvedZenImport> {
+
+    let package_import = import.package_import().ok_or_else(|| { anyhow!("Failed to resolve import {} as package import", import) })?;
+
+    // Make sure package index points to a valid index in the imported packages
+
+
+    // Make sure the hash index points to a valid hash in the package header
+    if package_import.imported_public_export_hash_index as usize >= package_header.imported_public_export_hashes.len() {
+        bail!("Imported Public Export Hash index out of bounds for import {}: hash index is {}, but package has only {} hashes total",
+            import, package_import.imported_public_export_hash_index, package_header.imported_public_export_hashes.len());
+    }
+    let public_export_hash: u64 = package_header.imported_public_export_hashes[package_import.imported_public_export_hash_index as usize];
+
+    // TODO @trumank
+    bail!("Cannot retrieve package index, need a way to retrieve store entry for zen package from the container")
+}
+
+fn resolve_generic_zen_import(package_cache: &mut FZenPackageHeaderCache, package_header: &FZenPackageHeader, import: FPackageObjectIndex) -> Result<ResolvedZenImport> {
+    match import.kind()
+    {
+        FPackageObjectIndexType::ScriptImport => resolve_script_import(package_cache, import),
+        FPackageObjectIndexType::PackageImport => resolve_package_import(package_cache, package_header, import),
+        FPackageObjectIndexType::Export => bail!("Encountered Export object while parsing the import map entry {} of package {}", import, package_header.name_map.get(package_header.summary.name)),
+        FPackageObjectIndexType::Null => bail!("Encountered Null object while parsing the import map entry {} of package {}", import, package_header.name_map.get(package_header.summary.name)),
+    }
 }
 
 pub(crate) fn build_legacy<P: AsRef<Path>>(
-    iostore: &dyn IoStoreTrait,
+    store_access: &dyn IoStoreTrait,
     chunk_id: FIoChunkId,
     out_path: P,
     package_header_cache: &mut FZenPackageHeaderCache,
     fallback_package_file_version: Option<FPackageFileVersion>,
 ) -> Result<()> {
-    let mut zen_data = Cursor::new(iostore.read(chunk_id)?);
+    let mut zen_data = Cursor::new(store_access.read(chunk_id)?);
 
     let mut out_buffer = vec![];
     let mut cur = Cursor::new(&mut out_buffer);
@@ -1028,6 +1173,9 @@ pub(crate) fn build_legacy<P: AsRef<Path>>(
             raw_size, outer_index, legacy_bulk_data_flags
         };
     }).collect();
+
+    // Make sure script objects are loaded before we can continue
+    package_header_cache.load_script_objects(store_access)?;
 
     dbg!(zen_summary);
 

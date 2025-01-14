@@ -874,12 +874,15 @@ impl Writeable for FIoChunkId {
     }
 }
 impl FIoChunkId {
-    fn from_package_id(package_id: FPackageId, chunk_index: u16, chunk_type: EIoChunkType) -> Self {
+    fn create(chunk_id: u64, chunk_index: u16, chunk_type: EIoChunkType) -> Self {
         let mut id = [0; 12];
-        id[0..8].copy_from_slice(&u64::to_le_bytes(package_id.0));
+        id[0..8].copy_from_slice(&u64::to_le_bytes(chunk_id));
         id[8..10].copy_from_slice(&u16::to_le_bytes(chunk_index));
         id[11] = chunk_type as u8;
         Self { id }
+    }
+    fn from_package_id(package_id: FPackageId, chunk_index: u16, chunk_type: EIoChunkType) -> Self {
+        Self::create(package_id.0, chunk_index, chunk_type)
     }
     fn get_chunk_type(&self) -> EIoChunkType {
         EIoChunkType::from_repr(self.id[11]).unwrap()
