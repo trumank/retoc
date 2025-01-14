@@ -174,9 +174,11 @@ pub(crate) struct FPackageFileSummary
     package_name: String,
     package_flags: u32,
     names: FCountOffsetPair,
+    // never written for cooked packages
     soft_object_paths: FCountOffsetPair,
     exports: FCountOffsetPair,
     imports: FCountOffsetPair,
+    // empty placeholder for cooked packages
     depends_offset: i32,
     package_guid: FGuid,
     package_source: u32,
@@ -185,6 +187,10 @@ pub(crate) struct FPackageFileSummary
     preload_dependencies: FCountOffsetPair,
     names_referenced_from_export_data_count: i32,
     data_resource_offset: i32,
+    // empty placeholder for cooked packages
+    asset_registry_data_offset: i32,
+    // meaningless for cooked packages
+    bulk_data_start_offset: i32,
 }
 impl FPackageFileSummary {
     const PACKAGE_FILE_TAG: u32 = 0x9E2A83C1;
@@ -268,9 +274,9 @@ impl FPackageFileSummary {
         // No longer used, always empty
         let _additional_packages_to_cook: Vec<String> = s.de()?;
         // Serialized for packages with filtered editor only data as 1 integer (0x0), not read in runtime
-        let _asset_registry_data_offset: i32 = s.de()?;
+        let asset_registry_data_offset: i32 = s.de()?;
         // Written as an offset, but is never read for cooked packages
-        let _bulk_data_start_offset: i32 = s.de()?;
+        let bulk_data_start_offset: i32 = s.de()?;
 
         // Legacy world composition data, but can very much be written on UE4 games
         let world_tile_info_data_offset: i32 = s.de()?;
@@ -304,6 +310,8 @@ impl FPackageFileSummary {
             preload_dependencies,
             names_referenced_from_export_data_count,
             data_resource_offset,
+            asset_registry_data_offset,
+            bulk_data_start_offset,
         })
     }
 
@@ -366,8 +374,8 @@ impl FPackageFileSummary {
         s.ser(depends_offset)?;
 
         // Cooked packages never have soft package references or searchable names
-        let soft_packages_references = FCountOffsetPair{count: 0, offset: 0};
-        s.ser(soft_packages_references)?;
+        let soft_package_references = FCountOffsetPair{count: 0, offset: 0};
+        s.ser(soft_package_references)?;
         let searchable_names_offset: i32 = 0;
         s.ser(searchable_names_offset)?;
         // Cooked packages do not have thumbnails
@@ -406,16 +414,9 @@ impl FPackageFileSummary {
         s.ser(additional_packages_to_cook)?;
 
         // Serialized for packages with filtered editor only data as 1 integer (0x0), not read in runtime
-        // This is an actual offset somewhere in the package header, but it is not used by anything and the game can handle 0 there
-        // So we will write 0 here, but if we wanted to preserve binary equality, we would track this offset when writing the asset header
-        let asset_registry_data_offset: i32 = 0;
-        s.ser(asset_registry_data_offset)?;
+        s.ser(self.asset_registry_data_offset)?;
         // Written as an offset, but is never read for cooked packages as the data is never written in the header file
-        // This is an actual offset somewhere in the package header, but it is not used by anything and the game can handle 0 there
-        // So we will write 0 here, but if we wanted to preserve binary equality, we would track this offset when writing the asset header
-        let bulk_data_start_offset: i32 = 0;
-        s.ser(bulk_data_start_offset)?;
-
+        s.ser(self.bulk_data_start_offset)?;
         // Legacy world composition data, but can very much be written on UE4 games
         s.ser(self.world_tile_info_data_offset)?;
 
@@ -460,10 +461,10 @@ impl FLegacyPackageNameMap {
     }
 
     #[instrument(skip_all, name = "FLegacyPackageNameMap")]
-    fn write<S: Write + Seek>(&self, stream: &mut S, summary: &mut FPackageFileSummary) -> Result<()> {
+    fn write<S: Write + Seek>(&self, stream: &mut S, summary: &mut FPackageFileSummary, package_summary_offset: u64) -> Result<()> {
 
         // Tell the summary where the names start and how many there are
-        summary.names.offset = stream.stream_position()? as i32;
+        summary.names.offset = (stream.stream_position()? - package_summary_offset) as i32;
         summary.names.count = self.names.len() as i32;
 
         for i in 0..self.names.len() {
@@ -490,7 +491,7 @@ impl FLegacyPackageNameMap {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct FObjectImport {
     class_package: FMinimalName,
     class_name: FMinimalName,
@@ -542,7 +543,7 @@ impl FObjectImport
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct FObjectExport {
     class_index: FPackageIndex,
     super_index: FPackageIndex,
@@ -732,11 +733,148 @@ struct FLegacyPackageHeader {
     data_resources: Vec<FObjectDataResource>,
 }
 impl FLegacyPackageHeader {
-    fn deserialize<S: Read + Seek>(s: &mut S) -> Result<FLegacyPackageHeader> {
-        bail!("TODO");
+    fn deserialize<S: Read + Seek>(s: &mut S, package_version_fallback: Option<FPackageFileVersion>) -> Result<FLegacyPackageHeader> {
+
+        // Determine the package version first. We need package version to parse the summary and the rest of the header
+        let package_file_version = try_derive_package_file_version_from_package(s, package_version_fallback)?;
+
+        // Deserialize package summary
+        let package_summary_offset: u64 = s.stream_position()?;
+        let package_summary: FPackageFileSummary = FPackageFileSummary::deserialize(s, Some(package_file_version))?;
+
+        // Deserialize name map
+        let name_map: FLegacyPackageNameMap = FLegacyPackageNameMap::read(s, &package_summary)?;
+
+        // Deserialize import map
+        let imports_start_offset = package_summary_offset + package_summary.imports.offset as u64;
+        s.seek(SeekFrom::Start(imports_start_offset))?;
+
+        let mut imports: Vec<FObjectImport> = Vec::with_capacity(package_summary.imports.count as usize);
+        for _ in 0..package_summary.imports.count {
+            let object_import: FObjectImport = FObjectImport::deserialize(s, &package_summary)?;
+            imports.push(object_import);
+        }
+
+        // Deserialize export map
+        let exports_start_offset = package_summary_offset + package_summary.exports.offset as u64;
+        s.seek(SeekFrom::Start(exports_start_offset))?;
+
+        let mut exports: Vec<FObjectExport> = Vec::with_capacity(package_summary.exports.count as usize);
+        for _ in 0..package_summary.exports.count {
+            let object_export: FObjectExport = FObjectExport::deserialize(s, &package_summary)?;
+            exports.push(object_export);
+        }
+
+        // Deserialize preload dependencies
+        let preload_dependencies_start_offset = package_summary_offset + package_summary.preload_dependencies.offset as u64;
+        s.seek(SeekFrom::Start(preload_dependencies_start_offset))?;
+        let preload_dependencies: Vec<FPackageIndex> = s.de_ctx(package_summary.preload_dependencies.count as usize)?;
+
+        // Data resources are absent on packages below UE 5.2
+        let mut data_resources: Vec<FObjectDataResource> = Vec::new();
+        if package_summary.data_resource_offset != 0 {
+
+            let data_resource_start_offset = package_summary_offset + package_summary.data_resource_offset as u64;
+            s.seek(SeekFrom::Start(data_resource_start_offset))?;
+
+            // Might be worth moving into the enum once UE adds more data resource versions
+            let data_resource_version: u32 = s.de()?;
+            if data_resource_version != 1 {
+                bail!("Unknown data resource version {}. Only EVersion::Initial (1) is supported", data_resource_version);
+            }
+
+            let data_resource_count: i32 = s.de()?;
+            data_resources = s.de_ctx(data_resource_count as usize)?;
+        }
+        Ok(FLegacyPackageHeader{summary: package_summary, name_map, imports, exports, preload_dependencies, data_resources})
     }
-    fn serialize<S: Write>(&self, s: &mut S) -> Result<()> {
-        bail!("TODO");
+    fn serialize<S: Write + Seek>(&self, s: &mut S) -> Result<()> {
+
+        let package_summary_offset: u64 = s.stream_position()?;
+        let mut package_summary: FPackageFileSummary = self.summary.clone();
+
+        // Write initial package summary. We will overwrite it again once we have the offsets of the relevant data members
+        FPackageFileSummary::serialize(&package_summary, s)?;
+
+        // Write name map. It directly follows the package summary
+        FLegacyPackageNameMap::write(&self.name_map, s, &mut package_summary, package_summary_offset)?;
+
+        // Write soft object paths offset. We do not actually write any soft object paths because they must be serialized inline for cooked assets,
+        // because zen header cannot preserve object paths that are not serialized inline
+        let soft_object_paths_offset = (s.stream_position()? - package_summary_offset) as i32;
+        package_summary.soft_object_paths = FCountOffsetPair{count: 0, offset: soft_object_paths_offset};
+
+        // Serialize import map
+        let imports_start_offset = (s.stream_position()? - package_summary_offset) as i32;
+        package_summary.imports = FCountOffsetPair{count: self.imports.len() as i32, offset: imports_start_offset};
+        for object_import in &self.imports {
+            FObjectImport::serialize(&object_import, s, &package_summary)?;
+        }
+
+        // Serialize export map
+        let exports_start_offset = (s.stream_position()? - package_summary_offset) as i32;
+        package_summary.exports = FCountOffsetPair{count: self.exports.len() as i32, offset: exports_start_offset};
+        for object_export in &self.exports {
+            FObjectExport::serialize(&object_export, s, &package_summary)?;
+        }
+
+        // Serialize depends map. This is just an empty placeholder for cooked assets
+        let depends_start_offset = (s.stream_position()? - package_summary_offset) as i32;
+        package_summary.depends_offset = depends_start_offset;
+        let empty_depends_list: Vec<FPackageIndex> = Vec::new();
+        for _ in 0..self.exports.len() {
+            s.ser(empty_depends_list.clone())?;
+        }
+
+        // Serialize asset registry data. This is just an empty placeholder for cooked assets
+        let asset_registry_data_start_offset = (s.stream_position()? - package_summary_offset) as i32;
+        package_summary.asset_registry_data_offset = asset_registry_data_start_offset;
+        let asset_object_data_count: i32 = 0;
+        s.ser(asset_object_data_count)?;
+
+        // World composition data from the package summary is not used in runtime and is only written for legacy world composition assets in 4.27, so write 0
+        package_summary.world_tile_info_data_offset = 0;
+
+        // Serialize preload dependencies
+        let preload_dependencies_start_offset = (s.stream_position()? - package_summary_offset) as i32;
+        package_summary.preload_dependencies = FCountOffsetPair{count: self.preload_dependencies.len() as i32, offset: preload_dependencies_start_offset};
+        for preload_dependency in &self.preload_dependencies {
+            s.ser(preload_dependency.clone())?;
+        }
+
+        // Serialize data resources if they are present. Write -1 if there are no data resources
+        package_summary.data_resource_offset = -1;
+        if !self.data_resources.is_empty() {
+
+            let data_resources_start_offset = (s.stream_position()? - package_summary_offset) as i32;
+            package_summary.data_resource_offset = data_resources_start_offset;
+
+            // Might be worth moving into the enum once UE adds more data resource versions
+            let data_resource_version: u32 = 1;
+            s.ser(data_resource_version)?;
+
+            let data_resource_count: i32 = self.data_resources.len() as i32;
+            s.ser(data_resource_count)?;
+            for data_resource in &self.data_resources {
+                s.ser(data_resource.clone())?;
+            }
+        }
+
+        // Set total size of the serialized header. The rest of the data is not considered the part of it
+        let total_header_size = (s.stream_position()? - package_summary_offset) as i32;
+        package_summary.total_header_size = total_header_size;
+        let position_after_writing_header = s.stream_position()?;
+
+        // This would be written after export blobs, but since this value is meaningless in cooked games, write 0
+        package_summary.bulk_data_start_offset = 0;
+
+        // Go back to the initial package summary and overwrite it with a patched-up version
+        s.seek(SeekFrom::Start(package_summary_offset))?;
+        FPackageFileSummary::serialize(&package_summary, s)?;
+
+        // Seek back to the position after the header
+        s.seek(SeekFrom::Start(position_after_writing_header))?;
+        Ok({})
     }
 }
 
