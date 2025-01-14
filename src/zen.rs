@@ -127,8 +127,8 @@ impl Readable for FPackageFileVersion {
 impl Writeable for FPackageFileVersion {
     #[instrument(skip_all, name = "FPackageFileVersion")]
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
-        s.ser(self.file_version_ue4)?;
-        s.ser(self.file_version_ue5)?;
+        s.ser(&self.file_version_ue4)?;
+        s.ser(&self.file_version_ue5)?;
         Ok({})
     }
 }
@@ -151,8 +151,8 @@ impl Readable for FCustomVersion {
 impl Writeable for FCustomVersion {
     #[instrument(skip_all, name = "FCustomVersion")]
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
-        s.ser(self.key)?;
-        s.ser(self.version)?;
+        s.ser(&self.key)?;
+        s.ser(&self.version)?;
         Ok({})
     }
 }
@@ -314,7 +314,7 @@ impl Readable for FPackageIndex {
 impl Writeable for FPackageIndex {
     #[instrument(skip_all, name = "FPackageIndex")]
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
-        s.ser(self.index)
+        s.ser(&self.index)
     }
 }
 

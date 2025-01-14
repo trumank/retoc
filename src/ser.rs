@@ -63,7 +63,7 @@ pub(crate) trait ReadExt: Read {
 impl<T> WriteExt for T where T: Write {}
 pub(crate) trait WriteExt: Write {
     #[instrument(skip_all)]
-    fn ser<T: Writeable>(&mut self, value: T) -> Result<()>
+    fn ser<T: Writeable>(&mut self, value: &T) -> Result<()>
     where
         Self: Sized,
     {

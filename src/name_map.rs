@@ -93,8 +93,8 @@ impl Writeable for FMappedName
 {
     #[instrument(skip_all, name = "FMinimalName")]
     fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
-        stream.ser(self.index_and_type)?;
-        stream.ser(self.number)?;
+        stream.ser(&self.index_and_type)?;
+        stream.ser(&self.number)?;
         Ok({})
     }
 }

@@ -20,7 +20,7 @@ use std::{
 
 use aes::cipher::KeyInit as _;
 use anyhow::{bail, Context, Result};
-use bitflags::bitflags;
+use bitflags::{bitflags, Flags};
 use clap::Parser;
 use iostore::IoStoreTrait;
 use rayon::prelude::*;
@@ -816,7 +816,7 @@ impl Readable for FPackageId {
 }
 impl Writeable for FPackageId {
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
-        s.ser(self.0)
+        s.ser(&self.0)
     }
 }
 impl FPackageId {
@@ -890,7 +890,7 @@ impl Readable for FIoChunkId {
 }
 impl Writeable for FIoChunkId {
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
-        s.ser(self.id)
+        s.ser(&self.id)
     }
 }
 impl FIoChunkId {
@@ -922,10 +922,10 @@ impl Readable for FIoContainerId {
 }
 impl Writeable for FIoContainerId {
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
-        s.ser(self.id)
+        s.ser(&self.id)
     }
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy)]
 struct FIoOffsetAndLength {
     data: [u8; 10],
 }
@@ -936,27 +936,34 @@ impl Readable for FIoOffsetAndLength {
 }
 impl Writeable for FIoOffsetAndLength {
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
-        s.ser(self.data)
+        s.ser(&self.data)
     }
 }
 impl FIoOffsetAndLength {
-    fn get_offset(&self) -> u64 {
+    pub(crate) fn new(offset: u64, length: u64) -> Self {
+        let mut new = Self::default();
+        new.set_offset(offset);
+        new.set_length(length);
+        new
+    }
+    pub(crate) fn get_offset(&self) -> u64 {
         let d = self.data;
         u64::from_be_bytes([0, 0, 0, d[0], d[1], d[2], d[3], d[4]])
     }
-    fn set_offset(&mut self, offset: u64) {
+    pub(crate) fn set_offset(&mut self, offset: u64) {
         let bytes = offset.to_be_bytes();
         self.data[0..5].copy_from_slice(&bytes[0..5]);
     }
-    fn get_length(&self) -> u64 {
+    pub(crate) fn get_length(&self) -> u64 {
         let d = self.data;
         u64::from_be_bytes([0, 0, 0, d[5], d[6], d[7], d[8], d[9]])
     }
-    fn set_length(&mut self, offset: u64) {
+    pub(crate) fn set_length(&mut self, offset: u64) {
         let bytes = offset.to_be_bytes();
         self.data[5..10].copy_from_slice(&bytes[0..5]);
     }
 }
+#[derive(Default, Clone, Copy)]
 struct FIoStoreTocCompressedBlockEntry {
     data: [u8; 12],
 }
@@ -979,31 +986,44 @@ impl Readable for FIoStoreTocCompressedBlockEntry {
     }
 }
 impl FIoStoreTocCompressedBlockEntry {
-    fn get_offset(&self) -> u64 {
+    pub(crate) fn new(
+        offset: u64,
+        compressed_size: u32,
+        uncompressed_size: u32,
+        compression_method_index: u8,
+    ) -> Self {
+        let mut new = Self::default();
+        new.set_offset(offset);
+        new.set_compressed_size(compressed_size);
+        new.set_uncompressed_size(uncompressed_size);
+        new.set_compression_method_index(compression_method_index);
+        new
+    }
+    pub(crate) fn get_offset(&self) -> u64 {
         let d = self.data;
         u64::from_le_bytes([d[0], d[1], d[2], d[3], d[4], 0, 0, 0])
     }
-    fn set_offset(&mut self, value: u64) {
+    pub(crate) fn set_offset(&mut self, value: u64) {
         self.data[0..5].copy_from_slice(&value.to_le_bytes()[0..5]);
     }
-    fn get_compressed_size(&self) -> u32 {
+    pub(crate) fn get_compressed_size(&self) -> u32 {
         let d = self.data;
         u32::from_le_bytes([d[5], d[6], d[7], 0])
     }
-    fn set_compressed_size(&mut self, value: u32) {
+    pub(crate) fn set_compressed_size(&mut self, value: u32) {
         self.data[5..8].copy_from_slice(&value.to_le_bytes()[0..3]);
     }
-    fn get_uncompressed_size(&self) -> u32 {
+    pub(crate) fn get_uncompressed_size(&self) -> u32 {
         let d = self.data;
         u32::from_le_bytes([d[8], d[9], d[10], 0])
     }
-    fn set_uncompressed_size(&mut self, value: u32) {
+    pub(crate) fn set_uncompressed_size(&mut self, value: u32) {
         self.data[8..11].copy_from_slice(&value.to_le_bytes()[0..3]);
     }
-    fn get_compression_method_index(&self) -> u8 {
+    pub(crate) fn get_compression_method_index(&self) -> u8 {
         self.data[11]
     }
-    fn set_compression_method_index(&mut self, value: u8) {
+    pub(crate) fn set_compression_method_index(&mut self, value: u8) {
         self.data[11] = value;
     }
 }
@@ -1024,6 +1044,11 @@ impl Readable for FIoChunkHash {
         Ok(Self { data: stream.de()? })
     }
 }
+impl Writeable for FIoChunkHash {
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.data)
+    }
+}
 #[derive(Debug)]
 struct FIoStoreTocEntryMeta {
     chunk_hash: FIoChunkHash,
@@ -1035,6 +1060,13 @@ impl Readable for FIoStoreTocEntryMeta {
             chunk_hash: stream.de()?,
             flags: stream.de()?,
         })
+    }
+}
+impl Writeable for FIoStoreTocEntryMeta {
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.chunk_hash)?;
+        s.ser(&self.flags)?;
+        Ok(())
     }
 }
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1056,10 +1088,10 @@ impl Readable for FGuid {
 }
 impl Writeable for FGuid {
     fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
-        stream.ser(self.a)?;
-        stream.ser(self.b)?;
-        stream.ser(self.c)?;
-        stream.ser(self.d)?;
+        stream.ser(&self.a)?;
+        stream.ser(&self.b)?;
+        stream.ser(&self.c)?;
+        stream.ser(&self.d)?;
         Ok({})
     }
 }
@@ -1073,7 +1105,7 @@ impl Readable for FSHAHash {
 }
 impl Writeable for FSHAHash {
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
-        s.ser(self.data)
+        s.ser(&self.data)
     }
 }
 impl std::fmt::Debug for FSHAHash {
@@ -1105,9 +1137,19 @@ impl Readable for EIoContainerFlags {
         Self::from_bits(stream.de()?).context("invalid EIoContainerFlags value")
     }
 }
+impl Writeable for EIoContainerFlags {
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.bits())
+    }
+}
 impl Readable for FIoStoreTocEntryMetaFlags {
     fn de<S: Read>(stream: &mut S) -> Result<Self> {
         Self::from_bits(stream.de()?).context("invalid FIoStoreTocEntryMetaFlags value")
+    }
+}
+impl Writeable for FIoStoreTocEntryMetaFlags {
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.bits())
     }
 }
 
@@ -1132,7 +1174,7 @@ impl Readable for EIoStoreTocVersion {
 }
 impl Writeable for EIoStoreTocVersion {
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
-        s.ser(*self as u8)
+        s.ser(&(*self as u8))
     }
 }
 

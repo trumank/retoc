@@ -30,8 +30,8 @@ impl Writeable for FMinimalName
 {
     #[instrument(skip_all, name = "FMinimalName")]
     fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
-        stream.ser(self.index)?;
-        stream.ser(self.number)?;
+        stream.ser(&self.index)?;
+        stream.ser(&self.number)?;
         Ok({})
     }
 }
@@ -53,8 +53,8 @@ impl Readable for FCountOffsetPair {
 impl Writeable for FCountOffsetPair {
     #[instrument(skip_all, name = "FCountOffsetPair")]
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
-        s.ser(self.count)?;
-        s.ser(self.offset)?;
+        s.ser(&self.count)?;
+        s.ser(&self.offset)?;
         Ok({})
     }
 }
@@ -76,8 +76,8 @@ impl Readable for FGenerationInfo {
 impl Writeable for FGenerationInfo {
     #[instrument(skip_all, name = "FGenerationInfo")]
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
-        s.ser(self.export_count)?;
-        s.ser(self.name_count)?;
+        s.ser(&self.export_count)?;
+        s.ser(&self.name_count)?;
         Ok({})
     }
 }
@@ -105,11 +105,11 @@ impl Readable for FEngineVersion {
 impl Writeable for FEngineVersion {
     #[instrument(skip_all, name = "FEngineVersion")]
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
-        s.ser(self.engine_major)?;
-        s.ser(self.engine_minor)?;
-        s.ser(self.engine_patch)?;
-        s.ser(self.changelist)?;
-        s.ser(self.branch.clone())?;
+        s.ser(&self.engine_major)?;
+        s.ser(&self.engine_minor)?;
+        s.ser(&self.engine_patch)?;
+        s.ser(&self.changelist)?;
+        s.ser(&self.branch.clone())?;
         Ok({})
     }
 }
@@ -164,24 +164,24 @@ impl Writeable for FLegacyPackageVersioningInfo {
 
         // Derive legacy file version from the presence of UE5 file version
         let legacy_file_version: i32 = if self.package_file_version.file_version_ue5 != 0 { FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE5 } else { FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE4 };
-        s.ser(legacy_file_version)?;
+        s.ser(&legacy_file_version)?;
 
         // There should never be a UE3 version written
         let legacy_ue3_version: i32 = 0;
-        s.ser(legacy_ue3_version)?;
+        s.ser(&legacy_ue3_version)?;
 
         // Write raw file version for UE4 and UE5 (if package is UE5)
         // Note that we should not write any versions if this package was loaded as unversioned, since our own version is only used internally and the game should still assume latest
         let raw_file_version_ue4: i32 = if self.is_unversioned { 0 } else { self.package_file_version.file_version_ue4 };
-        s.ser(raw_file_version_ue4)?;
+        s.ser(&raw_file_version_ue4)?;
         if legacy_file_version == FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE5 {
             let raw_file_version_ue5: i32 = if self.is_unversioned { 0 } else { self.package_file_version.file_version_ue5 };
-            s.ser(raw_file_version_ue5)?;
+            s.ser(&raw_file_version_ue5)?;
         }
 
         let licensee_version = if self.is_unversioned { 0 } else { self.licensee_version };
-        s.ser(licensee_version)?;
-        s.ser(self.custom_versions.clone())?;
+        s.ser(&licensee_version)?;
+        s.ser(&self.custom_versions.clone())?;
         Ok({})
     }
 }
@@ -366,102 +366,102 @@ impl FPackageFileSummary {
     fn serialize<S: Write>(&self, s: &mut S) -> Result<()> {
 
         let asset_magic_tag: u32 = FPackageFileSummary::PACKAGE_FILE_TAG;
-        s.ser(asset_magic_tag)?;
+        s.ser(&asset_magic_tag)?;
 
         // Make sure we are not attempting to write versions before UE4 NonOuterPackageImport. Our export/import serialization does not support such old versions
         if self.versioning_info.package_file_version.file_version_ue4 < EUnrealEngineObjectUE4Version::NonOuterPackageImport as i32 {
             bail!("Attempt to write UE4 package file version {}, which is below minimum supported version {}", self.versioning_info.package_file_version.file_version_ue4, EUnrealEngineObjectUE4Version::NonOuterPackageImport as i32);
         }
 
-        s.ser(self.versioning_info.clone())?;
-        s.ser(self.total_header_size)?;
-        s.ser(self.package_name.clone())?;
-        s.ser(self.package_flags)?;
+        s.ser(&self.versioning_info.clone())?;
+        s.ser(&self.total_header_size)?;
+        s.ser(&self.package_name.clone())?;
+        s.ser(&self.package_flags)?;
 
-        s.ser(self.names)?;
+        s.ser(&self.names)?;
         if self.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::AddSoftObjectPathList as i32 {
-            s.ser(self.soft_object_paths)?;
+            s.ser(&self.soft_object_paths)?;
         }
 
         // Not written when editor only data is filtered out
         if !self.is_filter_editor_only() {
             let localization_id: String = "".to_string();
-            s.ser(localization_id)?;
+            s.ser(&localization_id)?;
         }
         // Not written when cooking or filtering editor only data
         let gatherable_text_data = FCountOffsetPair{count: 0, offset: 0};
-        s.ser(gatherable_text_data)?;
+        s.ser(&gatherable_text_data)?;
 
-        s.ser(self.exports)?;
-        s.ser(self.imports)?;
+        s.ser(&self.exports)?;
+        s.ser(&self.imports)?;
 
         // Serialized for cooked packages, but is always an empty array for each export
         // This is an actual offset somewhere in the package header, but it is not used by anything and the game can handle 0 there
         // So we will write 0 here, but if we wanted to preserve binary equality, we would track this offset when writing the asset header
         let depends_offset: i32 = 0;
-        s.ser(depends_offset)?;
+        s.ser(&depends_offset)?;
 
         // Cooked packages never have soft package references or searchable names
         let soft_package_references = FCountOffsetPair{count: 0, offset: 0};
-        s.ser(soft_package_references)?;
+        s.ser(&soft_package_references)?;
         let searchable_names_offset: i32 = 0;
-        s.ser(searchable_names_offset)?;
+        s.ser(&searchable_names_offset)?;
         // Cooked packages do not have thumbnails
         let thumbnails_table_offset: i32 = 0;
-        s.ser(thumbnails_table_offset)?;
+        s.ser(&thumbnails_table_offset)?;
 
-        s.ser(self.package_guid)?;
+        s.ser(&self.package_guid)?;
 
         // Package generations are always saved as one (0,0) entry for modern packages
         // Note that the FLinkerLoad expects there to still be a single generation, it will crash if there is none
         let package_generations: Vec<FGenerationInfo> = vec![FGenerationInfo{export_count: 0, name_count: 0}];
-        s.ser(package_generations)?;
+        s.ser(&package_generations)?;
         // Persistent package GUID is never written for cooked packages
         if !self.is_filter_editor_only() {
             let persistent_package_guid = FGuid{a: 0, b: 0, c: 0, d: 0};
-            s.ser(persistent_package_guid)?;
+            s.ser(&persistent_package_guid)?;
         }
 
         // Saved and compatible engine versions are always empty for cooked packages
         let saved_by_engine_version = FEngineVersion{engine_major: 0, engine_minor: 0, engine_patch: 0, changelist: 0, branch: "".to_string()};
         let compatible_with_engine_version = FEngineVersion{engine_major: 0, engine_minor: 0, engine_patch: 0, changelist: 0, branch: "".to_string()};
-        s.ser(saved_by_engine_version)?;
-        s.ser(compatible_with_engine_version)?;
+        s.ser(&saved_by_engine_version)?;
+        s.ser(&compatible_with_engine_version)?;
 
         // Unused, always 0 for modern packages
         let compression_flags: u32 = 0;
-        s.ser(compression_flags)?;
+        s.ser(&compression_flags)?;
         // Unused, always empty array for modern UE packages, UE will refuse to load packages where this is not an empty array
         let num_compressed_chunks: i32 = 0;
-        s.ser(num_compressed_chunks)?;
+        s.ser(&num_compressed_chunks)?;
 
-        s.ser(self.package_source)?;
+        s.ser(&self.package_source)?;
 
         // No longer used, always empty
         let additional_packages_to_cook: Vec<String> = vec![];
-        s.ser(additional_packages_to_cook)?;
+        s.ser(&additional_packages_to_cook)?;
 
         // Serialized for packages with filtered editor only data as 1 integer (0x0), not read in runtime
-        s.ser(self.asset_registry_data_offset)?;
+        s.ser(&self.asset_registry_data_offset)?;
         // Written as an offset, but is never read for cooked packages as the data is never written in the header file
-        s.ser(self.bulk_data_start_offset)?;
+        s.ser(&self.bulk_data_start_offset)?;
         // Legacy world composition data, but can very much be written on UE4 games
-        s.ser(self.world_tile_info_data_offset)?;
+        s.ser(&self.world_tile_info_data_offset)?;
 
-        s.ser(self.chunk_ids.clone())?;
-        s.ser(self.preload_dependencies)?;
+        s.ser(&self.chunk_ids.clone())?;
+        s.ser(&self.preload_dependencies)?;
 
         // Only write number of referenced names if this is a UE5 package
-        if self.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::NamesReferencedFromExportData as i32 { s.ser(self.names_referenced_from_export_data_count)?; }
+        if self.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::NamesReferencedFromExportData as i32 { s.ser(&self.names_referenced_from_export_data_count)?; }
 
         // Package trailers should never be written for cooked packages, they are only used for saving EditorBulkData in editor domain with package virtualization
         if self.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::PayloadTOC as i32 {
             let payload_toc_offset: i64 = -1;
-            s.ser(payload_toc_offset)?;
+            s.ser(&payload_toc_offset)?;
         }
 
         // Data resource offset is only written with new bulk data save format, otherwise bulk data meta is simply saved inline
-        if self.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::DataResources as i32 { s.ser(self.data_resource_offset)?; }
+        if self.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::DataResources as i32 { s.ser(&self.data_resource_offset)?; }
 
         Ok({})
     }
@@ -498,13 +498,13 @@ impl FPackageNameMap {
         for i in 0..self.names.len() {
 
             // Write the name string
-            stream.ser(self.names[i].clone())?;
+            stream.ser(&self.names[i].clone())?;
 
             // Write 0 for case preserving and non-case preserving hashes. They are not used by the game
             let non_case_preserving_hash: u16 = 0;
             let case_preserving_hash: u16 = 0;
-            stream.ser(non_case_preserving_hash)?;
-            stream.ser(case_preserving_hash)?;
+            stream.ser(&non_case_preserving_hash)?;
+            stream.ser(&case_preserving_hash)?;
         }
         Ok({})
     }
@@ -552,20 +552,20 @@ impl FObjectImport
     #[instrument(skip_all, name = "FObjectImport")]
     fn serialize<S: Write>(&self, s: &mut S, summary: &FPackageFileSummary) -> Result<()> {
 
-        s.ser(self.class_package)?;
-        s.ser(self.class_name)?;
-        s.ser(self.outer_index)?;
-        s.ser(self.object_name)?;
+        s.ser(&self.class_package)?;
+        s.ser(&self.class_name)?;
+        s.ser(&self.outer_index)?;
+        s.ser(&self.object_name)?;
 
         // We should never be serializing uncooked packages, might be worth to assert here instead of writing an empty name
         if !summary.is_filter_editor_only() {
             let package_name: FMinimalName = FMinimalName::default();
-            s.ser(package_name)?;
+            s.ser(&package_name)?;
         }
 
         let should_serialize_optional = summary.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::OptionalResources as i32;
         if should_serialize_optional {
-            s.ser(self.is_optional)?;
+            s.ser(&self.is_optional)?;
         }
         Ok({})
     }
@@ -658,58 +658,58 @@ impl FObjectExport
     #[instrument(skip_all, name = "FObjectExport")]
     fn serialize<S: Write>(&self, s: &mut S, summary: &FPackageFileSummary) -> Result<()> {
 
-        s.ser(self.class_index)?;
-        s.ser(self.super_index)?;
-        s.ser(self.template_index)?;
-        s.ser(self.outer_index)?;
-        s.ser(self.object_name)?;
-        s.ser(self.object_flags)?;
-        s.ser(self.serial_size)?;
-        s.ser(self.serial_offset)?;
+        s.ser(&self.class_index)?;
+        s.ser(&self.super_index)?;
+        s.ser(&self.template_index)?;
+        s.ser(&self.outer_index)?;
+        s.ser(&self.object_name)?;
+        s.ser(&self.object_flags)?;
+        s.ser(&self.serial_size)?;
+        s.ser(&self.serial_offset)?;
 
         // Forced exports as a concept do not exist in modern engine versions, this property is always false
         let is_forced_export: bool = false;
-        s.ser(is_forced_export)?;
+        s.ser(&is_forced_export)?;
 
-        s.ser(self.is_not_for_client)?;
-        s.ser(self.is_not_for_server)?;
+        s.ser(&self.is_not_for_client)?;
+        s.ser(&self.is_not_for_server)?;
 
         // Package GUID serialization of exports has been removed in UE5. Before then, we serialize an empty GUID
         let should_serialize_package_guid = summary.versioning_info.package_file_version.file_version_ue5 < EUnrealEngineObjectUE5Version::RemoveObjectExportPackageGUID as i32;
         if should_serialize_package_guid {
             let package_guid: FGuid = FGuid{a: 0, b: 0, c: 0, d: 0};
-            s.ser(package_guid)?;
+            s.ser(&package_guid)?;
         }
 
         // Added in UE5. Default to false for old assets
         let should_serialize_inherited_instance = summary.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::TrackObjectExportIsInherited as i32;
         if should_serialize_inherited_instance {
-            s.ser(self.is_inherited_instance)?;
+            s.ser(&self.is_inherited_instance)?;
         }
 
         // Package flags are only relevant for forced exports, which do not exist as a concept anymore, so this value is always 0
         let package_flags: u32 = 0;
-        s.ser(package_flags)?;
+        s.ser(&package_flags)?;
 
-        s.ser(self.is_not_always_loaded_for_editor_game)?;
-        s.ser(self.is_asset)?;
+        s.ser(&self.is_not_always_loaded_for_editor_game)?;
+        s.ser(&self.is_asset)?;
 
         // Assume public hash to be generated for assets before UE5
         let should_serialize_generate_public_hash = summary.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::OptionalResources as i32;
         if should_serialize_generate_public_hash {
-            s.ser(self.generate_public_hash)?;
+            s.ser(&self.generate_public_hash)?;
         }
 
-        s.ser(self.first_export_dependency_index)?;
-        s.ser(self.serialize_before_serialize_dependencies)?;
-        s.ser(self.create_before_serialize_dependencies)?;
-        s.ser(self.serialize_before_create_dependencies)?;
-        s.ser(self.create_before_create_dependencies)?;
+        s.ser(&self.first_export_dependency_index)?;
+        s.ser(&self.serialize_before_serialize_dependencies)?;
+        s.ser(&self.create_before_serialize_dependencies)?;
+        s.ser(&self.serialize_before_create_dependencies)?;
+        s.ser(&self.create_before_create_dependencies)?;
 
         let should_serialize_script_props = !summary.uses_unversioned_property_serialization() && summary.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::ScriptSerializationOffset as i32;
         if should_serialize_script_props {
-            s.ser(self.script_serialization_start_offset)?;
-            s.ser(self.script_serialization_end_offset)?;
+            s.ser(&self.script_serialization_start_offset)?;
+            s.ser(&self.script_serialization_end_offset)?;
         }
         Ok({})
     }
@@ -740,13 +740,13 @@ impl Readable for FObjectDataResource {
 }
 impl Writeable for FObjectDataResource {
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
-        s.ser(self.flags)?;
-        s.ser(self.serial_offset)?;
-        s.ser(self.duplicate_serial_offset)?;
-        s.ser(self.serial_size)?;
-        s.ser(self.raw_size)?;
-        s.ser(self.outer_index)?;
-        s.ser(self.legacy_bulk_data_flags)?;
+        s.ser(&self.flags)?;
+        s.ser(&self.serial_offset)?;
+        s.ser(&self.duplicate_serial_offset)?;
+        s.ser(&self.serial_size)?;
+        s.ser(&self.raw_size)?;
+        s.ser(&self.outer_index)?;
+        s.ser(&self.legacy_bulk_data_flags)?;
         Ok({})
     }
 }
@@ -851,14 +851,14 @@ impl FLegacyPackageHeader {
         package_summary.depends_offset = depends_start_offset;
         let empty_depends_list: Vec<FPackageIndex> = Vec::new();
         for _ in 0..self.exports.len() {
-            s.ser(empty_depends_list.clone())?;
+            s.ser(&empty_depends_list.clone())?;
         }
 
         // Serialize asset registry data. This is just an empty placeholder for cooked assets
         let asset_registry_data_start_offset = (s.stream_position()? - package_summary_offset) as i32;
         package_summary.asset_registry_data_offset = asset_registry_data_start_offset;
         let asset_object_data_count: i32 = 0;
-        s.ser(asset_object_data_count)?;
+        s.ser(&asset_object_data_count)?;
 
         // World composition data from the package summary is not used in runtime and is only written for legacy world composition assets in 4.27, so write 0
         package_summary.world_tile_info_data_offset = 0;
@@ -867,7 +867,7 @@ impl FLegacyPackageHeader {
         let preload_dependencies_start_offset = (s.stream_position()? - package_summary_offset) as i32;
         package_summary.preload_dependencies = FCountOffsetPair{count: self.preload_dependencies.len() as i32, offset: preload_dependencies_start_offset};
         for preload_dependency in &self.preload_dependencies {
-            s.ser(preload_dependency.clone())?;
+            s.ser(&preload_dependency.clone())?;
         }
 
         // Serialize data resources if they are present. Write -1 if there are no data resources
@@ -879,12 +879,12 @@ impl FLegacyPackageHeader {
 
             // Might be worth moving into the enum once UE adds more data resource versions
             let data_resource_version: u32 = 1;
-            s.ser(data_resource_version)?;
+            s.ser(&data_resource_version)?;
 
             let data_resource_count: i32 = self.data_resources.len() as i32;
-            s.ser(data_resource_count)?;
+            s.ser(&data_resource_count)?;
             for data_resource in &self.data_resources {
-                s.ser(data_resource.clone())?;
+                s.ser(&data_resource.clone())?;
             }
         }
 
