@@ -8,6 +8,7 @@ mod name_map;
 mod script_objects;
 mod ser;
 mod zen;
+mod asset_conversion;
 
 use aes::cipher::KeyInit as _;
 use anyhow::{bail, Context, Result};
@@ -414,7 +415,7 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
                 std::fs::create_dir_all(dir)?;
                 // TODO @trumank: Iterate over package IDs from store entries instead
                 bail!("FIXME");
-                legacy_asset::build_legacy(
+                asset_conversion::build_legacy(
                     &mut package_context,
                     FPackageId(0),
                     path,
@@ -1443,7 +1444,7 @@ enum EIoChunkType {
     //ContainerHeader = 0xa,
 }
 
-use crate::legacy_asset::FZenPackageContext;
+use crate::asset_conversion::FZenPackageContext;
 use crate::zen::{EUnrealEngineObjectUE5Version, FPackageFileVersion};
 use directory_index::*;
 use zen::get_package_name;

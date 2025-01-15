@@ -1,6 +1,6 @@
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use strum::FromRepr;
 use tracing::instrument;
 
@@ -201,6 +201,25 @@ impl Readable for FBulkDataMapEntry {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, FromRepr)]
+#[repr(u8)]
+pub(crate) enum EExportFilterFlags {
+    None = 0,
+    NotForClient = 1,
+    NotForServer = 2,
+}
+
+// This is only a small set of object flags that we want to interpret
+#[derive(Debug, Clone, Copy, PartialEq, FromRepr)]
+#[repr(u32)]
+pub(crate) enum EObjectFlags {
+    Public = 0x00000001,
+    Standalone = 0x00000002,
+    Transactional = 0x00000008,
+    ClassDefaultObject = 0x00000010,
+    ArchetypeObject = 0x00000020,
+}
+
 #[derive(Debug)]
 #[repr(C)] // Needed to determine the number of export entries
 pub(crate) struct FExportMapEntry {
@@ -213,7 +232,8 @@ pub(crate) struct FExportMapEntry {
     pub(crate) template_index: FPackageObjectIndex,
     pub(crate) public_export_hash: u64,
     pub(crate) object_flags: u32,
-    pub(crate) filter_flags: u8,
+    // Contrary to the popular belief and the name of this field, this is not in fact bitflags - this is just a single enum value
+    pub(crate) filter_flags: EExportFilterFlags,
     padding: [u8; 3],
 }
 impl Readable for FExportMapEntry {
@@ -229,7 +249,7 @@ impl Readable for FExportMapEntry {
             template_index: s.de()?,
             public_export_hash: s.de()?,
             object_flags: s.de()?,
-            filter_flags: s.de()?,
+            filter_flags: EExportFilterFlags::from_repr(s.de()?).ok_or_else(|| { anyhow!("Failed to decode filter flags") })?,
             padding: s.de()?
         })
     }
@@ -376,6 +396,9 @@ pub(crate) struct FZenPackageHeader {
     pub(crate) shader_map_hashes: Vec<FSHAHash>,
 }
 impl FZenPackageHeader {
+    pub(crate) fn package_name(&self) -> String {
+        self.name_map.get(self.summary.name).to_string()
+    }
     #[instrument(skip_all, name = "FZenPackageHeader")]
     pub(crate) fn deserialize<S: Read + Seek>(s: &mut S, store_entry: StoreEntry) -> Result<Self> {
 
