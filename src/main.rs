@@ -9,6 +9,16 @@ mod script_objects;
 mod ser;
 mod zen;
 
+use aes::cipher::KeyInit as _;
+use anyhow::{bail, Context, Result};
+use bitflags::{bitflags, Flags};
+use clap::Parser;
+use iostore::IoStoreTrait;
+use iostore_writer::IoStoreWriter;
+use rayon::prelude::*;
+use ser::*;
+use serde::Serializer;
+use std::fmt::{Display, Formatter};
 use std::{
     collections::HashMap,
     fs::File,
@@ -17,15 +27,6 @@ use std::{
     str::FromStr,
     sync::{Arc, Mutex},
 };
-use std::fmt::{Display, Formatter};
-use aes::cipher::KeyInit as _;
-use anyhow::{bail, Context, Result};
-use bitflags::{bitflags, Flags};
-use clap::Parser;
-use iostore::IoStoreTrait;
-use rayon::prelude::*;
-use serde::Serializer;
-use ser::*;
 use strum::{AsRefStr, FromRepr};
 use tracing::instrument;
 
@@ -132,22 +133,23 @@ fn main() -> Result<()> {
             .aes_keys
             .insert(FGuid::default(), AesKey::from_str(&aes)?);
     }
+    let config = Arc::new(config);
 
     match args.action {
-        Action::Manifest(action) => action_manifest(action, &config),
-        Action::List(action) => action_list(action, &config),
-        Action::Verify(action) => action_verify(action, &config),
-        Action::Unpack(action) => action_unpack(action, &config),
+        Action::Manifest(action) => action_manifest(action, config),
+        Action::List(action) => action_list(action, config),
+        Action::Verify(action) => action_verify(action, config),
+        Action::Unpack(action) => action_unpack(action, config),
 
-        Action::UnpackRaw(action) => action_unpack_raw(action, &config),
-        Action::PackRaw(action) => action_pack_raw(action, &config),
+        Action::UnpackRaw(action) => action_unpack_raw(action, config),
+        Action::PackRaw(action) => action_pack_raw(action, config),
 
-        Action::ExtractLegacy(action) => action_extract_legacy(action, &config),
-        Action::Get(action) => action_get(action, &config),
+        Action::ExtractLegacy(action) => action_extract_legacy(action, config),
+        Action::Get(action) => action_get(action, config),
     }
 }
 
-fn action_manifest(args: ActionManifest, config: &Config) -> Result<()> {
+fn action_manifest(args: ActionManifest, config: Arc<Config>) -> Result<()> {
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Serum/Serum/Content/Paks/pakchunk0-Windows.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Nuclear Nightmare/NuclearNightmare/Content/Paks/NuclearNightmare-Windows.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/The Isle/TheIsle/Content/Paks/pakchunk0-WindowsClient.utoc";
@@ -219,7 +221,7 @@ fn action_manifest(args: ActionManifest, config: &Config) -> Result<()> {
     Ok(())
 }
 
-fn action_list(args: ActionList, config: &Config) -> Result<()> {
+fn action_list(args: ActionList, config: Arc<Config>) -> Result<()> {
     let iostore = iostore::open(args.utoc, config)?;
 
     for chunk in iostore.chunks() {
@@ -245,7 +247,7 @@ fn action_list(args: ActionList, config: &Config) -> Result<()> {
     Ok(())
 }
 
-fn action_verify(args: ActionVerify, config: &Config) -> Result<()> {
+fn action_verify(args: ActionVerify, config: Arc<Config>) -> Result<()> {
     let mut stream = BufReader::new(File::open(&args.utoc)?);
     let ucas = &args.utoc.with_extension("ucas");
 
@@ -279,18 +281,18 @@ fn action_verify(args: ActionVerify, config: &Config) -> Result<()> {
             let chunk_id = toc.chunks[i];
             let data = toc.read(ucas, i as u32)?;
 
-            let chunk_type = chunk_id.get_chunk_type();
-            match chunk_type {
-                EIoChunkType::ExportBundleData => {
-                    let package_name = get_package_name(&data)?;
-                    let package_id = FPackageId::from_name(&package_name);
-                    let id = FIoChunkId::from_package_id(package_id, 0, chunk_type);
-                    if id != chunk_id {
-                        bail!("chunk ID mismatch")
-                    }
-                }
-                _ => {} // TODO
-            }
+            //let chunk_type = chunk_id.get_chunk_type();
+            //match chunk_type {
+            //    EIoChunkType::ExportBundleData => {
+            //        let package_name = get_package_name(&data)?;
+            //        let package_id = FPackageId::from_name(&package_name);
+            //        let id = FIoChunkId::from_package_id(package_id, 0, chunk_type);
+            //        if id != chunk_id {
+            //            bail!("chunk ID mismatch")
+            //        }
+            //    }
+            //    _ => {} // TODO
+            //}
 
             let hash = blake3::hash(&data);
 
@@ -315,7 +317,7 @@ fn action_verify(args: ActionVerify, config: &Config) -> Result<()> {
     Ok(())
 }
 
-fn action_unpack(args: ActionUnpack, config: &Config) -> Result<()> {
+fn action_unpack(args: ActionUnpack, config: Arc<Config>) -> Result<()> {
     let mut stream = BufReader::new(File::open(&args.utoc)?);
     let ucas = &args.utoc.with_extension("ucas");
 
@@ -350,7 +352,7 @@ fn action_unpack(args: ActionUnpack, config: &Config) -> Result<()> {
     Ok(())
 }
 
-fn action_unpack_raw(args: ActionUnpackRaw, config: &Config) -> Result<()> {
+fn action_unpack_raw(args: ActionUnpackRaw, config: Arc<Config>) -> Result<()> {
     let iostore = iostore::open(args.utoc, config)?;
 
     let output = args.output;
@@ -373,11 +375,19 @@ fn action_unpack_raw(args: ActionUnpackRaw, config: &Config) -> Result<()> {
     Ok(())
 }
 
-fn action_pack_raw(args: ActionPackRaw, config: &Config) -> Result<()> {
+fn action_pack_raw(args: ActionPackRaw, _config: Arc<Config>) -> Result<()> {
+    let mut writer = IoStoreWriter::new(args.utoc)?;
+    for entry in args.input.join("chunks").read_dir()? {
+        let entry = entry?;
+        let chunk_id = FIoChunkId::from_str(entry.file_name().to_string_lossy().as_ref())?;
+        let data = std::fs::read(entry.path())?;
+        writer.write_chunk(chunk_id, None, &data)?;
+    }
+    writer.finalize()?;
     Ok(())
 }
 
-fn action_extract_legacy(args: ActionExtractLegacy, config: &Config) -> Result<()> {
+fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Result<()> {
     let iostore = iostore::open(args.utoc, config)?;
 
     let output = args.output;
@@ -425,7 +435,7 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: &Config) -> Result<(
     Ok(())
 }
 
-fn action_get(args: ActionGet, config: &Config) -> Result<()> {
+fn action_get(args: ActionGet, config: Arc<Config>) -> Result<()> {
     let iostore = iostore::open(args.utoc, config)?;
     let data = iostore.read(args.chunk_id)?;
     std::io::stdout().write_all(&data)?;
@@ -491,6 +501,35 @@ impl Readable for FIoStoreTocHeader {
         Ok(res)
     }
 }
+impl Writeable for FIoStoreTocHeader {
+    #[instrument(skip_all, name = "FIoStoreTocHeader")]
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.toc_magic)?;
+        s.ser(&self.version)?;
+        s.ser(&self.reserved0)?;
+        s.ser(&self.reserved1)?;
+        s.ser(&self.toc_header_size)?;
+        s.ser(&self.toc_entry_count)?;
+        s.ser(&self.toc_compressed_block_entry_count)?;
+        s.ser(&self.toc_compressed_block_entry_size)?;
+        s.ser(&self.compression_method_name_count)?;
+        s.ser(&self.compression_method_name_length)?;
+        s.ser(&self.compression_block_size)?;
+        s.ser(&self.directory_index_size)?;
+        s.ser(&self.partition_count)?;
+        s.ser(&self.container_id)?;
+        s.ser(&self.encryption_key_guid)?;
+        s.ser(&self.container_flags)?;
+        s.ser(&self.reserved3)?;
+        s.ser(&self.reserved4)?;
+        s.ser(&self.toc_chunk_perfect_hash_seeds_count)?;
+        s.ser(&self.partition_size)?;
+        s.ser(&self.toc_chunks_without_perfect_hash_count)?;
+        s.ser(&self.reserved7)?;
+        s.ser(&self.reserved8)?;
+        Ok(())
+    }
+}
 
 #[instrument(skip_all)]
 fn read_chunk_ids<R: Read>(stream: &mut R, header: &FIoStoreTocHeader) -> Result<Vec<FIoChunkId>> {
@@ -552,6 +591,20 @@ fn read_compression_methods<R: Read>(
     }
     Ok(names)
 }
+#[instrument(skip_all)]
+fn write_compression_methods<S: Write>(s: &mut S, toc: &Toc) -> Result<()> {
+    for name in toc.compression_methods.iter().skip(1) {
+        let buffer: Vec<u8> = name
+            .as_bytes()
+            .iter()
+            .copied()
+            .chain(std::iter::repeat(0))
+            .take(32)
+            .collect();
+        s.ser(&buffer)?;
+    }
+    Ok(())
+}
 
 #[instrument(skip_all)]
 fn read_chunk_block_signatures<R: Read>(
@@ -611,10 +664,21 @@ fn read_meta<S: Read>(
         Ok(res)
     })
 }
+#[instrument(skip_all)]
+fn write_meta<S: Write>(s: &mut S, toc: &Toc) -> Result<()> {
+    for meta in &toc.chunk_metas {
+        s.ser(meta)?;
+        if toc.version >= EIoStoreTocVersion::ReplaceIoChunkHashWithIoHash {
+            s.write_all(&[0; 3])?;
+        }
+    }
+    Ok(())
+}
 
 #[derive(Default)]
 struct Toc {
-    header: FIoStoreTocHeader,
+    config: Arc<Config>,
+
     chunks: Vec<FIoChunkId>,
     chunk_offset_lengths: Vec<FIoOffsetAndLength>,
     chunk_perfect_hash_seeds: Vec<i32>,
@@ -624,7 +688,14 @@ struct Toc {
     signatures: Option<TocSignatures>,
     chunk_metas: Vec<FIoStoreTocEntryMeta>,
 
-    directory_index: Option<FIoDirectoryIndexResource>,
+    version: EIoStoreTocVersion,
+    compression_block_size: u32,
+    partition_size: u64,
+    partition_count: u32,
+    encryption_key_guid: FGuid,
+    container_flags: EIoContainerFlags,
+
+    directory_index: FIoDirectoryIndexResource,
     file_map: HashMap<String, u32>,
     file_map_lower: HashMap<String, u32>,
     file_map_rev: HashMap<u32, String>,
@@ -637,11 +708,11 @@ struct TocSignatures {
 }
 impl Readable for Toc {
     fn de<S: Read>(stream: &mut S) -> Result<Self> {
-        stream.de_ctx(&Config::default())
+        stream.de_ctx(Arc::new(Config::default()))
     }
 }
-impl ReadableCtx<&Config> for Toc {
-    fn de<S: Read>(stream: &mut S, config: &Config) -> Result<Self> {
+impl ReadableCtx<Arc<Config>> for Toc {
+    fn de<S: Read>(stream: &mut S, config: Arc<Config>) -> Result<Self> {
         let header: FIoStoreTocHeader = stream.de()?;
 
         let chunk_ids = read_chunk_ids(stream, &header)?;
@@ -652,7 +723,7 @@ impl ReadableCtx<&Config> for Toc {
         let compression_methods = read_compression_methods(stream, &header)?;
 
         let signatures = read_chunk_block_signatures(stream, &header)?;
-        let directory_index = read_directory_index(stream, &header, config)?;
+        let directory_index = read_directory_index(stream, &header, &config)?;
         let chunk_metas = read_meta(stream, &header)?;
 
         // build indexes
@@ -665,18 +736,16 @@ impl ReadableCtx<&Config> for Toc {
         let mut file_map_lower: HashMap<String, u32> = Default::default();
         let mut file_map_rev: HashMap<u32, String> = Default::default();
         let directory_index = if !directory_index.is_empty() {
-            let directory_index =
-                FIoDirectoryIndexResource::read(&mut Cursor::new(directory_index))?;
-            directory_index.iter_root(|user_data, path| {
-                let path = path.join("/");
-                file_map_lower.insert(path.to_ascii_lowercase(), user_data);
-                file_map.insert(path.clone(), user_data);
-                file_map_rev.insert(user_data, path);
-            });
-            Some(directory_index)
+            FIoDirectoryIndexResource::de(&mut Cursor::new(directory_index))?
         } else {
-            None
+            FIoDirectoryIndexResource::default()
         };
+        directory_index.iter_root(|user_data, path| {
+            let path = path.join("/");
+            file_map_lower.insert(path.to_ascii_lowercase(), user_data);
+            file_map.insert(path.clone(), user_data);
+            file_map_rev.insert(user_data, path);
+        });
         let chunk_id_map = chunk_ids
             .iter()
             .enumerate()
@@ -684,7 +753,8 @@ impl ReadableCtx<&Config> for Toc {
             .collect();
 
         Ok(Toc {
-            header,
+            config,
+
             chunks: chunk_ids,
             chunk_offset_lengths,
             chunk_perfect_hash_seeds,
@@ -694,6 +764,13 @@ impl ReadableCtx<&Config> for Toc {
             signatures,
             chunk_metas,
 
+            version: header.version,
+            compression_block_size: header.compression_block_size,
+            partition_size: header.partition_size,
+            partition_count: header.partition_count,
+            encryption_key_guid: header.encryption_key_guid,
+            container_flags: header.container_flags,
+
             directory_index,
             file_map,
             file_map_lower,
@@ -702,7 +779,55 @@ impl ReadableCtx<&Config> for Toc {
         })
     }
 }
-fn align(value: u64, alignment: u64) -> u64 {
+impl Writeable for Toc {
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        let mut directory_index_buffer = vec![];
+        self.directory_index
+            .ser(&mut Cursor::new(&mut directory_index_buffer))?;
+        // TODO encrypt directory index
+
+        let header = FIoStoreTocHeader {
+            toc_magic: *b"-==--==--==--==-",
+            version: self.version,
+            reserved0: 0,
+            reserved1: 0,
+            toc_header_size: std::mem::size_of::<FIoStoreTocHeader>() as u32,
+            toc_entry_count: self.chunks.len() as u32,
+            toc_compressed_block_entry_count: self.compression_blocks.len() as u32,
+            toc_compressed_block_entry_size: std::mem::size_of::<FIoStoreTocCompressedBlockEntry>()
+                as u32,
+            compression_method_name_count: self.compression_methods.len() as u32 - 1,
+            compression_method_name_length: 32,
+            compression_block_size: self.compression_block_size,
+            directory_index_size: directory_index_buffer.len() as u32,
+            partition_count: 1,
+            container_id: FIoContainerId::default(), // TODO
+            encryption_key_guid: Default::default(),
+            container_flags: EIoContainerFlags::empty(),
+            reserved3: 0,
+            reserved4: 0,
+            toc_chunk_perfect_hash_seeds_count: 0,
+            partition_size: 0,                        // TODO
+            toc_chunks_without_perfect_hash_count: 0, // TODO
+            reserved7: 0,
+            reserved8: [0, 0, 0, 0, 0],
+        };
+        s.ser(&header)?;
+
+        s.ser(&self.chunks)?;
+        s.ser(&self.chunk_offset_lengths)?;
+        s.ser(&self.compression_blocks)?;
+        write_compression_methods(s, &self)?;
+        s.ser(&directory_index_buffer)?;
+        write_meta(s, &self)?;
+
+        Ok(())
+    }
+}
+fn align_u64(value: u64, alignment: u64) -> u64 {
+    (value + alignment - 1) & !(alignment - 1)
+}
+fn align_usize(value: usize, alignment: usize) -> usize {
     (value + alignment - 1) & !(alignment - 1)
 }
 impl Toc {
@@ -722,9 +847,9 @@ impl Toc {
         let offset = offset_and_length.get_offset();
         let size = offset_and_length.get_length();
 
-        let compression_block_size = self.header.compression_block_size;
+        let compression_block_size = self.compression_block_size;
         let first_block_index = (offset / compression_block_size as u64) as usize;
-        let last_block_index = ((align(offset + size, compression_block_size as u64) - 1)
+        let last_block_index = ((align_u64(offset + size, compression_block_size as u64) - 1)
             / compression_block_size as u64) as usize;
 
         let num_compressed_blocks = (1 + last_block_index - first_block_index) as u32;
@@ -736,8 +861,7 @@ impl Toc {
             let compression_block = &self.compression_blocks[block_index];
             compressed_size += compression_block.get_compressed_size() as u64;
             if partition_index < 0 {
-                partition_index =
-                    (compression_block.get_offset() / self.header.partition_size) as i32;
+                partition_index = (compression_block.get_offset() / self.partition_size) as i32;
             }
         }
 
@@ -771,40 +895,83 @@ impl Toc {
         let offset = offset_and_length.get_offset();
         let size = offset_and_length.get_length();
 
-        let compression_block_size = self.header.compression_block_size;
+        let compression_block_size = self.compression_block_size;
         let first_block_index = (offset / compression_block_size as u64) as usize;
-        let last_block_index = ((align(offset + size, compression_block_size as u64) - 1)
+        let last_block_index = ((align_u64(offset + size, compression_block_size as u64) - 1)
             / compression_block_size as u64) as usize;
 
         let blocks = &self.compression_blocks[first_block_index..=last_block_index];
+        let aes_key = if self.container_flags.contains(EIoContainerFlags::Encrypted) {
+            Some(
+                self.config
+                    .aes_keys
+                    .get(&self.encryption_key_guid)
+                    .with_context(|| {
+                        format!(
+                            "container is encrypted but no AES key for {:?} supplied",
+                            self.encryption_key_guid
+                        )
+                    })?,
+            )
+        } else {
+            None
+        };
+
+        use aes::cipher::BlockDecrypt;
 
         let mut max_buffer = 0;
         let mut total_size = 0;
         for b in blocks {
             total_size += b.get_uncompressed_size() as usize;
-            max_buffer = max_buffer.max(b.get_compressed_size() as usize);
+            max_buffer = max_buffer.max(align_usize(b.get_compressed_size() as usize, 16));
         }
-        let mut data = vec![0; total_size];
+        let mut data = vec![0; align_usize(total_size, 16)];
         let mut buffer = vec![0; max_buffer];
         let mut cur = 0;
         for block in blocks {
-            let out = &mut data[cur..cur + block.get_uncompressed_size() as usize];
-            //println!("{i} {block:#?}");
+            let compressed_size = block.get_compressed_size() as usize;
+            let uncompressed_size = block.get_uncompressed_size() as usize;
+            //eprintln!("{block:#?}");
+
+            let out = &mut data[cur..];
 
             cas_stream.seek(SeekFrom::Start(block.get_offset()))?;
+            // TODO use compression names table
             match block.get_compression_method_index() {
                 0 => {
-                    cas_stream.read_exact(out)?;
+                    if let Some(key) = aes_key {
+                        let out = &mut out[..align_usize(uncompressed_size, 16)];
+                        cas_stream.read_exact(out)?;
+                        for block in out.chunks_mut(16) {
+                            key.0.decrypt_block(block.into());
+                        }
+                    } else {
+                        cas_stream.read_exact(&mut out[..uncompressed_size])?;
+                    }
                 }
                 1 => {
-                    let tmp = &mut buffer[..block.get_compressed_size() as usize];
-                    cas_stream.read_exact(tmp)?;
-                    oodle_loader::decompress().unwrap()(tmp, out);
+                    let tmp = if let Some(key) = aes_key {
+                        let tmp = &mut buffer[..align_usize(compressed_size, 16)];
+                        cas_stream.read_exact(tmp)?;
+
+                        for block in tmp.chunks_mut(16) {
+                            key.0.decrypt_block(block.into());
+                        }
+                        &tmp[..compressed_size]
+                    } else {
+                        let tmp = &mut buffer[..compressed_size];
+                        cas_stream.read_exact(tmp)?;
+                        tmp
+                    };
+                    oodle_loader::decompress().unwrap()(tmp, &mut out[..uncompressed_size]);
                 }
                 other => todo!("{other}"),
             }
-            cur += block.get_uncompressed_size() as usize;
+            cur += uncompressed_size;
         }
+
+        data.truncate(total_size);
+        std::fs::write("chunk.bin", &data)?;
         Ok(data)
     }
 }
@@ -959,7 +1126,7 @@ impl FIoOffsetAndLength {
     }
     pub(crate) fn set_offset(&mut self, offset: u64) {
         let bytes = offset.to_be_bytes();
-        self.data[0..5].copy_from_slice(&bytes[0..5]);
+        self.data[0..5].copy_from_slice(&bytes[3..]);
     }
     pub(crate) fn get_length(&self) -> u64 {
         let d = self.data;
@@ -967,10 +1134,11 @@ impl FIoOffsetAndLength {
     }
     pub(crate) fn set_length(&mut self, offset: u64) {
         let bytes = offset.to_be_bytes();
-        self.data[5..10].copy_from_slice(&bytes[0..5]);
+        self.data[5..10].copy_from_slice(&bytes[3..]);
     }
 }
 #[derive(Default, Clone, Copy)]
+#[repr(transparent)]
 struct FIoStoreTocCompressedBlockEntry {
     data: [u8; 12],
 }
@@ -990,6 +1158,11 @@ impl std::fmt::Debug for FIoStoreTocCompressedBlockEntry {
 impl Readable for FIoStoreTocCompressedBlockEntry {
     fn de<S: Read>(stream: &mut S) -> Result<Self> {
         Ok(Self { data: stream.de()? })
+    }
+}
+impl Writeable for FIoStoreTocCompressedBlockEntry {
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.data)
     }
 }
 impl FIoStoreTocCompressedBlockEntry {
@@ -1036,6 +1209,13 @@ impl FIoStoreTocCompressedBlockEntry {
 }
 struct FIoChunkHash {
     data: [u8; 32],
+}
+impl FIoChunkHash {
+    fn from_blake3(hash: &[u8; 32]) -> FIoChunkHash {
+        let mut data = [0; 32];
+        data[0..20].copy_from_slice(&hash[0..20]);
+        Self { data }
+    }
 }
 impl std::fmt::Debug for FIoChunkHash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1187,6 +1367,7 @@ impl Writeable for EIoStoreTocVersion {
 }
 
 #[derive(Debug, Default)]
+#[repr(C)]
 struct FIoStoreTocHeader {
     toc_magic: [u8; 16],
     version: EIoStoreTocVersion,
@@ -1270,22 +1451,38 @@ use zen::get_package_name;
 mod directory_index {
     use super::*;
 
-    #[derive(Debug)]
+    #[derive(Debug, Default)]
     pub struct FIoDirectoryIndexResource {
-        mount_point: String,
+        pub(crate) mount_point: String,
         directory_entries: Vec<FIoDirectoryIndexEntry>,
         file_entries: Vec<FIoFileIndexEntry>,
         string_table: Vec<String>,
     }
-    impl FIoDirectoryIndexResource {
-        pub fn read<S: Read>(stream: &mut S) -> Result<Self> {
+    impl Readable for FIoDirectoryIndexResource {
+        fn de<S: Read>(s: &mut S) -> Result<Self> {
             Ok(Self {
-                mount_point: stream.de()?,
-                directory_entries: stream.de()?,
-                file_entries: stream.de()?,
-                string_table: stream.de()?,
+                mount_point: s.de()?,
+                directory_entries: s.de()?,
+                file_entries: s.de()?,
+                string_table: s.de()?,
             })
         }
+    }
+    impl Writeable for FIoDirectoryIndexResource {
+        fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+            if !self.file_entries.is_empty() {
+                s.ser(&self.mount_point)?;
+                s.ser(&(self.directory_entries.len() as u32))?;
+                s.ser(&self.directory_entries)?;
+                s.ser(&(self.file_entries.len() as u32))?;
+                s.ser(&self.file_entries)?;
+                s.ser(&(self.string_table.len() as u32))?;
+                s.ser(&self.string_table)?;
+            }
+            Ok(())
+        }
+    }
+    impl FIoDirectoryIndexResource {
         pub fn iter_root<F>(&self, mut visitor: F)
         where
             F: FnMut(u32, &[&str]),
@@ -1429,13 +1626,23 @@ mod directory_index {
                 }
             }
             impl Readable for Option<$name> {
-                fn de<S: Read>(stream: &mut S) -> Result<Self> {
-                    Ok($name::new(stream.de()?))
+                fn de<S: Read>(s: &mut S) -> Result<Self> {
+                    Ok($name::new(s.de()?))
                 }
             }
             impl Readable for $name {
-                fn de<S: Read>(stream: &mut S) -> Result<Self> {
-                    Ok(Self(stream.de()?))
+                fn de<S: Read>(s: &mut S) -> Result<Self> {
+                    Ok(Self(s.de()?))
+                }
+            }
+            impl Writeable for Option<$name> {
+                fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+                    s.ser(&self.map(|id| id.0).unwrap_or(u32::MAX))
+                }
+            }
+            impl Writeable for $name {
+                fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+                    s.ser(&self.0)
                 }
             }
         };
@@ -1451,12 +1658,20 @@ mod directory_index {
         user_data: u32,
     }
     impl Readable for FIoFileIndexEntry {
-        fn de<S: Read>(stream: &mut S) -> Result<Self> {
+        fn de<S: Read>(s: &mut S) -> Result<Self> {
             Ok(Self {
-                name: stream.de()?,
-                next_file_entry: stream.de()?,
-                user_data: stream.de()?,
+                name: s.de()?,
+                next_file_entry: s.de()?,
+                user_data: s.de()?,
             })
+        }
+    }
+    impl Writeable for FIoFileIndexEntry {
+        fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+            s.ser(&self.name)?;
+            s.ser(&self.next_file_entry)?;
+            s.ser(&self.user_data)?;
+            Ok(())
         }
     }
 
@@ -1468,13 +1683,22 @@ mod directory_index {
         first_file_entry: Option<IdFile>,
     }
     impl Readable for FIoDirectoryIndexEntry {
-        fn de<S: Read>(stream: &mut S) -> Result<Self> {
+        fn de<S: Read>(s: &mut S) -> Result<Self> {
             Ok(Self {
-                name: stream.de()?,
-                first_child_entry: stream.de()?,
-                next_sibling_entry: stream.de()?,
-                first_file_entry: stream.de()?,
+                name: s.de()?,
+                first_child_entry: s.de()?,
+                next_sibling_entry: s.de()?,
+                first_file_entry: s.de()?,
             })
+        }
+    }
+    impl Writeable for FIoDirectoryIndexEntry {
+        fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+            s.ser(&self.name)?;
+            s.ser(&self.first_child_entry)?;
+            s.ser(&self.next_sibling_entry)?;
+            s.ser(&self.first_file_entry)?;
+            Ok(())
         }
     }
 

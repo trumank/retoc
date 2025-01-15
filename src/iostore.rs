@@ -14,7 +14,7 @@ use crate::{
     Config, EIoChunkType, FIoChunkId, FPackageId, Toc,
 };
 
-pub fn open<P: AsRef<Path>>(path: P, config: &Config) -> Result<Box<dyn IoStoreTrait>> {
+pub fn open<P: AsRef<Path>>(path: P, config: Arc<Config>) -> Result<Box<dyn IoStoreTrait>> {
     Ok(if path.as_ref().is_dir() {
         Box::new(IoStoreBackend::open(path, config)?)
     } else {
@@ -56,13 +56,13 @@ impl IoStoreBackend {
     pub fn new() -> Result<Self> {
         Ok(Self { containers: vec![] })
     }
-    pub fn open<P: AsRef<Path>>(dir: P, config: &Config) -> Result<Self> {
+    pub fn open<P: AsRef<Path>>(dir: P, config: Arc<Config>) -> Result<Self> {
         let mut containers: Vec<Box<dyn IoStoreTrait>> = vec![];
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
             if path.extension() == Some(OsStr::new("utoc")) {
-                containers.push(Box::new(IoStoreContainer::open(path, config)?));
+                containers.push(Box::new(IoStoreContainer::open(path, config.clone())?));
             }
         }
         Ok(Self { containers })
@@ -101,7 +101,7 @@ pub struct IoStoreContainer {
     container_header: Option<FIoContainerHeader>,
 }
 impl IoStoreContainer {
-    pub fn open<P: AsRef<Path>>(toc_path: P, config: &Config) -> Result<Self> {
+    pub fn open<P: AsRef<Path>>(toc_path: P, config: Arc<Config>) -> Result<Self> {
         let path = toc_path.as_ref().to_path_buf();
         let toc: Toc = BufReader::new(File::open(&path)?).de_ctx(config)?;
         let cas = BufReader::new(File::open(toc_path.as_ref().with_extension("ucas"))?);
