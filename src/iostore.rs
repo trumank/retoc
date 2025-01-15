@@ -58,7 +58,8 @@ pub trait IoStoreTrait {
     fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + '_>;
     fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + '_>;
     fn child_containers(&self) -> Box<dyn Iterator<Item = &dyn IoStoreTrait> + '_>;
-    fn file_name(&self, chunk_id: FIoChunkId) -> Option<&str>;
+    /// Get absolute path (including mount point) if it has one
+    fn chunk_path(&self, chunk_id: FIoChunkId) -> Option<String>;
     fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntryRef>;
 }
 
@@ -73,8 +74,8 @@ impl ChunkInfo<'_> {
     pub fn container(&self) -> &IoStoreContainer {
         self.container
     }
-    pub fn file_name(&self) -> Option<&str> {
-        self.container.file_name(self.id)
+    pub fn path(&self) -> Option<String> {
+        self.container.chunk_path(self.id)
     }
     pub fn read(&self) -> Result<Vec<u8>> {
         self.container.read(self.id)
@@ -150,8 +151,8 @@ impl IoStoreTrait for IoStoreBackend {
     fn child_containers(&self) -> Box<dyn Iterator<Item = &dyn IoStoreTrait> + '_> {
         Box::new(self.containers.iter().map(Box::as_ref))
     }
-    fn file_name(&self, chunk_id: FIoChunkId) -> Option<&str> {
-        self.containers.iter().find_map(|c| c.file_name(chunk_id))
+    fn chunk_path(&self, chunk_id: FIoChunkId) -> Option<String> {
+        self.containers.iter().find_map(|c| c.chunk_path(chunk_id))
     }
     fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntryRef> {
         self.containers
@@ -256,12 +257,8 @@ impl IoStoreTrait for IoStoreContainer {
     fn child_containers(&self) -> Box<dyn Iterator<Item = &dyn IoStoreTrait> + '_> {
         Box::new(std::iter::empty())
     }
-    fn file_name(&self, chunk_id: FIoChunkId) -> Option<&str> {
-        self.toc
-            .chunk_id_map
-            .get(&chunk_id)
-            .and_then(|index| self.toc.file_map_rev.get(index))
-            .map(String::as_str)
+    fn chunk_path(&self, chunk_id: FIoChunkId) -> Option<String> {
+        self.toc.file_name(chunk_id)
     }
     fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntryRef> {
         self.container_header

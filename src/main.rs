@@ -271,7 +271,7 @@ fn action_list(args: ActionList, config: Arc<Config>) -> Result<()> {
             chunk.container().container_name(),
             hex::encode(id),
             chunk_type.as_ref(),
-            chunk.file_name().unwrap_or("-"),
+            chunk.path().as_deref().unwrap_or("-"),
             //package_store_entry,
         );
     }
@@ -456,16 +456,22 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
 
             let chunk_id =
                 FIoChunkId::from_package_id(package_info.id(), 0, EIoChunkType::ExportBundleData);
-            if let Some(file_name) = package_info.container().file_name(chunk_id) {
+            if let Some(package_path) = package_info.container().chunk_path(chunk_id) {
                 if let Some(filter) = &args.filter {
-                    if !file_name.contains(filter) {
+                    if !package_path.contains(filter) {
                         return Ok(());
                     }
                 }
                 if args.verbose {
-                    println!("{file_name}");
+                    println!("{package_path}");
                 }
-                let path = output.join(file_name);
+
+                // TODO make configurable
+                let path = package_path
+                    .strip_prefix("../../../")
+                    .with_context(|| format!("failed to strip mount prefix from {package_path:?}"))?;
+
+                let path = output.join(path);
                 let dir = path.parent().unwrap();
                 fs::create_dir_all(dir)?;
                 asset_conversion::build_legacy(
@@ -729,6 +735,9 @@ fn write_meta<S: Write>(s: &mut S, toc: &Toc) -> Result<()> {
     Ok(())
 }
 
+// UTF-8 path with '/' as separator
+type UEPath = typed_path::Utf8UnixPath;
+
 #[derive(Default)]
 struct Toc {
     config: Arc<Config>,
@@ -887,6 +896,17 @@ fn align_usize(value: usize, alignment: usize) -> usize {
 impl Toc {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+    /// get absolute path (including mount point) for given chunk ID if has one
+    fn file_name(&self, chunk_id: FIoChunkId) -> Option<String> {
+        self.chunk_id_map
+            .get(&chunk_id)
+            .and_then(|index| self.file_map_rev.get(index))
+            .map(|path| {
+                UEPath::new(&self.directory_index.mount_point)
+                    .join(path)
+                    .to_string()
+            })
     }
     //fn get_chunk_info(&self, toc_entry_index: u32) {
     fn get_chunk_info(&self, file_name: &str) -> FIoStoreTocChunkInfo {
