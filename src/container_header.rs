@@ -39,7 +39,7 @@ impl Readable for FIoContainerHeader {
 
         let container_id = s.de()?;
         let package_ids: Vec<_> = s.de()?;
-        let store_entries = s.de_ctx(package_ids.len())?;
+        let store_entries = s.de_ctx((version, package_ids.len()))?;
         let optional_segment_package_ids = s.de()?;
         let optional_segment_store_entries = s.de()?;
         let redirect_name_map = s.de()?;
@@ -75,7 +75,7 @@ impl FIoContainerHeader {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, FromRepr)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
 #[repr(u32)]
 enum EIoContainerHeaderVersion {
     Initial = 0,
@@ -127,7 +127,7 @@ pub(crate) struct StoreEntryRef<'a> {
     pub(crate) shader_map_hashes: &'a [FSHAHash],
 }
 #[derive(Debug, Default)]
-pub(crate) struct StoreEntry{
+pub(crate) struct StoreEntry {
     pub(crate) imported_packages: Vec<FPackageId>,
     pub(crate) shader_map_hashes: Vec<FSHAHash>,
 }
@@ -161,15 +161,19 @@ impl StoreEntries {
         }
     }
 }
-impl ReadableCtx<usize> for StoreEntries {
-    fn de<S: Read>(s: &mut S, package_count: usize) -> Result<Self> {
+impl ReadableCtx<(EIoContainerHeaderVersion, usize)> for StoreEntries {
+    fn de<S: Read>(
+        s: &mut S,
+        (version, package_count): (EIoContainerHeaderVersion, usize),
+    ) -> Result<Self> {
         let buffer: Vec<u8> = s.de()?;
         let mut cur = Cursor::new(buffer);
 
         let mut imported_packages = HashMap::new();
         let mut shader_map_hashes = HashMap::new();
 
-        let entries: Vec<FFilePackageStoreEntry> = cur.de_ctx(package_count)?;
+        let entries: Vec<FFilePackageStoreEntry> =
+            read_array(package_count, &mut cur, |s| s.de_ctx(version))?;
         for (i, entry) in entries.iter().enumerate() {
             let offset = i * std::mem::size_of::<FFilePackageStoreEntry>();
 
@@ -223,12 +227,22 @@ struct FFilePackageStoreEntry {
     imported_packages: TFilePackageStoreEntryCArrayView<FPackageId>,
     shader_map_hashes: TFilePackageStoreEntryCArrayView<FSHAHash>,
 }
-impl Readable for FFilePackageStoreEntry {
-    fn de<S: Read>(s: &mut S) -> Result<Self> {
-        Ok(Self {
-            imported_packages: s.de()?,
-            shader_map_hashes: s.de()?,
-        })
+impl ReadableCtx<EIoContainerHeaderVersion> for FFilePackageStoreEntry {
+    #[instrument(skip_all, name = "FFilePackageStoreEntry ")]
+    fn de<S: Read>(s: &mut S, version: EIoContainerHeaderVersion) -> Result<Self> {
+        if version == EIoContainerHeaderVersion::Initial {
+            todo!()
+        } else {
+            if version < EIoContainerHeaderVersion::NoExportInfo {
+                // TODO
+                let export_count: u32 = s.de()?;
+                let export_bundle_count: u32 = s.de()?;
+            }
+            Ok(Self {
+                imported_packages: s.de()?,
+                shader_map_hashes: s.de()?,
+            })
+        }
     }
 }
 
