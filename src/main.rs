@@ -422,7 +422,7 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
                 fs::create_dir_all(dir)?;
                 legacy_asset::build_legacy(
                     &mut package_context,
-                    FPackageId(0),
+                    package_info.id(),
                     path,
                     package_file_version,
                 )?;
