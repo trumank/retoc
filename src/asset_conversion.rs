@@ -112,6 +112,10 @@ impl<'a> FZenPackageContext<'a> {
         self.package_headers_cache.insert(package_id, shared_package_header.clone());
         Ok(shared_package_header)
     }
+    fn read_full_package_data(&self, package_id: FPackageId) -> anyhow::Result<Vec<u8>> {
+        let package_chunk_id = FIoChunkId::from_package_id(package_id, 0, EIoChunkType::ExportBundleData);
+        self.store_access.read(package_chunk_id)
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
@@ -285,7 +289,7 @@ struct LegacyAssetBuilder<'a, 'b> {
     original_import_order: HashMap<usize, usize>,
 }
 
-// Lifetime: create_asset_builder -> begin_build_summary -> copy_package_sections_from_zen -> build_import_map -> build_export_map -> finalize
+// Lifetime: create_asset_builder -> begin_build_summary -> copy_package_sections -> build_import_map -> build_export_map -> finalize_asset -> write_asset
 fn create_asset_builder<'a, 'b>(package_context: &'a mut FZenPackageContext<'b>, package_id: FPackageId) -> anyhow::Result<LegacyAssetBuilder<'a, 'b>> {
     let zen_package: Rc<FZenPackageHeader> = package_context.lookup(package_id)?;
     package_context.load_script_objects()?;
@@ -336,7 +340,7 @@ fn begin_build_summary(builder: &mut LegacyAssetBuilder, fallback_package_file_v
     builder.legacy_package = FLegacyPackageHeader {summary: legacy_package_summary, ..FLegacyPackageHeader::default()};
     Ok({})
 }
-fn copy_package_sections_from_zen(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
+fn copy_package_sections(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
     // Copy the names from the zen container. Name map format is the same on the high level
     builder.legacy_package.name_map = FPackageNameMap::create_from_names(builder.zen_package.name_map.copy_raw_names());
 
@@ -554,6 +558,23 @@ fn finalize_asset(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
     }
     Ok({})
 }
+fn write_asset<P: AsRef<Path>>(builder: &LegacyAssetBuilder, out_asset_path: P) -> anyhow::Result<()> {
+
+    // Write the asset file first
+    let mut out_asset_buffer: Vec<u8> = Vec::new();
+    let mut asset_cursor = Cursor::new(&mut out_asset_buffer);
+    FLegacyPackageHeader::serialize(&builder.legacy_package, &mut asset_cursor)?;
+
+    std::fs::write(out_asset_path.as_ref(), out_asset_buffer)?;
+
+    // Copy the raw export data from the chunk into the exports file
+    // Note that exports actually start after the zen header
+    let raw_exports_data = builder.package_context.read_full_package_data(builder.package_id)?;
+    let export_file_path = out_asset_path.as_ref().with_extension("uexp");
+
+    std::fs::write(export_file_path, &raw_exports_data[builder.zen_package.summary.header_size as usize..])?;
+    Ok({})
+}
 
 pub(crate) fn build_legacy<P: AsRef<Path>>(
     package_context: &mut FZenPackageContext,
@@ -562,13 +583,15 @@ pub(crate) fn build_legacy<P: AsRef<Path>>(
     fallback_package_file_version: Option<FPackageFileVersion>,
 ) -> anyhow::Result<()> {
 
-    let mut out_buffer: Vec<u8> = Vec::new();
-    let mut cursor = Cursor::new(&mut out_buffer);
+    // Build the asset from zen
+    let mut asset_builder = create_asset_builder(package_context, package_id)?;
+    begin_build_summary(&mut asset_builder, fallback_package_file_version)?;
+    copy_package_sections(&mut asset_builder)?;
+    build_import_map(&mut asset_builder)?;
+    build_export_map(&mut asset_builder)?;
+    finalize_asset(&mut asset_builder)?;
 
-    // arch's sandbox
-    cursor.write_u32::<LE>(0xa687562)?;
-
-    std::fs::write(out_path, out_buffer)?;
-
+    // Write the asset to the file
+    write_asset(&asset_builder, out_path)?;
     Ok(())
 }
