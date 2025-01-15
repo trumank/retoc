@@ -4,8 +4,9 @@ use std::{
 };
 
 use crate::{
-    ser::*, EIoContainerFlags, EIoStoreTocVersion, FIoChunkHash, FIoChunkId, FIoOffsetAndLength,
-    FIoStoreTocCompressedBlockEntry, FIoStoreTocEntryMeta, FIoStoreTocEntryMetaFlags, Toc,
+    ser::*, CompressionMethod, EIoStoreTocVersion, FIoChunkHash, FIoChunkId,
+    FIoOffsetAndLength, FIoStoreTocCompressedBlockEntry, FIoStoreTocEntryMeta,
+    FIoStoreTocEntryMetaFlags, Toc,
 };
 use anyhow::Result;
 use fs_err as fs;
@@ -24,7 +25,7 @@ impl IoStoreWriter {
 
         let mut toc = Toc::new();
         toc.compression_block_size = 0x10000;
-        toc.compression_methods.push("None".into());
+        toc.compression_methods.push(CompressionMethod::None);
         toc.version = EIoStoreTocVersion::OnDemandMetaData;
         toc.directory_index.mount_point = "../../../".to_string();
 

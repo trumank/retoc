@@ -16,6 +16,7 @@ blake3 = "1.5.5"
 byteorder = "1.5.0"
 cityhasher = "0.1.0"
 clap = { version = "4.5.26", features = ["derive"] }
+flate2 = { version = "1.0.35", features = ["zlib"] }
 fs-err = "3.0.0"
 hex = "0.4.3"
 indexmap = { version = "2.7.0", features = ["serde"] }

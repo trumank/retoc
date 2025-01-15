@@ -29,7 +29,7 @@ use std::{
     str::FromStr,
     sync::{Arc, Mutex},
 };
-use strum::{AsRefStr, FromRepr};
+use strum::{AsRefStr, EnumString, FromRepr};
 use tracing::instrument;
 
 fn parse_ue5_object_version(string: &str) -> Result<EUnrealEngineObjectUE5Version> {
@@ -467,9 +467,9 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
                 }
 
                 // TODO make configurable
-                let path = package_path
-                    .strip_prefix("../../../")
-                    .with_context(|| format!("failed to strip mount prefix from {package_path:?}"))?;
+                let path = package_path.strip_prefix("../../../").with_context(|| {
+                    format!("failed to strip mount prefix from {package_path:?}")
+                })?;
 
                 let path = output.join(path);
                 let dir = path.parent().unwrap();
@@ -638,23 +638,28 @@ fn read_compression_blocks<R: Read>(
 fn read_compression_methods<R: Read>(
     stream: &mut R,
     header: &FIoStoreTocHeader,
-) -> Result<Vec<String>> {
-    let mut names = vec!["None".into()];
+) -> Result<Vec<CompressionMethod>> {
+    let mut methods = vec![CompressionMethod::None];
     for _ in 0..header.compression_method_name_count {
-        names.push(String::from_utf8(
+        let name = String::from_utf8(
             stream
                 .de_ctx::<Vec<u8>, _>(header.compression_method_name_length as usize)?
                 .into_iter()
                 .take_while(|&b| b != 0)
                 .collect(),
-        )?);
+        )?;
+        methods.push(
+            CompressionMethod::from_str(&name)
+                .with_context(|| format!("unknown compression method: {name:?}"))?,
+        )
     }
-    Ok(names)
+    Ok(methods)
 }
 #[instrument(skip_all)]
 fn write_compression_methods<S: Write>(s: &mut S, toc: &Toc) -> Result<()> {
     for name in toc.compression_methods.iter().skip(1) {
         let buffer: Vec<u8> = name
+            .as_ref()
             .as_bytes()
             .iter()
             .copied()
@@ -747,7 +752,7 @@ struct Toc {
     chunk_perfect_hash_seeds: Vec<i32>,
     chunk_indices_without_perfect_hash: Vec<i32>,
     compression_blocks: Vec<FIoStoreTocCompressedBlockEntry>,
-    compression_methods: Vec<String>,
+    compression_methods: Vec<CompressionMethod>,
     signatures: Option<TocSignatures>,
     chunk_metas: Vec<FIoStoreTocEntryMeta>,
 
@@ -768,6 +773,12 @@ struct TocSignatures {
     toc_signature: Vec<u8>,
     block_signature: Vec<u8>,
     chunk_block_signatures: Vec<FSHAHash>,
+}
+#[derive(Debug, EnumString, AsRefStr)]
+enum CompressionMethod {
+    None,
+    Zlib,
+    Oodle,
 }
 impl Readable for Toc {
     fn de<S: Read>(stream: &mut S) -> Result<Self> {
@@ -1009,8 +1020,8 @@ impl Toc {
 
             cas_stream.seek(SeekFrom::Start(block.get_offset()))?;
             // TODO use compression names table
-            match block.get_compression_method_index() {
-                0 => {
+            match self.compression_methods[block.get_compression_method_index() as usize] {
+                CompressionMethod::None => {
                     if let Some(key) = aes_key {
                         let out = &mut out[..align_usize(uncompressed_size, 16)];
                         cas_stream.read_exact(out)?;
@@ -1021,7 +1032,23 @@ impl Toc {
                         cas_stream.read_exact(&mut out[..uncompressed_size])?;
                     }
                 }
-                1 => {
+                CompressionMethod::Zlib => {
+                    let tmp = if let Some(key) = aes_key {
+                        let tmp = &mut buffer[..align_usize(compressed_size, 16)];
+                        cas_stream.read_exact(tmp)?;
+
+                        for block in tmp.chunks_mut(16) {
+                            key.0.decrypt_block(block.into());
+                        }
+                        &tmp[..compressed_size]
+                    } else {
+                        let tmp = &mut buffer[..compressed_size];
+                        cas_stream.read_exact(tmp)?;
+                        tmp
+                    };
+                    flate2::read::ZlibDecoder::new(tmp).read_exact(&mut out[..uncompressed_size])?;
+                }
+                CompressionMethod::Oodle => {
                     let tmp = if let Some(key) = aes_key {
                         let tmp = &mut buffer[..align_usize(compressed_size, 16)];
                         cas_stream.read_exact(tmp)?;
@@ -1037,7 +1064,6 @@ impl Toc {
                     };
                     oodle_loader::decompress().unwrap()(tmp, &mut out[..uncompressed_size]);
                 }
-                other => todo!("{other}"),
             }
             cur += uncompressed_size;
         }

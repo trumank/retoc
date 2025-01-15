@@ -227,6 +227,11 @@ impl IoStoreTrait for IoStoreContainer {
             "has_container_header: {}",
             self.container_header.is_some()
         );
+        indent_println!(
+            depth,
+            "compression_names: {:?}",
+            self.toc.compression_methods
+        );
     }
     fn read(&self, chunk_id: FIoChunkId) -> Result<Vec<u8>> {
         let index = *self.toc.chunk_id_map.get(&chunk_id).with_context(|| {
