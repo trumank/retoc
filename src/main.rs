@@ -68,9 +68,9 @@ struct ActionUnpackRaw {
 
 #[derive(Parser, Debug)]
 struct ActionPackRaw {
-    #[arg(index = 2)]
-    input: PathBuf,
     #[arg(index = 1)]
+    input: PathBuf,
+    #[arg(index = 2)]
     utoc: PathBuf,
 }
 
@@ -920,12 +920,10 @@ impl Toc {
         use aes::cipher::BlockDecrypt;
 
         let mut max_buffer = 0;
-        let mut total_size = 0;
         for b in blocks {
-            total_size += b.get_uncompressed_size() as usize;
             max_buffer = max_buffer.max(align_usize(b.get_compressed_size() as usize, 16));
         }
-        let mut data = vec![0; align_usize(total_size, 16)];
+        let mut data = vec![0; align_usize(size as usize, 16)];
         let mut buffer = vec![0; max_buffer];
         let mut cur = 0;
         for block in blocks {
@@ -970,8 +968,7 @@ impl Toc {
             cur += uncompressed_size;
         }
 
-        data.truncate(total_size);
-        std::fs::write("chunk.bin", &data)?;
+        data.truncate(size as usize);
         Ok(data)
     }
 }

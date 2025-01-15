@@ -49,7 +49,7 @@ impl IoStoreWriter {
 
         let mut offset = self.cas_stream.stream_position()?;
 
-        let offset_and_length = FIoOffsetAndLength::new(offset, data.len() as u64);
+        let start_block = self.toc.compression_blocks.len();
 
         let mut hasher = blake3::Hasher::new();
         for block in data.chunks(self.toc.compression_block_size as usize) {
@@ -73,6 +73,11 @@ impl IoStoreWriter {
             chunk_hash: FIoChunkHash::from_blake3(hash.as_bytes()),
             flags: FIoStoreTocEntryMetaFlags::empty(),
         };
+
+        let offset_and_length = FIoOffsetAndLength::new(
+            start_block as u64 * self.toc.compression_block_size as u64,
+            data.len() as u64,
+        );
 
         self.toc.chunks.push(chunk_id);
         self.toc.chunk_offset_lengths.push(offset_and_length);
