@@ -5,8 +5,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use anyhow::{Context, Result};
 use fs_err as fs;
-use anyhow::{Context as _, Result};
 
 use crate::{
     container_header::{FIoContainerHeader, StoreEntryRef},
@@ -154,10 +154,10 @@ impl IoStoreContainer {
 }
 impl IoStoreTrait for IoStoreContainer {
     fn read(&self, chunk_id: FIoChunkId) -> Result<Vec<u8>> {
-        self.toc.read(
-            &mut *self.cas.lock().unwrap(),
-            self.toc.chunk_id_map[&chunk_id],
-        )
+        let index = *self.toc.chunk_id_map.get(&chunk_id).with_context(|| {
+            format!("container {:?} does not contain {:?}", self.name, chunk_id)
+        })?;
+        self.toc.read(&mut *self.cas.lock().unwrap(), index)
     }
     fn has_chunk_id(&self, chunk_id: FIoChunkId) -> bool {
         self.toc.chunk_id_map.contains_key(&chunk_id)
