@@ -26,6 +26,7 @@ pub trait IoStoreTrait {
     fn read(&self, chunk_id: FIoChunkId) -> Result<Vec<u8>>;
     fn has_chunk_id(&self, chunk_id: FIoChunkId) -> bool;
     fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + '_>;
+    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + '_>;
     fn file_name(&self, chunk_id: FIoChunkId) -> Option<&str>;
     fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntryRef>;
 }
@@ -46,6 +47,19 @@ impl ChunkInfo<'_> {
     }
     pub fn read(&self) -> Result<Vec<u8>> {
         self.container.read(self.id)
+    }
+}
+
+pub struct PackageInfo<'a> {
+    id: FPackageId,
+    container: &'a IoStoreContainer,
+}
+impl PackageInfo<'_> {
+    pub fn id(&self) -> FPackageId {
+        self.id
+    }
+    pub fn container(&self) -> &IoStoreContainer {
+        self.container
     }
 }
 
@@ -81,6 +95,9 @@ impl IoStoreTrait for IoStoreBackend {
     }
     fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + '_> {
         Box::new(self.containers.iter().flat_map(|c| c.chunks()))
+    }
+    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + '_> {
+        Box::new(self.containers.iter().flat_map(|c| c.packages()))
     }
     fn file_name(&self, chunk_id: FIoChunkId) -> Option<&str> {
         self.containers.iter().find_map(|c| c.file_name(chunk_id))
@@ -150,6 +167,17 @@ impl IoStoreTrait for IoStoreContainer {
             id,
             container: self,
         }))
+    }
+    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + '_> {
+        Box::new(
+            self.container_header
+                .iter()
+                .flat_map(|header| header.package_ids())
+                .map(|&id| PackageInfo {
+                    id,
+                    container: self,
+                }),
+        )
     }
     fn file_name(&self, chunk_id: FIoChunkId) -> Option<&str> {
         self.toc

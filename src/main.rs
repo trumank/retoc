@@ -13,6 +13,7 @@ use aes::cipher::KeyInit as _;
 use anyhow::{bail, Context, Result};
 use bitflags::{bitflags, Flags};
 use clap::Parser;
+use fs_err as fs;
 use iostore::IoStoreTrait;
 use iostore_writer::IoStoreWriter;
 use rayon::prelude::*;
@@ -26,7 +27,6 @@ use std::{
     str::FromStr,
     sync::{Arc, Mutex},
 };
-use fs_err as fs;
 use strum::{AsRefStr, FromRepr};
 use tracing::instrument;
 
@@ -164,7 +164,12 @@ fn action_manifest(args: ActionManifest, config: Arc<Config>) -> Result<()> {
     let entries = Arc::new(Mutex::new(vec![]));
 
     toc.file_map.keys().par_bridge().try_for_each_init(
-        || (entries.clone(), BufReader::new(fs::File::open(ucas).unwrap())),
+        || {
+            (
+                entries.clone(),
+                BufReader::new(fs::File::open(ucas).unwrap()),
+            )
+        },
         |(entries, ucas), file_name| -> Result<()> {
             let chunk_info = toc.get_chunk_info(file_name);
 
@@ -398,9 +403,12 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
     let mut package_context = FZenPackageContext::create(iostore.as_ref());
 
     let mut count = 0;
-    iostore.chunks().try_for_each(|chunk| -> Result<()> {
-        if chunk.id().get_chunk_type() == EIoChunkType::ExportBundleData {
-            if let Some(file_name) = chunk.file_name() {
+    iostore
+        .packages()
+        .try_for_each(|package_info| -> Result<()> {
+            let chunk_id =
+                FIoChunkId::from_package_id(package_info.id(), 0, EIoChunkType::ExportBundleData);
+            if let Some(file_name) = package_info.container().file_name(chunk_id) {
                 if let Some(filter) = &args.filter {
                     if !file_name.contains(filter) {
                         return Ok(());
@@ -412,8 +420,6 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
                 let path = output.join(file_name);
                 let dir = path.parent().unwrap();
                 fs::create_dir_all(dir)?;
-                // TODO @trumank: Iterate over package IDs from store entries instead
-                bail!("FIXME");
                 legacy_asset::build_legacy(
                     &mut package_context,
                     FPackageId(0),
@@ -422,9 +428,8 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
                 )?;
                 count += 1;
             }
-        }
-        Ok(())
-    })?;
+            Ok(())
+        })?;
 
     println!(
         "unpacked {} legacy assets to {}",

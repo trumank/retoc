@@ -73,6 +73,9 @@ impl FIoContainerHeader {
         let index = *self.package_entry_map.get(&package_id)?;
         Some(self.store_entries.get_ref(index))
     }
+    pub(crate) fn package_ids(&self) -> &[FPackageId] {
+        &self.package_ids
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
