@@ -73,6 +73,9 @@ impl FIoContainerHeader {
         let index = *self.package_entry_map.get(&package_id)?;
         Some(self.store_entries.get_ref(index))
     }
+    pub(crate) fn package_ids(&self) -> &[FPackageId] {
+        &self.package_ids
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
@@ -250,11 +253,12 @@ impl ReadableCtx<EIoContainerHeaderVersion> for FFilePackageStoreEntry {
 mod test {
     use super::*;
 
-    use std::{fs::File, io::BufReader};
+    use fs_err as fs;
+    use std::io::BufReader;
 
     #[test]
     fn test_container_header() -> Result<()> {
-        let mut stream = BufReader::new(File::open("containerheader.bin")?);
+        let mut stream = BufReader::new(fs::File::open("containerheader.bin")?);
 
         let header = ser_hex::read("trace.json", &mut stream, FIoContainerHeader::de)?;
         dbg!(header.store_entries.shader_map_hashes);

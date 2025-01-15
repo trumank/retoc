@@ -487,11 +487,12 @@ impl FZenPackageHeader {
 mod test {
     use super::*;
 
-    use std::{fs::File, io::BufReader};
+    use fs_err as fs;
+    use std::io::BufReader;
 
     #[test]
     fn test_zen() -> Result<()> {
-        let mut stream = BufReader::new(File::open(
+        let mut stream = BufReader::new(fs::File::open(
             //"zen_out/AbioticFactor/Content/Audio/Abiotic_Dialog_NarrativeNPC.uasset",
             "bad.uasset",
         )?);

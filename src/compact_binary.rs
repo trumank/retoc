@@ -213,11 +213,12 @@ fn read_field<S: Read>(stream: &mut Ctx<S>, mut tag: ECbFieldTypeFlags) -> Resul
 mod test {
     use super::*;
 
-    use std::{fs::File, io::BufReader};
+    use fs_err as fs;
+    use std::io::BufReader;
 
     #[test]
     fn test_compact_binary() -> Result<()> {
-        let mut stream = BufReader::new(File::open("asdf/out/packagestore.manifest")?);
+        let mut stream = BufReader::new(fs::File::open("asdf/out/packagestore.manifest")?);
 
         let mut field = ser_hex::read("trace.json", &mut stream, read_compact_binary)?;
 
@@ -256,7 +257,7 @@ mod test {
             _ => unreachable!(),
         }
 
-        std::fs::write("packagestore.json", serde_json::to_vec(&field)?)?;
+        fs::write("packagestore.json", serde_json::to_vec(&field)?)?;
 
         Ok(())
     }

@@ -1,12 +1,12 @@
 use std::{
     ffi::OsStr,
-    fs::File,
     io::BufReader,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context, Result};
+use fs_err as fs;
 
 use crate::{
     container_header::{FIoContainerHeader, StoreEntryRef},
@@ -26,6 +26,7 @@ pub trait IoStoreTrait {
     fn read(&self, chunk_id: FIoChunkId) -> Result<Vec<u8>>;
     fn has_chunk_id(&self, chunk_id: FIoChunkId) -> bool;
     fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + '_>;
+    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + '_>;
     fn file_name(&self, chunk_id: FIoChunkId) -> Option<&str>;
     fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntryRef>;
 }
@@ -49,6 +50,19 @@ impl ChunkInfo<'_> {
     }
 }
 
+pub struct PackageInfo<'a> {
+    id: FPackageId,
+    container: &'a IoStoreContainer,
+}
+impl PackageInfo<'_> {
+    pub fn id(&self) -> FPackageId {
+        self.id
+    }
+    pub fn container(&self) -> &IoStoreContainer {
+        self.container
+    }
+}
+
 struct IoStoreBackend {
     containers: Vec<Box<dyn IoStoreTrait>>,
 }
@@ -58,7 +72,7 @@ impl IoStoreBackend {
     }
     pub fn open<P: AsRef<Path>>(dir: P, config: Arc<Config>) -> Result<Self> {
         let mut containers: Vec<Box<dyn IoStoreTrait>> = vec![];
-        for entry in std::fs::read_dir(dir)? {
+        for entry in fs::read_dir(dir.as_ref())? {
             let entry = entry?;
             let path = entry.path();
             if path.extension() == Some(OsStr::new("utoc")) {
@@ -82,6 +96,9 @@ impl IoStoreTrait for IoStoreBackend {
     fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + '_> {
         Box::new(self.containers.iter().flat_map(|c| c.chunks()))
     }
+    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + '_> {
+        Box::new(self.containers.iter().flat_map(|c| c.packages()))
+    }
     fn file_name(&self, chunk_id: FIoChunkId) -> Option<&str> {
         self.containers.iter().find_map(|c| c.file_name(chunk_id))
     }
@@ -96,15 +113,15 @@ pub struct IoStoreContainer {
     name: Option<String>,
     path: PathBuf,
     toc: Toc,
-    cas: Arc<Mutex<BufReader<File>>>,
+    cas: Arc<Mutex<BufReader<fs::File>>>,
 
     container_header: Option<FIoContainerHeader>,
 }
 impl IoStoreContainer {
     pub fn open<P: AsRef<Path>>(toc_path: P, config: Arc<Config>) -> Result<Self> {
         let path = toc_path.as_ref().to_path_buf();
-        let toc: Toc = BufReader::new(File::open(&path)?).de_ctx(config)?;
-        let cas = BufReader::new(File::open(toc_path.as_ref().with_extension("ucas"))?);
+        let toc: Toc = BufReader::new(fs::File::open(&path)?).de_ctx(config)?;
+        let cas = BufReader::new(fs::File::open(toc_path.as_ref().with_extension("ucas"))?);
 
         let mut container = Self {
             name: path.file_stem().map(|f| f.to_string_lossy().into()),
@@ -137,10 +154,10 @@ impl IoStoreContainer {
 }
 impl IoStoreTrait for IoStoreContainer {
     fn read(&self, chunk_id: FIoChunkId) -> Result<Vec<u8>> {
-        self.toc.read(
-            &mut *self.cas.lock().unwrap(),
-            self.toc.chunk_id_map[&chunk_id],
-        )
+        let index = *self.toc.chunk_id_map.get(&chunk_id).with_context(|| {
+            format!("container {:?} does not contain {:?}", self.name, chunk_id)
+        })?;
+        self.toc.read(&mut *self.cas.lock().unwrap(), index)
     }
     fn has_chunk_id(&self, chunk_id: FIoChunkId) -> bool {
         self.toc.chunk_id_map.contains_key(&chunk_id)
@@ -150,6 +167,17 @@ impl IoStoreTrait for IoStoreContainer {
             id,
             container: self,
         }))
+    }
+    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + '_> {
+        Box::new(
+            self.container_header
+                .iter()
+                .flat_map(|header| header.package_ids())
+                .map(|&id| PackageInfo {
+                    id,
+                    container: self,
+                }),
+        )
     }
     fn file_name(&self, chunk_id: FIoChunkId) -> Option<&str> {
         self.toc

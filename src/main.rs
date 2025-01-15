@@ -14,6 +14,7 @@ use aes::cipher::KeyInit as _;
 use anyhow::{bail, Context, Result};
 use bitflags::{bitflags, Flags};
 use clap::Parser;
+use fs_err as fs;
 use iostore::IoStoreTrait;
 use iostore_writer::IoStoreWriter;
 use rayon::prelude::*;
@@ -22,7 +23,6 @@ use serde::Serializer;
 use std::fmt::{Display, Formatter};
 use std::{
     collections::HashMap,
-    fs::File,
     io::{BufReader, Cursor, Read, Seek, SeekFrom, Write},
     path::PathBuf,
     str::FromStr,
@@ -69,9 +69,9 @@ struct ActionUnpackRaw {
 
 #[derive(Parser, Debug)]
 struct ActionPackRaw {
-    #[arg(index = 2)]
-    input: PathBuf,
     #[arg(index = 1)]
+    input: PathBuf,
+    #[arg(index = 2)]
     utoc: PathBuf,
 }
 
@@ -159,13 +159,18 @@ fn action_manifest(args: ActionManifest, config: Arc<Config>) -> Result<()> {
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/VisionsofManaDemo/VisionsofMana/Content/Paks/pakchunk0-WindowsNoEditor.utoc";
     //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/AbioticFactor/AbioticFactor/Content/Paks/pakchunk0-Windows.utoc";
 
-    let toc: Toc = BufReader::new(File::open(&args.utoc)?).de_ctx(config)?;
+    let toc: Toc = BufReader::new(fs::File::open(&args.utoc)?).de_ctx(config)?;
     let ucas = &args.utoc.with_extension("ucas");
 
     let entries = Arc::new(Mutex::new(vec![]));
 
     toc.file_map.keys().par_bridge().try_for_each_init(
-        || (entries.clone(), BufReader::new(File::open(ucas).unwrap())),
+        || {
+            (
+                entries.clone(),
+                BufReader::new(fs::File::open(ucas).unwrap()),
+            )
+        },
         |(entries, ucas), file_name| -> Result<()> {
             let chunk_info = toc.get_chunk_info(file_name);
 
@@ -215,7 +220,7 @@ fn action_manifest(args: ActionManifest, config: Arc<Config>) -> Result<()> {
     };
 
     let path = "pakstore.json";
-    std::fs::write(path, serde_json::to_vec(&manifest)?)?;
+    fs::write(path, serde_json::to_vec(&manifest)?)?;
 
     println!("wrote {} entries to {}", manifest.oplog.entries.len(), path);
 
@@ -249,14 +254,14 @@ fn action_list(args: ActionList, config: Arc<Config>) -> Result<()> {
 }
 
 fn action_verify(args: ActionVerify, config: Arc<Config>) -> Result<()> {
-    let mut stream = BufReader::new(File::open(&args.utoc)?);
+    let mut stream = BufReader::new(fs::File::open(&args.utoc)?);
     let ucas = &args.utoc.with_extension("ucas");
 
     let toc: Toc = stream.de_ctx(config)?;
 
     // most of these don't match?!
     //let sigs = &toc.signatures.as_ref().unwrap().chunk_block_signatures;
-    //let mut rdr = BufReader::new(File::open(ucas)?);
+    //let mut rdr = BufReader::new(fs::File::open(ucas)?);
     //for (i, b) in toc.compression_blocks.iter().enumerate() {
     //    rdr.seek(SeekFrom::Start(b.get_offset()))?;
 
@@ -277,7 +282,7 @@ fn action_verify(args: ActionVerify, config: Arc<Config>) -> Result<()> {
     //}
 
     toc.chunk_metas.par_iter().enumerate().try_for_each_init(
-        || BufReader::new(File::open(ucas).unwrap()),
+        || BufReader::new(fs::File::open(ucas).unwrap()),
         |ucas, (i, meta)| -> Result<()> {
             let chunk_id = toc.chunks[i];
             let data = toc.read(ucas, i as u32)?;
@@ -319,7 +324,7 @@ fn action_verify(args: ActionVerify, config: Arc<Config>) -> Result<()> {
 }
 
 fn action_unpack(args: ActionUnpack, config: Arc<Config>) -> Result<()> {
-    let mut stream = BufReader::new(File::open(&args.utoc)?);
+    let mut stream = BufReader::new(fs::File::open(&args.utoc)?);
     let ucas = &args.utoc.with_extension("ucas");
 
     let toc: Toc = stream.de_ctx(config)?;
@@ -329,7 +334,7 @@ fn action_unpack(args: ActionUnpack, config: Arc<Config>) -> Result<()> {
     // TODO extract entries not found in directory index
     // TODO output chunk id manifest
     toc.file_map.keys().par_bridge().try_for_each_init(
-        || BufReader::new(File::open(ucas).unwrap()),
+        || BufReader::new(fs::File::open(ucas).unwrap()),
         |ucas, file_name| -> Result<()> {
             if args.verbose {
                 println!("{file_name}");
@@ -338,8 +343,8 @@ fn action_unpack(args: ActionUnpack, config: Arc<Config>) -> Result<()> {
 
             let path = output.join(file_name);
             let dir = path.parent().unwrap();
-            std::fs::create_dir_all(dir)?;
-            std::fs::write(path, &data)?;
+            fs::create_dir_all(dir)?;
+            fs::write(path, &data)?;
             Ok(())
         },
     )?;
@@ -359,12 +364,12 @@ fn action_unpack_raw(args: ActionUnpackRaw, config: Arc<Config>) -> Result<()> {
     let output = args.output;
     let chunks_dir = output.join("chunks");
 
-    std::fs::create_dir(&output)?;
-    std::fs::create_dir(&chunks_dir)?;
+    fs::create_dir(&output)?;
+    fs::create_dir(&chunks_dir)?;
 
     for chunk in iostore.chunks() {
         let data = chunk.read()?;
-        std::fs::write(chunks_dir.join(hex::encode(chunk.id())), data)?;
+        fs::write(chunks_dir.join(hex::encode(chunk.id())), data)?;
     }
 
     println!(
@@ -381,7 +386,7 @@ fn action_pack_raw(args: ActionPackRaw, _config: Arc<Config>) -> Result<()> {
     for entry in args.input.join("chunks").read_dir()? {
         let entry = entry?;
         let chunk_id = FIoChunkId::from_str(entry.file_name().to_string_lossy().as_ref())?;
-        let data = std::fs::read(entry.path())?;
+        let data = fs::read(entry.path())?;
         writer.write_chunk(chunk_id, None, &data)?;
     }
     writer.finalize()?;
@@ -399,9 +404,12 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
     let mut package_context = FZenPackageContext::create(iostore.as_ref());
 
     let mut count = 0;
-    iostore.chunks().try_for_each(|chunk| -> Result<()> {
-        if chunk.id().get_chunk_type() == EIoChunkType::ExportBundleData {
-            if let Some(file_name) = chunk.file_name() {
+    iostore
+        .packages()
+        .try_for_each(|package_info| -> Result<()> {
+            let chunk_id =
+                FIoChunkId::from_package_id(package_info.id(), 0, EIoChunkType::ExportBundleData);
+            if let Some(file_name) = package_info.container().file_name(chunk_id) {
                 if let Some(filter) = &args.filter {
                     if !file_name.contains(filter) {
                         return Ok(());
@@ -412,20 +420,17 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
                 }
                 let path = output.join(file_name);
                 let dir = path.parent().unwrap();
-                std::fs::create_dir_all(dir)?;
-                // TODO @trumank: Iterate over package IDs from store entries instead
-                bail!("FIXME");
+                fs::create_dir_all(dir)?;
                 asset_conversion::build_legacy(
                     &mut package_context,
-                    FPackageId(0),
+                    package_info.id(),
                     path,
                     package_file_version,
                 )?;
                 count += 1;
             }
-        }
-        Ok(())
-    })?;
+            Ok(())
+        })?;
 
     println!(
         "unpacked {} legacy assets to {}",
@@ -921,12 +926,10 @@ impl Toc {
         use aes::cipher::BlockDecrypt;
 
         let mut max_buffer = 0;
-        let mut total_size = 0;
         for b in blocks {
-            total_size += b.get_uncompressed_size() as usize;
             max_buffer = max_buffer.max(align_usize(b.get_compressed_size() as usize, 16));
         }
-        let mut data = vec![0; align_usize(total_size, 16)];
+        let mut data = vec![0; align_usize(size as usize, 16)];
         let mut buffer = vec![0; max_buffer];
         let mut cur = 0;
         for block in blocks {
@@ -971,8 +974,7 @@ impl Toc {
             cur += uncompressed_size;
         }
 
-        data.truncate(total_size);
-        std::fs::write("chunk.bin", &data)?;
+        data.truncate(size as usize);
         Ok(data)
     }
 }
@@ -1444,7 +1446,7 @@ enum EIoChunkType {
     //ContainerHeader = 0xa,
 }
 
-use crate::asset_conversion::FZenPackageContext;
+use crate::legacy_asset::FZenPackageContext;
 use crate::zen::{EUnrealEngineObjectUE5Version, FPackageFileVersion};
 use directory_index::*;
 use zen::get_package_name;
