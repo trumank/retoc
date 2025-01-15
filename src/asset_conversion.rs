@@ -441,7 +441,7 @@ fn build_export_map(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
     builder.legacy_package.exports.reserve(builder.zen_package.export_map.len());
 
     for export_index in 0..builder.zen_package.export_map.len() {
-        let zen_export: &FExportMapEntry = &builder.zen_package.as_ref().export_map[export_index];
+        let zen_export: FExportMapEntry = builder.zen_package.as_ref().export_map[export_index].clone();
 
         // Resolve class, outer, template index
         let class_index = resolve_local_package_object(builder, zen_export.class_index)?;
@@ -488,7 +488,7 @@ fn build_export_map(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
             ..FObjectExport::default()
         };
         // Attempt to resolve the load dependencies from the zen package for this export
-        resolve_export_load_dependencies(builder, export_index, zen_export, &mut new_object_export)?;
+        resolve_export_load_dependencies(builder, export_index, &zen_export, &mut new_object_export)?;
         // Add the export to the resulting asset export map
         builder.legacy_package.exports.push(new_object_export);
     }

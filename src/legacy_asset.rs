@@ -112,7 +112,7 @@ impl Writeable for FEngineVersion {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct FLegacyPackageVersioningInfo
 {
-    legacy_file_version: i32,
+    pub(crate) legacy_file_version: i32,
     pub(crate) package_file_version: FPackageFileVersion,
     pub(crate) licensee_version: i32,
     pub(crate) custom_versions: Vec<FCustomVersion>,

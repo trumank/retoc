@@ -220,7 +220,7 @@ pub(crate) enum EObjectFlags {
     ArchetypeObject = 0x00000020,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[repr(C)] // Needed to determine the number of export entries
 pub(crate) struct FExportMapEntry {
     pub(crate) cooked_serial_offset: u64,
