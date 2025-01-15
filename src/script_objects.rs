@@ -121,12 +121,13 @@ impl Display for FPackageObjectIndex {
 
 #[cfg(test)]
 mod test {
-    use std::{fs::File, io::BufReader};
+    use fs_err as fs;
+    use std::io::BufReader;
 
     use super::*;
     #[test]
     fn test_read_script_objects() -> Result<()> {
-        let mut stream = BufReader::new(File::open("giga.bin")?);
+        let mut stream = BufReader::new(fs::File::open("giga.bin")?);
 
         ser_hex::read("trace.json", &mut stream, |s| -> Result<()> {
             let script_objects: ZenScriptObjects = s.de()?;

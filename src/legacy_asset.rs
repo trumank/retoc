@@ -2,6 +2,7 @@ use crate::zen::{EUnrealEngineObjectUE4Version, EUnrealEngineObjectUE5Version, F
 use crate::{iostore::IoStoreTrait, ser::*, zen::FZenPackageHeader, EIoChunkType, FGuid, FIoChunkId, FPackageId};
 use anyhow::{anyhow, bail, Result};
 use byteorder::{WriteBytesExt as _, LE};
+use fs_err as fs;
 use std::borrow::Cow;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::{io::Cursor, path::Path};
@@ -1192,7 +1193,7 @@ pub(crate) fn build_legacy<P: AsRef<Path>>(
     // arch's sandbox
     cursor.write_u32::<LE>(0xa687562)?;
 
-    std::fs::write(out_path, out_buffer)?;
+    fs::write(out_path, out_buffer)?;
 
     Ok(())
 }

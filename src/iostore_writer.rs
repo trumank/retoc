@@ -1,5 +1,4 @@
 use std::{
-    fs::File,
     io::{BufWriter, Seek, Write},
     path::{Path, PathBuf},
 };
@@ -9,18 +8,19 @@ use crate::{
     FIoStoreTocCompressedBlockEntry, FIoStoreTocEntryMeta, FIoStoreTocEntryMetaFlags, Toc,
 };
 use anyhow::Result;
+use fs_err as fs;
 
 pub(crate) struct IoStoreWriter {
     toc_path: PathBuf,
-    toc_stream: BufWriter<File>,
-    cas_stream: BufWriter<File>,
+    toc_stream: BufWriter<fs::File>,
+    cas_stream: BufWriter<fs::File>,
     toc: Toc,
 }
 impl IoStoreWriter {
     pub(crate) fn new<P: AsRef<Path>>(toc_path: P) -> Result<Self> {
         let toc_path = toc_path.as_ref().to_path_buf();
-        let toc_stream = BufWriter::new(File::create(&toc_path)?);
-        let cas_stream = BufWriter::new(File::create(toc_path.with_extension("ucas"))?);
+        let toc_stream = BufWriter::new(fs::File::create(&toc_path)?);
+        let cas_stream = BufWriter::new(fs::File::create(toc_path.with_extension("ucas"))?);
 
         let mut toc = Toc::new();
         toc.compression_block_size = 0x10000;
@@ -94,12 +94,13 @@ impl IoStoreWriter {
 #[cfg(test)]
 mod test {
     use super::*;
+    use fs_err as fs;
 
     #[test]
     fn test_write_container() -> Result<()> {
         let mut writer = IoStoreWriter::new("new.utoc")?;
 
-        let data = std::fs::read("script_objects.bin")?;
+        let data = fs::read("script_objects.bin")?;
         writer.write_chunk(
             FIoChunkId {
                 id: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5],

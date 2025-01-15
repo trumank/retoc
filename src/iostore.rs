@@ -1,11 +1,11 @@
 use std::{
     ffi::OsStr,
-    fs::File,
     io::BufReader,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
+use fs_err as fs;
 use anyhow::{Context as _, Result};
 
 use crate::{
@@ -58,7 +58,7 @@ impl IoStoreBackend {
     }
     pub fn open<P: AsRef<Path>>(dir: P, config: Arc<Config>) -> Result<Self> {
         let mut containers: Vec<Box<dyn IoStoreTrait>> = vec![];
-        for entry in std::fs::read_dir(dir)? {
+        for entry in fs::read_dir(dir.as_ref())? {
             let entry = entry?;
             let path = entry.path();
             if path.extension() == Some(OsStr::new("utoc")) {
@@ -96,15 +96,15 @@ pub struct IoStoreContainer {
     name: Option<String>,
     path: PathBuf,
     toc: Toc,
-    cas: Arc<Mutex<BufReader<File>>>,
+    cas: Arc<Mutex<BufReader<fs::File>>>,
 
     container_header: Option<FIoContainerHeader>,
 }
 impl IoStoreContainer {
     pub fn open<P: AsRef<Path>>(toc_path: P, config: Arc<Config>) -> Result<Self> {
         let path = toc_path.as_ref().to_path_buf();
-        let toc: Toc = BufReader::new(File::open(&path)?).de_ctx(config)?;
-        let cas = BufReader::new(File::open(toc_path.as_ref().with_extension("ucas"))?);
+        let toc: Toc = BufReader::new(fs::File::open(&path)?).de_ctx(config)?;
+        let cas = BufReader::new(fs::File::open(toc_path.as_ref().with_extension("ucas"))?);
 
         let mut container = Self {
             name: path.file_stem().map(|f| f.to_string_lossy().into()),

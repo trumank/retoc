@@ -250,11 +250,12 @@ impl ReadableCtx<EIoContainerHeaderVersion> for FFilePackageStoreEntry {
 mod test {
     use super::*;
 
-    use std::{fs::File, io::BufReader};
+    use fs_err as fs;
+    use std::io::BufReader;
 
     #[test]
     fn test_container_header() -> Result<()> {
-        let mut stream = BufReader::new(File::open("containerheader.bin")?);
+        let mut stream = BufReader::new(fs::File::open("containerheader.bin")?);
 
         let header = ser_hex::read("trace.json", &mut stream, FIoContainerHeader::de)?;
         dbg!(header.store_entries.shader_map_hashes);
