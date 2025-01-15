@@ -43,6 +43,12 @@ struct ActionManifest {
 }
 
 #[derive(Parser, Debug)]
+struct ActionInfo {
+    #[arg(index = 1)]
+    path: PathBuf,
+}
+
+#[derive(Parser, Debug)]
 struct ActionList {
     #[arg(index = 1)]
     utoc: PathBuf,
@@ -109,6 +115,8 @@ struct ActionGet {
 enum Action {
     /// Extract manifest from .utoc
     Manifest(ActionManifest),
+    /// Show container info
+    Info(ActionInfo),
     /// List fils in .utoc (directory index)
     List(ActionList),
     /// Verify IO Store container
@@ -148,6 +156,7 @@ fn main() -> Result<()> {
 
     match args.action {
         Action::Manifest(action) => action_manifest(action, config),
+        Action::Info(action) => action_info(action, config),
         Action::List(action) => action_list(action, config),
         Action::Verify(action) => action_verify(action, config),
         Action::Unpack(action) => action_unpack(action, config),
@@ -237,6 +246,12 @@ fn action_manifest(args: ActionManifest, config: Arc<Config>) -> Result<()> {
     Ok(())
 }
 
+fn action_info(args: ActionInfo, config: Arc<Config>) -> Result<()> {
+    let iostore = iostore::open(args.path, config)?;
+    iostore.print_info(0);
+    Ok(())
+}
+
 fn action_list(args: ActionList, config: Arc<Config>) -> Result<()> {
     let iostore = iostore::open(args.utoc, config)?;
 
@@ -253,7 +268,7 @@ fn action_list(args: ActionList, config: Arc<Config>) -> Result<()> {
 
         println!(
             "{:30}  {}  {:20}  {}",
-            chunk.container().container_name().unwrap_or("-"),
+            chunk.container().container_name(),
             hex::encode(id),
             chunk_type.as_ref(),
             chunk.file_name().unwrap_or("-"),

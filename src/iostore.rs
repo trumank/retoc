@@ -14,6 +14,12 @@ use crate::{
     Config, EIoChunkType, FIoChunkId, FPackageId, Toc,
 };
 
+macro_rules! indent_println {
+    ($indent:expr, $($arg:tt)*) => {
+        println!("{:width$}{}", "", format!($($arg)*), width = 2 * $indent);
+    }
+}
+
 pub fn open<P: AsRef<Path>>(path: P, config: Arc<Config>) -> Result<Box<dyn IoStoreTrait>> {
     Ok(if path.as_ref().is_dir() {
         Box::new(IoStoreBackend::open(path, config)?)
@@ -23,10 +29,14 @@ pub fn open<P: AsRef<Path>>(path: P, config: Arc<Config>) -> Result<Box<dyn IoSt
 }
 
 pub trait IoStoreTrait {
+    fn container_name(&self) -> &str;
+    fn print_info(&self, depth: usize);
+
     fn read(&self, chunk_id: FIoChunkId) -> Result<Vec<u8>>;
     fn has_chunk_id(&self, chunk_id: FIoChunkId) -> bool;
     fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + '_>;
     fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + '_>;
+    fn child_containers(&self) -> Box<dyn Iterator<Item = &dyn IoStoreTrait> + '_>;
     fn file_name(&self, chunk_id: FIoChunkId) -> Option<&str>;
     fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntryRef>;
 }
@@ -83,6 +93,20 @@ impl IoStoreBackend {
     }
 }
 impl IoStoreTrait for IoStoreBackend {
+    fn container_name(&self) -> &str {
+        "VIRTUAL"
+    }
+    fn print_info(&self, mut depth: usize) {
+        indent_println!(depth, "{}", self.container_name());
+        depth += 1;
+
+        if self.child_containers().count() != 0 {
+            indent_println!(depth, "child containers ({}):", self.containers.len());
+            for container in self.child_containers() {
+                container.print_info(depth + 1);
+            }
+        }
+    }
     fn read(&self, chunk_id: FIoChunkId) -> Result<Vec<u8>> {
         self.containers
             .iter()
@@ -99,6 +123,9 @@ impl IoStoreTrait for IoStoreBackend {
     fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + '_> {
         Box::new(self.containers.iter().flat_map(|c| c.packages()))
     }
+    fn child_containers(&self) -> Box<dyn Iterator<Item = &dyn IoStoreTrait> + '_> {
+        Box::new(self.containers.iter().map(Box::as_ref))
+    }
     fn file_name(&self, chunk_id: FIoChunkId) -> Option<&str> {
         self.containers.iter().find_map(|c| c.file_name(chunk_id))
     }
@@ -110,7 +137,7 @@ impl IoStoreTrait for IoStoreBackend {
 }
 
 pub struct IoStoreContainer {
-    name: Option<String>,
+    name: String,
     path: PathBuf,
     toc: Toc,
     cas: Arc<Mutex<BufReader<fs::File>>>,
@@ -124,7 +151,11 @@ impl IoStoreContainer {
         let cas = BufReader::new(fs::File::open(toc_path.as_ref().with_extension("ucas"))?);
 
         let mut container = Self {
-            name: path.file_stem().map(|f| f.to_string_lossy().into()),
+            name: path
+                .file_stem()
+                .context("failed to get container name")?
+                .to_string_lossy()
+                .into(),
             path,
             toc,
             cas: Arc::new(Mutex::new(cas)),
@@ -148,11 +179,30 @@ impl IoStoreContainer {
     pub fn container_path(&self) -> &Path {
         self.path.as_ref()
     }
-    pub fn container_name(&self) -> Option<&str> {
-        self.name.as_deref()
-    }
 }
 impl IoStoreTrait for IoStoreContainer {
+    fn container_name(&self) -> &str {
+        &self.name
+    }
+    fn print_info(&self, mut depth: usize) {
+        indent_println!(depth, "{}", self.container_name());
+        depth += 1;
+
+        indent_println!(depth, "container_flags: {:?}", self.toc.container_flags);
+        indent_println!(depth, "version: {:?}", self.toc.version);
+        let mount_point = &self.toc.directory_index.mount_point;
+        if !mount_point.is_empty() {
+            indent_println!(depth, "mount_point: {}", mount_point);
+        }
+        indent_println!(depth, "chunks: {}", self.toc.chunks.len());
+        indent_println!(depth, "packages: {}", self.packages().count());
+        // assumes header has already been parsed
+        indent_println!(
+            depth,
+            "has_container_header: {}",
+            self.container_header.is_some()
+        );
+    }
     fn read(&self, chunk_id: FIoChunkId) -> Result<Vec<u8>> {
         let index = *self.toc.chunk_id_map.get(&chunk_id).with_context(|| {
             format!("container {:?} does not contain {:?}", self.name, chunk_id)
@@ -178,6 +228,9 @@ impl IoStoreTrait for IoStoreContainer {
                     container: self,
                 }),
         )
+    }
+    fn child_containers(&self) -> Box<dyn Iterator<Item = &dyn IoStoreTrait> + '_> {
+        Box::new(std::iter::empty())
     }
     fn file_name(&self, chunk_id: FIoChunkId) -> Option<&str> {
         self.toc
