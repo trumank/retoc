@@ -20,7 +20,7 @@ use iostore_writer::IoStoreWriter;
 use rayon::prelude::*;
 use ser::*;
 use serde::Serializer;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::{
     collections::HashMap,
     io::{BufReader, Cursor, Read, Seek, SeekFrom, Write},
@@ -28,6 +28,7 @@ use std::{
     str::FromStr,
     sync::{Arc, Mutex},
 };
+use std::time::{Duration, Instant};
 use strum::{AsRefStr, FromRepr};
 use tracing::instrument;
 
@@ -397,6 +398,7 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
     let iostore = iostore::open(args.utoc, config)?;
 
     let output = args.output;
+    let debug_output = args.verbose;
     // TODO @trumank make this an option. Right now it is UE 5.4
     let package_file_version: Option<FPackageFileVersion> = Some(FPackageFileVersion::create_ue5(
         EUnrealEngineObjectUE5Version::PropertyTagCompleteTypeName,
@@ -404,9 +406,25 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
     let mut package_context = FZenPackageContext::create(iostore.as_ref());
 
     let mut count = 0;
+    let start_time = Instant::now();
+    let total_packages = iostore.packages().count();
+    let mut current_packages: usize = 0;
+    let mut last_report_time = Instant::now();
+    let report_interval = Duration::from_secs(10);
     iostore
         .packages()
         .try_for_each(|package_info| -> Result<()> {
+
+            // Minimal progress reporting on large batches of packages
+            // TODO @trumank: Only active without filter for now, since it gives incorrect result with the filter
+            let current_time = Instant::now();
+            if args.filter.is_none() && current_time.duration_since(last_report_time) >= report_interval {
+                last_report_time = current_time;
+                let time_elapsed = current_time.duration_since(start_time);
+                println!("Packages converted: {}/{}. Time elapsed: {}s", current_packages, total_packages, time_elapsed.as_secs());
+            }
+            current_packages += 1;
+
             let chunk_id =
                 FIoChunkId::from_package_id(package_info.id(), 0, EIoChunkType::ExportBundleData);
             if let Some(file_name) = package_info.container().file_name(chunk_id) {
@@ -426,6 +444,7 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
                     package_info.id(),
                     path,
                     package_file_version,
+                    debug_output,
                 )?;
                 count += 1;
             }

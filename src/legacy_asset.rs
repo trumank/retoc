@@ -213,7 +213,7 @@ pub(crate) struct FLegacyPackageFileSummary
     // empty placeholder for cooked packages
     asset_registry_data_offset: i32,
     // not used for cooked packages
-    bulk_data_start_offset: i32,
+    bulk_data_start_offset: i64,
 }
 impl FLegacyPackageFileSummary {
     const PACKAGE_FILE_TAG: u32 = 0x9E2A83C1;
@@ -299,7 +299,7 @@ impl FLegacyPackageFileSummary {
         // Serialized for packages with filtered editor only data as 1 integer (0x0), not read in runtime
         let asset_registry_data_offset: i32 = s.de()?;
         // Written as an offset, but is never read for cooked packages
-        let bulk_data_start_offset: i32 = s.de()?;
+        let bulk_data_start_offset: i64 = s.de()?;
 
         // Legacy world composition data, but can very much be written on UE4 games
         let world_tile_info_data_offset: i32 = s.de()?;
@@ -389,12 +389,8 @@ impl FLegacyPackageFileSummary {
 
         s.ser(&self.exports)?;
         s.ser(&self.imports)?;
-
         // Serialized for cooked packages, but is always an empty array for each export
-        // This is an actual offset somewhere in the package header, but it is not used by anything and the game can handle 0 there
-        // So we will write 0 here, but if we wanted to preserve binary equality, we would track this offset when writing the asset header
-        let depends_offset: i32 = 0;
-        s.ser(&depends_offset)?;
+        s.ser(&self.depends_offset)?;
 
         // Cooked packages never have soft package references or searchable names
         let soft_package_references = FCountOffsetPair{count: 0, offset: 0};
@@ -407,9 +403,9 @@ impl FLegacyPackageFileSummary {
 
         s.ser(&self.package_guid)?;
 
-        // Package generations are always saved as one (0,0) entry for modern packages
+        // Package generations are always saved as one entry for modern packages, but not used in runtime
         // Note that the FLinkerLoad expects there to still be a single generation, it will crash if there is none
-        let package_generations: Vec<FGenerationInfo> = vec![FGenerationInfo{export_count: 0, name_count: 0}];
+        let package_generations: Vec<FGenerationInfo> = vec![FGenerationInfo{export_count: self.exports.count, name_count: self.names.count}];
         s.ser(&package_generations)?;
         // Persistent package GUID is never written for cooked packages
         if !self.is_filter_editor_only() {
@@ -476,6 +472,7 @@ impl FPackageNameMap {
         }
         Self{names, name_lookup}
     }
+    pub(crate) fn num_names(&self) -> usize { self.names.len() }
     #[instrument(skip_all, name = "FPackageNameMap")]
     pub(crate) fn read<S: Read + Seek>(stream: &mut S, summary: &FLegacyPackageFileSummary) -> Result<FPackageNameMap> {
 
@@ -850,7 +847,7 @@ impl FLegacyPackageHeader {
         }
         Ok(FLegacyPackageHeader{summary: package_summary, name_map, imports, exports, preload_dependencies, data_resources})
     }
-    pub(crate) fn serialize<S: Write + Seek>(&self, s: &mut S) -> Result<()> {
+    pub(crate) fn serialize<S: Write + Seek>(&self, s: &mut S, dump_package_summary: bool) -> Result<()> {
 
         let package_summary_offset: u64 = s.stream_position()?;
         let mut package_summary: FLegacyPackageFileSummary = self.summary.clone();
@@ -942,11 +939,16 @@ impl FLegacyPackageHeader {
         }
 
         // This would be written directly after the exports blobs. Even though this value is never used in cooked games, we can infer it by looking at the furthest written export blob and setting to be directly after it
-        package_summary.bulk_data_start_offset = end_of_last_export_offset as i32;
+        package_summary.bulk_data_start_offset = end_of_last_export_offset;
 
         // Go back to the initial package summary and overwrite it with a patched-up version
         s.seek(SeekFrom::Start(package_summary_offset))?;
         FLegacyPackageFileSummary::serialize(&package_summary, s)?;
+
+        // Dump fully patched up package summary if needed
+        if dump_package_summary {
+            dbg!(package_summary.clone());
+        }
 
         // Seek back to the position after the header
         s.seek(SeekFrom::Start(position_after_writing_header))?;

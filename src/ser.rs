@@ -106,18 +106,19 @@ impl<T: Readable> ReadableCtx<usize> for Vec<T> {
 }
 impl<T: Writeable> Writeable for Vec<T> {
     fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
+        stream.write_u32::<LE>(self.len() as u32)?;
         T::ser_array(self, stream)
     }
 }
 
 impl Readable for bool {
     fn de<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(stream.read_i8()? != 0)
+        Ok(stream.read_u32::<LE>()? != 0)
     }
 }
 impl Writeable for bool {
     fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
-        Ok(stream.write_i8(if *self { 1 } else { 0 })?)
+        Ok(stream.write_u32::<LE>(if *self { 1 } else { 0 })?)
     }
 }
 impl Readable for u8 {

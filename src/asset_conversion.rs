@@ -343,6 +343,8 @@ fn begin_build_summary(builder: &mut LegacyAssetBuilder, fallback_package_file_v
 fn copy_package_sections(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
     // Copy the names from the zen container. Name map format is the same on the high level
     builder.legacy_package.name_map = FPackageNameMap::create_from_names(builder.zen_package.name_map.copy_raw_names());
+    // Current number of names is the minimum that should be kept
+    builder.legacy_package.summary.names_referenced_from_export_data_count = builder.legacy_package.name_map.num_names() as i32;
 
     // Copy data resources
     builder.legacy_package.data_resources = builder.zen_package.bulk_data.iter().map(|zen_bulk_data| {
@@ -437,7 +439,8 @@ fn build_import_map(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
     }
     Ok({})
 }
-fn resolve_export_load_dependencies(builder: &mut LegacyAssetBuilder, _export_index: usize, _zen_export: &FExportMapEntry, _new_export: &mut FObjectExport) -> anyhow::Result<()> {
+fn resolve_export_load_dependencies(builder: &mut LegacyAssetBuilder, _export_index: usize, _zen_export: &FExportMapEntry, new_export: &mut FObjectExport) -> anyhow::Result<()> {
+    new_export.first_export_dependency_index = -1;
     // TODO: resolve export dependencies
     Ok({})
 }
@@ -558,12 +561,18 @@ fn finalize_asset(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
     }
     Ok({})
 }
-fn write_asset<P: AsRef<Path>>(builder: &LegacyAssetBuilder, out_asset_path: P) -> anyhow::Result<()> {
+fn write_asset<P: AsRef<Path>>(builder: &LegacyAssetBuilder, out_asset_path: P, debug_output: bool) -> anyhow::Result<()> {
+
+    // Dump zen package and legacy package for debugging
+    if debug_output {
+        dbg!(builder.zen_package.clone());
+        dbg!(builder.legacy_package.clone());
+    }
 
     // Write the asset file first
     let mut out_asset_buffer: Vec<u8> = Vec::new();
     let mut asset_cursor = Cursor::new(&mut out_asset_buffer);
-    FLegacyPackageHeader::serialize(&builder.legacy_package, &mut asset_cursor)?;
+    FLegacyPackageHeader::serialize(&builder.legacy_package, &mut asset_cursor, debug_output)?;
 
     std::fs::write(out_asset_path.as_ref(), out_asset_buffer)?;
 
@@ -581,6 +590,7 @@ pub(crate) fn build_legacy<P: AsRef<Path>>(
     package_id: FPackageId,
     out_path: P,
     fallback_package_file_version: Option<FPackageFileVersion>,
+    debug_output: bool,
 ) -> anyhow::Result<()> {
 
     // Build the asset from zen
@@ -592,6 +602,6 @@ pub(crate) fn build_legacy<P: AsRef<Path>>(
     finalize_asset(&mut asset_builder)?;
 
     // Write the asset to the file
-    write_asset(&asset_builder, out_path)?;
+    write_asset(&asset_builder, out_path, debug_output)?;
     Ok(())
 }
