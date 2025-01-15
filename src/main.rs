@@ -1,3 +1,4 @@
+mod asset_conversion;
 mod compact_binary;
 mod container_header;
 mod iostore;
@@ -8,7 +9,6 @@ mod name_map;
 mod script_objects;
 mod ser;
 mod zen;
-mod asset_conversion;
 
 use aes::cipher::KeyInit as _;
 use anyhow::{bail, Context, Result};
@@ -21,6 +21,7 @@ use rayon::prelude::*;
 use ser::*;
 use serde::Serializer;
 use std::fmt::{Debug, Display, Formatter};
+use std::time::{Duration, Instant};
 use std::{
     collections::HashMap,
     io::{BufReader, Cursor, Read, Seek, SeekFrom, Write},
@@ -28,9 +29,12 @@ use std::{
     str::FromStr,
     sync::{Arc, Mutex},
 };
-use std::time::{Duration, Instant};
 use strum::{AsRefStr, FromRepr};
 use tracing::instrument;
+
+fn parse_ue5_object_version(string: &str) -> Result<EUnrealEngineObjectUE5Version> {
+    EUnrealEngineObjectUE5Version::from_repr(string.parse()?).context("invalid UE5 Object Version")
+}
 
 #[derive(Parser, Debug)]
 struct ActionManifest {
@@ -82,6 +86,11 @@ struct ActionExtractLegacy {
     utoc: PathBuf,
     #[arg(index = 2)]
     output: PathBuf,
+
+    /// UE5 Object Version
+    /// default is EUnrealEngineObjectUE5Version::PropertyTagCompleteTypeName
+    #[arg(long, value_parser = parse_ue5_object_version, default_value = "1012")]
+    version: EUnrealEngineObjectUE5Version,
     #[arg(short, long, default_value = "false")]
     verbose: bool,
     #[arg(short, long)]
@@ -400,9 +409,8 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
     let output = args.output;
     let debug_output = args.verbose;
     // TODO @trumank make this an option. Right now it is UE 5.4
-    let package_file_version: Option<FPackageFileVersion> = Some(FPackageFileVersion::create_ue5(
-        EUnrealEngineObjectUE5Version::PropertyTagCompleteTypeName,
-    ));
+    let package_file_version: Option<FPackageFileVersion> =
+        Some(FPackageFileVersion::create_ue5(args.version));
     let mut package_context = FZenPackageContext::create(iostore.as_ref());
 
     let mut count = 0;
@@ -414,14 +422,20 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
     iostore
         .packages()
         .try_for_each(|package_info| -> Result<()> {
-
             // Minimal progress reporting on large batches of packages
             // TODO @trumank: Only active without filter for now, since it gives incorrect result with the filter
             let current_time = Instant::now();
-            if args.filter.is_none() && current_time.duration_since(last_report_time) >= report_interval {
+            if args.filter.is_none()
+                && current_time.duration_since(last_report_time) >= report_interval
+            {
                 last_report_time = current_time;
                 let time_elapsed = current_time.duration_since(start_time);
-                println!("Packages converted: {}/{}. Time elapsed: {}s", current_packages, total_packages, time_elapsed.as_secs());
+                println!(
+                    "Packages converted: {}/{}. Time elapsed: {}s",
+                    current_packages,
+                    total_packages,
+                    time_elapsed.as_secs()
+                );
             }
             current_packages += 1;
 
