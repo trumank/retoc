@@ -28,6 +28,27 @@ pub fn open<P: AsRef<Path>>(path: P, config: Arc<Config>) -> Result<Box<dyn IoSt
     })
 }
 
+/// Return an object that can be sorted by to achieve container priority.
+/// Higher priority should Cmp higher
+fn sort_container_name(full_name: &str) -> (bool, u32, &str) {
+    let mut base_name = full_name;
+
+    let mut chunk_version = 0;
+    if let Some(name) = base_name.strip_suffix("_P") {
+        base_name = name;
+        chunk_version = 1;
+        if let Some((name, version)) = base_name.rsplit_once("_") {
+            if let Ok(version) = version.parse::<u32>() {
+                base_name = name;
+                chunk_version = version + 2;
+            }
+        }
+    }
+
+    // special case global to always sort highest
+    (full_name == "global", chunk_version, base_name)
+}
+
 pub trait IoStoreTrait {
     fn container_name(&self) -> &str;
     fn print_info(&self, depth: usize);
@@ -89,6 +110,9 @@ impl IoStoreBackend {
                 containers.push(Box::new(IoStoreContainer::open(path, config.clone())?));
             }
         }
+        containers.sort_by(|a, b| {
+            sort_container_name(b.container_name()).cmp(&sort_container_name(a.container_name()))
+        });
         Ok(Self { containers })
     }
 }
@@ -243,5 +267,71 @@ impl IoStoreTrait for IoStoreContainer {
         self.container_header
             .as_ref()
             .and_then(|header| header.get_store_entry(package_id))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_sort_container() {
+        let mut containers = [
+            "pakchunk0-Windows",
+            "pakchunk10-Windows",
+            "pakchunk11-Windows",
+            "pakchunk12-Windows",
+            "pakchunk13-Windows",
+            "pakchunk14-Windows",
+            "pakchunk15-Windows",
+            "global",
+            "pakchunk16-Windows",
+            "pakchunk17-Windows",
+            "pakchunk1optional-Windows",
+            "pakchunk1-Windows",
+            "pakchunk8-Windows_1_P",
+            "pakchunk3-Windows",
+            "pakchunk8-Windows_P",
+            "pakchunk6-Windows",
+            "pakchunk0optional-Windows",
+            "pakchunk9-Windows",
+            "pakchunk8-Windows_0_P",
+            "pakchunk4-Windows",
+            "pakchunk2-Windows",
+            "pakchunk5-Windows",
+            "pakchunk7-Windows",
+        ];
+        containers.sort_by(|a, b| sort_container_name(b).cmp(&sort_container_name(a)));
+        for container in containers {
+            eprintln!("{:?}", sort_container_name(container));
+        }
+        assert_eq!(
+            containers,
+            [
+                "global",
+                "pakchunk8-Windows_1_P",
+                "pakchunk8-Windows_0_P",
+                "pakchunk8-Windows_P",
+                "pakchunk9-Windows",
+                "pakchunk7-Windows",
+                "pakchunk6-Windows",
+                "pakchunk5-Windows",
+                "pakchunk4-Windows",
+                "pakchunk3-Windows",
+                "pakchunk2-Windows",
+                "pakchunk1optional-Windows",
+                "pakchunk17-Windows",
+                "pakchunk16-Windows",
+                "pakchunk15-Windows",
+                "pakchunk14-Windows",
+                "pakchunk13-Windows",
+                "pakchunk12-Windows",
+                "pakchunk11-Windows",
+                "pakchunk10-Windows",
+                "pakchunk1-Windows",
+                "pakchunk0optional-Windows",
+                "pakchunk0-Windows",
+            ]
+        );
     }
 }
