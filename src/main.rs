@@ -196,8 +196,8 @@ fn action_manifest(args: ActionManifest, config: Arc<Config>) -> Result<()> {
             if chunk_info.id.get_chunk_type() == EIoChunkType::ExportBundleData {
                 let data = toc.read(ucas, toc.file_map[file_name])?;
 
-                let package_name =
-                    get_package_name(&data).with_context(|| file_name.to_string())?;
+                // TODO @trumank fix this
+                let package_name = get_package_name(&data, EIoContainerHeaderVersion::NoExportInfo).with_context(|| file_name.to_string())?;
 
                 let mut entry = manifest::Op {
                     packagestoreentry: manifest::PackageStoreEntry {
@@ -1544,6 +1544,7 @@ use crate::asset_conversion::FZenPackageContext;
 use crate::zen::{EUnrealEngineObjectUE5Version, FPackageFileVersion};
 use directory_index::*;
 use zen::get_package_name;
+use crate::container_header::EIoContainerHeaderVersion;
 
 mod directory_index {
     use super::*;

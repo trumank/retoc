@@ -5,14 +5,11 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use fs_err as fs;
 
-use crate::{
-    container_header::{FIoContainerHeader, StoreEntryRef},
-    ser::*,
-    Config, EIoChunkType, FIoChunkId, FPackageId, Toc,
-};
+use crate::{container_header::{FIoContainerHeader, StoreEntryRef}, ser::*, Config, EIoChunkType, EIoStoreTocVersion, FIoChunkId, FPackageId, Toc};
+use crate::container_header::EIoContainerHeaderVersion;
 
 macro_rules! indent_println {
     ($indent:expr, $($arg:tt)*) => {
@@ -51,6 +48,8 @@ fn sort_container_name(full_name: &str) -> (bool, u32, &str) {
 
 pub trait IoStoreTrait {
     fn container_name(&self) -> &str;
+    fn container_file_version(&self) -> Option<EIoStoreTocVersion>;
+    fn container_header_version(&self) -> Option<EIoContainerHeaderVersion>;
     fn print_info(&self, depth: usize);
 
     fn read(&self, chunk_id: FIoChunkId) -> Result<Vec<u8>>;
@@ -111,6 +110,40 @@ impl IoStoreBackend {
                 containers.push(Box::new(IoStoreContainer::open(path, config.clone())?));
             }
         }
+        // Validate that all containers are of the same version
+        let mut previous_container_version: Option<EIoStoreTocVersion> = None;
+        let mut previous_container_name: String = String::new();
+        let mut previous_header_container_version: Option<EIoContainerHeaderVersion> = None;
+        let mut previous_header_container_name: String = String::new();
+
+        for container in &containers {
+            let this_container_version = container.container_file_version().unwrap();
+            let this_container_name = container.container_name().to_string();
+
+            // Check that container Table Of Contents version matches the previous container
+            if previous_container_version.is_none() {
+                previous_container_name = this_container_name.clone();
+                previous_container_version = Some(this_container_version);
+            }
+            if this_container_version != previous_container_version.unwrap() {
+                bail!("Cannot create composite container for containers of different versions: Container {} and {} have different versions {:?} and {:?}",
+                    previous_container_name, this_container_name, previous_container_version.unwrap(), this_container_version);
+            }
+
+            // Check that container header version matches the previous container
+            if let Some(this_container_header_version) = container.container_header_version() {
+
+                if previous_header_container_version.is_none() {
+                    previous_header_container_name = this_container_name.clone();
+                    previous_header_container_version = Some(this_container_header_version);
+                }
+                if this_container_header_version != previous_header_container_version.unwrap() {
+                    bail!("Cannot create composite container for containers of different header versions: Container {} and {} have different versions {:?} and {:?}",
+                     previous_header_container_name, this_container_name, previous_header_container_version.unwrap(), this_container_header_version);
+                }
+            }
+        }
+
         containers.sort_by(|a, b| {
             sort_container_name(b.container_name()).cmp(&sort_container_name(a.container_name()))
         });
@@ -120,6 +153,13 @@ impl IoStoreBackend {
 impl IoStoreTrait for IoStoreBackend {
     fn container_name(&self) -> &str {
         "VIRTUAL"
+    }
+    fn container_file_version(&self) -> Option<EIoStoreTocVersion> {
+        self.containers.first().and_then(|x| x.container_file_version())
+    }
+    fn container_header_version(&self) -> Option<EIoContainerHeaderVersion> {
+        // Some containers might not have a container header, so take the first container with a header
+        self.containers.iter().find_map(|x| { x.container_header_version() })
     }
     fn print_info(&self, mut depth: usize) {
         indent_println!(depth, "{}", self.container_name());
@@ -208,6 +248,12 @@ impl IoStoreContainer {
 impl IoStoreTrait for IoStoreContainer {
     fn container_name(&self) -> &str {
         &self.name
+    }
+    fn container_file_version(&self) -> Option<EIoStoreTocVersion> {
+        Some(self.toc.version)
+    }
+    fn container_header_version(&self) -> Option<EIoContainerHeaderVersion> {
+        self.container_header.as_ref().map(|x| { x.version })
     }
     fn print_info(&self, mut depth: usize) {
         indent_println!(depth, "{}", self.container_name());

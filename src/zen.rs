@@ -7,12 +7,11 @@ use tracing::instrument;
 use crate::name_map::read_name_batch;
 use crate::script_objects::FPackageObjectIndex;
 use crate::ser::{WriteExt, Writeable};
-use crate::{name_map::{FMappedName, FNameMap}, FGuid, FPackageId, FSHAHash, ReadExt, Readable};
-use crate::container_header::{StoreEntry};
+use crate::{name_map::{FMappedName, FNameMap}, EIoStoreTocVersion, FGuid, FPackageId, FSHAHash, ReadExt, Readable};
+use crate::container_header::{EIoContainerHeaderVersion, StoreEntry};
 
-pub(crate) fn get_package_name(data: &[u8]) -> Result<String> {
-    let header: FZenPackageHeader = FZenPackageHeader::deserialize(&mut Cursor::new(data), StoreEntry::default())?;
-    Ok(header.name_map.get(header.summary.name).to_string())
+pub(crate) fn get_package_name(data: &[u8], container_header_version: EIoContainerHeaderVersion) -> Result<String> {
+    FZenPackageHeader::get_package_name(&mut Cursor::new(data), container_header_version)
 }
 
 // just enough to get PackageName
@@ -72,27 +71,42 @@ pub(crate) struct FZenPackageSummary {
     import_map_offset: i32,
     export_map_offset: i32,
     export_bundle_entries_offset: i32,
+    graph_data_offset: i32,
     dependency_bundle_headers_offset: i32,
     dependency_bundle_entries_offset: i32,
     imported_package_names_offset: i32,
 }
-impl Readable for FZenPackageSummary {
+impl FZenPackageSummary {
     #[instrument(skip_all, name = "FZenPackageSummary")]
-    fn de<S: Read>(s: &mut S) -> Result<Self> {
-        Ok(Self {
-            has_versioning_info: s.de()?,
-            header_size: s.de()?,
-            name: s.de()?,
-            package_flags: s.de()?,
-            cooked_header_size: s.de()?,
-            imported_public_export_hashes_offset: s.de()?,
-            import_map_offset: s.de()?,
-            export_map_offset: s.de()?,
-            export_bundle_entries_offset: s.de()?,
-            dependency_bundle_headers_offset: s.de()?,
-            dependency_bundle_entries_offset: s.de()?,
-            imported_package_names_offset: s.de()?,
-        })
+    fn deserialize<S: Read>(s: &mut S, container_header_version: EIoContainerHeaderVersion) -> Result<Self> {
+
+        let has_versioning_info: u32 = s.de()?;
+        let header_size: u32 = s.de()?;
+        let name: FMappedName = s.de()?;
+        let package_flags: u32 = s.de()?;
+        let cooked_header_size: u32 = s.de()?;
+        let imported_public_export_hashes_offset: i32 = s.de()?;
+        let import_map_offset: i32 = s.de()?;
+        let export_map_offset: i32 = s.de()?;
+        let export_bundle_entries_offset: i32 = s.de()?;
+
+        let mut graph_data_offset: i32 = -1;
+        let mut dependency_bundle_headers_offset: i32 = -1;
+        let mut dependency_bundle_entries_offset: i32 = -1;
+        let mut imported_package_names_offset: i32 = -1;
+
+        // Dependency bundles are written in EIoContainerHeaderVersion::NoExportInfo and beyond, before that graph data is written
+        if container_header_version >= EIoContainerHeaderVersion::NoExportInfo {
+            dependency_bundle_headers_offset = s.de()?;
+            dependency_bundle_entries_offset = s.de()?;
+            imported_package_names_offset = s.de()?;
+        } else {
+            graph_data_offset = s.de()?;
+        }
+
+        Ok(Self{has_versioning_info, header_size, name, package_flags, cooked_header_size, imported_public_export_hashes_offset,
+            import_map_offset, export_map_offset, export_bundle_entries_offset, graph_data_offset,
+            dependency_bundle_headers_offset, dependency_bundle_entries_offset, imported_package_names_offset})
     }
 }
 
@@ -399,11 +413,20 @@ impl FZenPackageHeader {
     pub(crate) fn package_name(&self) -> String {
         self.name_map.get(self.summary.name).to_string()
     }
+
+    // Retrieves the package name from the package. Does the bare minimum of package reading to get the name out
+    #[instrument(skip_all, name = "FZenPackageHeader - GetPackageName")]
+    pub(crate) fn get_package_name<S: Read>(s: &mut S, container_header_version: EIoContainerHeaderVersion) -> Result<String> {
+        let summary: FZenPackageSummary = FZenPackageSummary::deserialize(s, container_header_version)?;
+        let _versioning_info: Option<FZenPackageVersioningInfo> = if summary.has_versioning_info != 0 { Some(s.de()?) } else { None };
+        let name_map: FNameMap = s.de()?;
+        Ok(name_map.get(summary.name).to_string())
+    }
     #[instrument(skip_all, name = "FZenPackageHeader")]
-    pub(crate) fn deserialize<S: Read + Seek>(s: &mut S, store_entry: StoreEntry) -> Result<Self> {
+    pub(crate) fn deserialize<S: Read + Seek>(s: &mut S, store_entry: StoreEntry, container_version: EIoStoreTocVersion, header_version: EIoContainerHeaderVersion) -> Result<Self> {
 
         let package_start_offset = s.stream_position()?;
-        let summary: FZenPackageSummary = s.de()?;
+        let summary: FZenPackageSummary = FZenPackageSummary::deserialize(s, header_version)?;
         let versioning_info: Option<FZenPackageVersioningInfo> = if summary.has_versioning_info != 0 { Some(s.de()?) } else { None };
         let name_map: FNameMap = s.de()?;
 

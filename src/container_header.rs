@@ -16,7 +16,8 @@ use crate::{
 
 #[derive(Debug)]
 pub(crate) struct FIoContainerHeader {
-    container_id: FIoContainerId,
+    pub(crate) version: EIoContainerHeaderVersion,
+    pub(crate) container_id: FIoContainerId,
     package_ids: Vec<FPackageId>,
     store_entries: StoreEntries,
     optional_segment_package_ids: Vec<FPackageId>,
@@ -55,6 +56,7 @@ impl Readable for FIoContainerHeader {
             .collect();
 
         Ok(Self {
+            version,
             container_id,
             package_ids,
             store_entries,
@@ -80,7 +82,7 @@ impl FIoContainerHeader {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
 #[repr(u32)]
-enum EIoContainerHeaderVersion {
+pub(crate) enum EIoContainerHeaderVersion {
     Initial = 0,
     LocalizedPackages = 1,
     OptionalSegmentPackages = 2,
