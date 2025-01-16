@@ -563,19 +563,13 @@ fn resolve_export_dependencies(builder: &mut LegacyAssetBuilder) -> anyhow::Resu
         export_object.create_before_create_dependencies = create_before_create_deps.len() as i32;
 
         // Update the export object now
-        builder.legacy_package.exports[export_index] = export_object.clone();
+        builder.legacy_package.exports[export_index] = export_object;
 
         // Append preload dependencies for this export now to the legacy package
-        builder.legacy_package.preload_dependencies.append(&mut serialize_before_serialize_deps.clone());
-        builder.legacy_package.preload_dependencies.append(&mut create_before_serialize_deps.clone());
-        builder.legacy_package.preload_dependencies.append(&mut serialize_before_create_deps.clone());
-        builder.legacy_package.preload_dependencies.append(&mut create_before_create_deps.clone());
-
-        dbg!(export_object);
-        dbg!(create_before_create_deps);
-        dbg!(serialize_before_create_deps);
-        dbg!(create_before_serialize_deps);
-        dbg!(serialize_before_serialize_deps);
+        builder.legacy_package.preload_dependencies.append(&mut serialize_before_serialize_deps);
+        builder.legacy_package.preload_dependencies.append(&mut create_before_serialize_deps);
+        builder.legacy_package.preload_dependencies.append(&mut serialize_before_create_deps);
+        builder.legacy_package.preload_dependencies.append(&mut create_before_create_deps);
     }
 
     Ok({})
