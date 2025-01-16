@@ -794,21 +794,23 @@ pub(crate) fn build_asset_from_zen<'a, 'b>(package_context: &'a mut FZenPackageC
 }
 fn rebuild_asset_export_data_internal(builder: &LegacyAssetBuilder, raw_exports_data: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
 
-    // Calculate the total size of the exports blob (including the package footer)
-    let mut total_exports_serial_size = size_of::<u32>();
+    // Calculate the total size of the exports blob
+    let mut total_exports_serial_size = 0;
     for export_index in 0..builder.legacy_package.exports.len() {
         total_exports_serial_size += builder.legacy_package.exports[export_index].serial_size as usize;
     }
+    // Include the footer in the total file size
+    let total_exports_file_size = total_exports_serial_size + size_of::<u32>();
 
     // Allocate the underlying storage and copy export blobs into it from the export bundles
-    let mut result_exports_data: Vec<u8> = Vec::with_capacity(total_exports_serial_size);
+    let mut result_exports_data: Vec<u8> = Vec::with_capacity(total_exports_file_size);
     let mut exports_data_writer = Cursor::new(&mut result_exports_data);
+    let mut end_of_last_export_bundle: usize = 0;
 
     for export_bundle_index in 0..builder.zen_package.export_bundle_headers.len() {
 
         let export_bundle = builder.zen_package.export_bundle_headers[export_bundle_index].clone();
         let mut current_serial_offset = builder.zen_package.summary.header_size as usize + export_bundle.serial_offset as usize;
-        dbg!(current_serial_offset);
 
         for i in 0..export_bundle.entry_count {
             let export_bundle_entry_index = export_bundle.first_entry_index + i;
@@ -822,9 +824,6 @@ fn rebuild_asset_export_data_internal(builder: &LegacyAssetBuilder, raw_exports_
                 let export_target_serial_offset = builder.legacy_package.exports[export_index].serial_offset as u64;
                 let export_data_start_offset = current_serial_offset;
                 let export_data_end_offset = export_data_start_offset + export_serial_size;
-                dbg!(export_data_start_offset);
-                dbg!(export_target_serial_offset);
-                dbg!(export_serial_size);
 
                 // Write the blob for the current export and skip past it's data
                 exports_data_writer.seek(SeekFrom::Start(export_target_serial_offset))?;
@@ -832,7 +831,19 @@ fn rebuild_asset_export_data_internal(builder: &LegacyAssetBuilder, raw_exports_
                 current_serial_offset += export_serial_size;
             }
         }
+        end_of_last_export_bundle = max(end_of_last_export_bundle, current_serial_offset);
     }
+
+    // Jump to the end of the exports data
+    exports_data_writer.seek(SeekFrom::Start(total_exports_serial_size as u64))?;
+
+    // If there is any data past the last export, copy it into the final file
+    // This should generally never happen for legacy zen assets, but still nice to handle this just in case
+    let additional_data_post_exports_length = raw_exports_data.len() - end_of_last_export_bundle;
+    if additional_data_post_exports_length != 0 {
+        exports_data_writer.write(&raw_exports_data[end_of_last_export_bundle..])?;
+    }
+
     // Append the package footer at the end
     let package_file_magic: u32 = FLegacyPackageFileSummary::PACKAGE_FILE_TAG;
     exports_data_writer.ser(&package_file_magic)?;
