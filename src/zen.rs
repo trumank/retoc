@@ -276,7 +276,7 @@ pub(crate) enum EExportCommandType {
     Create,
     Serialize
 }
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 #[repr(C)] // Needed to determine the number of export bundle entries
 pub(crate) struct FExportBundleEntry {
     pub(crate) local_export_index: u32,
@@ -385,25 +385,30 @@ impl Readable for FInternalDependencyArc {
 }
 
 // Actual UE type name not known, type layout from AsyncLoading2.cpp SetupSerializedArcs on 5.2.2
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone)]
 pub(crate) struct FExternalDependencyArc {
-    from_import_index: i32,
-    from_command_type: u8,
-    to_export_bundle_index: i32,
+    pub(crate) from_import_index: i32,
+    pub(crate) from_command_type: EExportCommandType,
+    pub(crate) to_export_bundle_index: i32,
 }
 impl Readable for FExternalDependencyArc {
     #[instrument(skip_all, name = "FExternalDependencyArc")]
     fn de<S: Read>(s: &mut S) -> Result<Self> {
+        let from_import_index: i32 = s.de()?;
+        let from_command_type: u8 = s.de()?;
+        let to_export_bundle_index: i32 = s.de()?;
+
         Ok(Self{
-            from_import_index: s.de()?,
-            from_command_type: s.de()?,
-            to_export_bundle_index: s.de()?,
+            from_import_index,
+            // EExportCommandType serialization is inconsistent: it is serialized as uint8 in external arcs, but as uint32 in export bundle entries
+            from_command_type: EExportCommandType::from_repr(from_command_type as u32).unwrap(),
+            to_export_bundle_index,
         })
     }
 }
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct FImportedPackageDependency {
-    dependency_arcs: Vec<FExternalDependencyArc>,
+    pub(crate) dependency_arcs: Vec<FExternalDependencyArc>,
 }
 impl Readable for FImportedPackageDependency {
     #[instrument(skip_all, name = "FImportedPackageDependency")]
@@ -414,14 +419,15 @@ impl Readable for FImportedPackageDependency {
 // Legacy, UE 5.2 and below, when there were multiple export bundles instead of just one
 #[derive(Debug, Copy, Clone, Default)]
 #[repr(C)] // needed to determine the offset of the arc data
-struct FExportBundleHeader
+pub(crate) struct FExportBundleHeader
 {
-    // Serial offset to the export
-    serial_offset: u64,
+    // Serial offset to the first serialized export in this bundle. Each bundle begins with an export, and all serialized exports in the bundle are laid out in sequence,
+    // one after another. cooked serial offset on the exports is not actually used for locating export blobs by the async loader
+    pub(crate) serial_offset: u64,
     // Index into ExportBundleEntries to the first entry belonging to this export bundle
-    first_entry_index: u32,
+    pub(crate) first_entry_index: u32,
     // Number of entries in this export bundle
-    entry_count: u32,
+    pub(crate) entry_count: u32,
 }
 impl Readable for FExportBundleHeader {
     #[instrument(skip_all, name = "FExportBundleHeader")]

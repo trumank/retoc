@@ -3,7 +3,7 @@ use crate::legacy_asset::{FLegacyPackageFileSummary, FLegacyPackageHeader, FLega
 use crate::name_map::FMappedName;
 use crate::script_objects::{FPackageObjectIndex, FPackageObjectIndexType, FScriptObjectEntry, ZenScriptObjects};
 use crate::ser::ReadExt;
-use crate::zen::{EExportFilterFlags, EObjectFlags, FExportMapEntry, FPackageFileVersion, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo};
+use crate::zen::{EExportCommandType, EExportFilterFlags, EObjectFlags, FExportMapEntry, FExternalDependencyArc, FPackageFileVersion, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo};
 use crate::{EIoChunkType, FGuid, FIoChunkId, FPackageId};
 use anyhow::{anyhow, bail};
 use std::cmp::max;
@@ -93,7 +93,6 @@ impl<'a> FZenPackageContext<'a> {
         let package_chunk_id = FIoChunkId::from_package_id(package_id, 0, EIoChunkType::ExportBundleData);
         let package_data = self.store_access.read(package_chunk_id);
         let package_store_entry_ref = self.store_access.package_store_entry(package_id);
-
 
         // Mark the package as failed load if it's chunk failed to load
         if let Err(read_error) = package_data {
@@ -497,11 +496,20 @@ fn build_export_map(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
     }
     Ok({})
 }
-fn resolve_export_dependencies(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
+
+// Export dependency representation not bound to a global list
+#[derive(Debug, Clone, Default)]
+struct FStandaloneExportDependencies {
+    serialize_before_serialize: Vec<FPackageIndex>,
+    create_before_serialize: Vec<FPackageIndex>,
+    serialize_before_create: Vec<FPackageIndex>,
+    create_before_create: Vec<FPackageIndex>,
+}
+fn resolve_export_dependencies_internal_dependency_bundles(builder: &mut LegacyAssetBuilder, export_dependencies: &mut Vec<FStandaloneExportDependencies>) {
 
     for export_index in 0..builder.zen_package.dependency_bundle_headers.len() {
 
-        let mut export_object = builder.legacy_package.exports[export_index].clone();
+        let mut dependencies = &mut export_dependencies[export_index];
 
         // Extract dependencies from zen first
         let bundle_header = builder.zen_package.dependency_bundle_headers[export_index];
@@ -516,65 +524,172 @@ fn resolve_export_dependencies(builder: &mut LegacyAssetBuilder) -> anyhow::Resu
 
         // Create before create dependencies
         let last_create_before_create_index = first_dependency_index + bundle_header.create_before_create_dependencies as usize;
-        let mut create_before_create_deps: Vec<FPackageIndex> =
+        dependencies.create_before_create =
             builder.zen_package.dependency_bundle_entries[first_dependency_index..last_create_before_create_index]
-            .iter().map(|x| x.local_import_or_export_index).map(remap_zen_package_index).collect();
+                .iter().map(|x| x.local_import_or_export_index).map(remap_zen_package_index).collect();
 
         // Serialize before create dependencies
         let last_serialize_before_create_index = last_create_before_create_index + bundle_header.serialize_before_create_dependencies as usize;
-        let mut serialize_before_create_deps: Vec<FPackageIndex> =
+        dependencies.serialize_before_create =
             builder.zen_package.dependency_bundle_entries[last_create_before_create_index..last_serialize_before_create_index]
                 .iter().map(|x| x.local_import_or_export_index).map(remap_zen_package_index).collect();
 
         // Create before serialize dependencies
         let last_create_before_serialize_index = last_serialize_before_create_index + bundle_header.create_before_serialize_dependencies as usize;
-        let mut create_before_serialize_deps: Vec<FPackageIndex> =
+        dependencies.create_before_serialize =
             builder.zen_package.dependency_bundle_entries[last_serialize_before_create_index..last_create_before_serialize_index]
                 .iter().map(|x| x.local_import_or_export_index).map(remap_zen_package_index).collect();
 
         // Serialize before serialize dependencies
         let last_serialize_before_serialize_index = last_create_before_serialize_index + bundle_header.serialize_before_serialize_dependencies as usize;
-        let mut serialize_before_serialize_deps: Vec<FPackageIndex> =
+        dependencies.serialize_before_serialize =
             builder.zen_package.dependency_bundle_entries[last_create_before_serialize_index..last_serialize_before_serialize_index]
                 .iter().map(|x| x.local_import_or_export_index).map(remap_zen_package_index).collect();
+    }
+}
+
+fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAssetBuilder, export_dependencies: &mut Vec<FStandaloneExportDependencies>) {
+
+    // "to export" is the one that depends on the given state of the "from export/import", e.g. "to export" is the export that has "from export/import" as a dependency
+    let mut add_export_dependency = |from_index: FPackageIndex, to_export_index: usize, from_type: EExportCommandType, to_type: EExportCommandType| {
+
+        // for "to export" to be in Created state, it needs "from export" to be in Created (or Serialized) state
+        if to_type == EExportCommandType::Create {
+            if from_type == EExportCommandType::Create {
+                // create before create dependency
+                export_dependencies[to_export_index].create_before_create.push(from_index);
+            } else if from_type == EExportCommandType::Serialize {
+                // serialize before create dependency
+                export_dependencies[to_export_index].serialize_before_create.push(from_index);
+            }
+        // for "to export" to be in Serialized state, it needs "from export" to be in Created (or Serialized) state
+        } else if to_type == EExportCommandType::Serialize {
+            if from_type == EExportCommandType::Create {
+                // create before serialize dependency
+                export_dependencies[to_export_index].create_before_serialize.push(from_index);
+            } else if from_type == EExportCommandType::Serialize {
+                // serialize before serialize dependency
+                export_dependencies[to_export_index].serialize_before_serialize.push(from_index);
+            }
+        }
+    };
+
+    // Process internal dependencies (export bundle to export bundle, e.g. export to export)
+    for internal_arc in builder.zen_package.internal_dependency_arcs.clone() {
+
+        let from_export_bundle = builder.zen_package.export_bundle_headers[internal_arc.from_export_bundle_index as usize].clone();
+        let to_export_bundle = builder.zen_package.export_bundle_headers[internal_arc.to_export_bundle_index as usize].clone();
+
+        for i in 0..from_export_bundle.entry_count {
+
+            let from_bundle_entry_index = from_export_bundle.first_entry_index + i;
+            let from_bundle_entry = builder.zen_package.export_bundle_entries[from_bundle_entry_index as usize].clone();
+
+            let from_export_index = from_bundle_entry.local_export_index;
+            let from_dependency_type = from_bundle_entry.command_type;
+
+            for j in 0..to_export_bundle.entry_count {
+
+                let to_bundle_entry_index = to_export_bundle.first_entry_index + j;
+                let to_bundle_entry = builder.zen_package.export_bundle_entries[to_bundle_entry_index as usize].clone();
+
+                let to_export_index = to_bundle_entry.local_export_index as usize;
+                let to_dependency_type = to_bundle_entry.command_type;
+
+                add_export_dependency(FPackageIndex::create_export(from_export_index), to_export_index, from_dependency_type, to_dependency_type);
+            }
+        }
+    }
+
+    // Process external dependencies (import to export bundle, e.g. import to export)
+    let all_external_arcs: Vec<FExternalDependencyArc> = builder.zen_package.imported_package_dependencies.iter().flat_map(|x| { x.dependency_arcs.clone() }).collect();
+    for external_arc in all_external_arcs {
+
+        let to_export_bundle = builder.zen_package.export_bundle_headers[external_arc.to_export_bundle_index as usize].clone();
+        let from_original_import_index = external_arc.from_import_index as usize;
+        let from_dependency_type = external_arc.from_command_type;
+
+        // Same logic here as in resolve_export_dependencies_internal_dependency_bundles - the import indices that are written into the zen asset are not the same indices that are used
+        // during the intermediate steps of asset building when rehydrating import map, so we need to map the original index to the temporary import index,
+        // and then all preload dependencies will get remapped back to the correct original indices when the asset is finalized
+        let from_import_index = builder.original_import_order.get(&from_original_import_index).unwrap().clone() as u32;
+
+        for i in 0..to_export_bundle.entry_count {
+
+            let to_bundle_entry_index = to_export_bundle.first_entry_index + i;
+            let to_bundle_entry = builder.zen_package.export_bundle_entries[to_bundle_entry_index as usize].clone();
+
+            let to_export_index = to_bundle_entry.local_export_index as usize;
+            let to_dependency_type = to_bundle_entry.command_type;
+
+            add_export_dependency(FPackageIndex::create_import(from_import_index), to_export_index, from_dependency_type, to_dependency_type);
+        }
+    }
+}
+
+fn apply_standalone_dependencies_to_package(builder: &mut LegacyAssetBuilder, export_dependencies: &mut Vec<FStandaloneExportDependencies>) {
+    for export_index in 0..builder.legacy_package.exports.len() {
+
+        let mut export_object = builder.legacy_package.exports[export_index].clone();
+        let mut dependencies = &mut export_dependencies[export_index];
 
         // Ensure that we have outer and super as create before create dependencies
-        if !export_object.outer_index.is_null() && !create_before_create_deps.contains(&export_object.outer_index) {
-            create_before_create_deps.push(export_object.outer_index);
+        if !export_object.outer_index.is_null() && !dependencies.create_before_create.contains(&export_object.outer_index) {
+            dependencies.create_before_create.push(export_object.outer_index);
         }
-        if !export_object.super_index.is_null() && !create_before_create_deps.contains(&export_object.super_index) {
-            create_before_create_deps.push(export_object.super_index);;
+        if !export_object.super_index.is_null() && !dependencies.create_before_create.contains(&export_object.super_index) {
+            dependencies.create_before_create.push(export_object.super_index);;
         }
         // Ensure that we have class and archetype as serialize before create dependencies
-        if !export_object.class_index.is_null() && !serialize_before_create_deps.contains(&export_object.class_index) {
-            serialize_before_create_deps.push(export_object.class_index);
+        if !export_object.class_index.is_null() && !dependencies.serialize_before_create.contains(&export_object.class_index) {
+            dependencies.serialize_before_create.push(export_object.class_index);
         }
-        if !export_object.template_index.is_null() && !serialize_before_create_deps.contains(&export_object.template_index) {
-            serialize_before_create_deps.push(export_object.template_index);
+        if !export_object.template_index.is_null() && !dependencies.serialize_before_create.contains(&export_object.template_index) {
+            dependencies.serialize_before_create.push(export_object.template_index);
         }
 
         // If we have no dependencies altogether, do not write first dependency import on the export
-        if create_before_create_deps.is_empty() && serialize_before_create_deps.is_empty() && create_before_serialize_deps.is_empty() && serialize_before_serialize_deps.is_empty() {
+        if dependencies.create_before_create.is_empty() && dependencies.serialize_before_create.is_empty() && dependencies.create_before_serialize.is_empty() && dependencies.serialize_before_serialize.is_empty() {
             continue
         }
 
         // Set the index of the preload dependencies start, and the numbers of each dependency
         export_object.first_export_dependency_index = builder.legacy_package.preload_dependencies.len() as i32;
-        export_object.serialize_before_serialize_dependencies = serialize_before_serialize_deps.len() as i32;
-        export_object.create_before_serialize_dependencies = create_before_serialize_deps.len() as i32;
-        export_object.serialize_before_create_dependencies = serialize_before_create_deps.len() as i32;
-        export_object.create_before_create_dependencies = create_before_create_deps.len() as i32;
+        export_object.serialize_before_serialize_dependencies = dependencies.serialize_before_serialize.len() as i32;
+        export_object.create_before_serialize_dependencies = dependencies.create_before_serialize.len() as i32;
+        export_object.serialize_before_create_dependencies = dependencies.serialize_before_create.len() as i32;
+        export_object.create_before_create_dependencies = dependencies.create_before_create.len() as i32;
 
         // Update the export object now
         builder.legacy_package.exports[export_index] = export_object;
 
         // Append preload dependencies for this export now to the legacy package
-        builder.legacy_package.preload_dependencies.append(&mut serialize_before_serialize_deps);
-        builder.legacy_package.preload_dependencies.append(&mut create_before_serialize_deps);
-        builder.legacy_package.preload_dependencies.append(&mut serialize_before_create_deps);
-        builder.legacy_package.preload_dependencies.append(&mut create_before_create_deps);
+        builder.legacy_package.preload_dependencies.append(&mut dependencies.serialize_before_serialize);
+        builder.legacy_package.preload_dependencies.append(&mut dependencies.create_before_serialize);
+        builder.legacy_package.preload_dependencies.append(&mut dependencies.serialize_before_create);
+        builder.legacy_package.preload_dependencies.append(&mut dependencies.create_before_create);
+    }
+}
+
+fn resolve_export_dependencies(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
+
+    // Create standalone dependency objects first
+    let mut export_dependencies: Vec<FStandaloneExportDependencies> = Vec::with_capacity(builder.legacy_package.exports.len());
+    for _ in 0..builder.legacy_package.exports.len() {
+        export_dependencies.push(FStandaloneExportDependencies::default());
     }
 
+    // If we have dependency bundle entries, this is new style (UE5.3+) dependencies
+    if !builder.zen_package.dependency_bundle_entries.is_empty() {
+        resolve_export_dependencies_internal_dependency_bundles(builder, &mut export_dependencies);
+    }
+    // If we have export bundle headers, this is old style dependencies
+    else if !builder.zen_package.export_bundle_headers.is_empty() {
+        resolve_export_dependencies_internal_dependency_arcs(builder, &mut export_dependencies);
+    }
+
+    // Apply standalone dependencies to the package global list
+    apply_standalone_dependencies_to_package(builder, &mut export_dependencies);
     Ok({})
 }
 fn finalize_asset(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
