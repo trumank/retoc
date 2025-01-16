@@ -217,7 +217,7 @@ pub(crate) struct FLegacyPackageFileSummary
     bulk_data_start_offset: i64,
 }
 impl FLegacyPackageFileSummary {
-    const PACKAGE_FILE_TAG: u32 = 0x9E2A83C1;
+    pub(crate) const PACKAGE_FILE_TAG: u32 = 0x9E2A83C1;
     pub(crate) fn has_package_flags(&self, package_flags: EPackageFlags) -> bool { (self.package_flags & package_flags as u32) != 0 }
     pub(crate) fn is_filter_editor_only(&self) -> bool { self.has_package_flags(EPackageFlags::FilterEditorOnly) }
     pub(crate) fn uses_unversioned_property_serialization(&self) -> bool { self.has_package_flags(EPackageFlags::UsesUnversionedProperties) }
