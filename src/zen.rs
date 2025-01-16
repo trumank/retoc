@@ -431,7 +431,6 @@ impl FZenPackageHeader {
         let package_start_offset = s.stream_position()?;
         let summary: FZenPackageSummary = FZenPackageSummary::deserialize(s, header_version)?;
         let optional_versioning_info: Option<FZenPackageVersioningInfo> = if summary.has_versioning_info != 0 { Some(s.de()?) } else { None };
-        dbg!(summary.clone());
         let name_map: FNameMap = s.de()?;
 
         let optional_package_version = optional_versioning_info.as_ref()

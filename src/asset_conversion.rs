@@ -94,6 +94,7 @@ impl<'a> FZenPackageContext<'a> {
         let package_data = self.store_access.read(package_chunk_id);
         let package_store_entry_ref = self.store_access.package_store_entry(package_id);
 
+
         // Mark the package as failed load if it's chunk failed to load
         if let Err(read_error) = package_data {
             self.packages_failed_load.insert(package_id);

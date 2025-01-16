@@ -126,7 +126,7 @@ impl Readable for FIoContainerHeaderPackageRedirect {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct StoreEntry {
     pub(crate) export_count: i32,
     pub(crate) export_bundle_count: i32,
