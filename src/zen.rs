@@ -1,6 +1,6 @@
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use strum::FromRepr;
 use tracing::instrument;
 
@@ -61,7 +61,7 @@ impl Readable for FPackageFileSummary {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub(crate) struct FZenPackageSummary {
     pub(crate) has_versioning_info: u32,
     pub(crate) header_size: u32,
@@ -431,6 +431,7 @@ impl FZenPackageHeader {
         let package_start_offset = s.stream_position()?;
         let summary: FZenPackageSummary = FZenPackageSummary::deserialize(s, header_version)?;
         let optional_versioning_info: Option<FZenPackageVersioningInfo> = if summary.has_versioning_info != 0 { Some(s.de()?) } else { None };
+        dbg!(summary.clone());
         let name_map: FNameMap = s.de()?;
 
         let optional_package_version = optional_versioning_info.as_ref()
@@ -474,11 +475,13 @@ impl FZenPackageHeader {
         s.seek(SeekFrom::Start(export_map_start_offset))?;
         let export_map: Vec<FExportMapEntry> = s.de_ctx(export_map_count)?;
 
-        let export_bundle_entries_count = (summary.dependency_bundle_headers_offset - summary.export_bundle_entries_offset) as usize / size_of::<FExportBundleEntry>();
+        let export_bundle_entries_end_offset = if summary.dependency_bundle_headers_offset > 0 { summary.dependency_bundle_headers_offset } else { summary.graph_data_offset };
+        let export_bundle_entries_count = (export_bundle_entries_end_offset - summary.export_bundle_entries_offset) as usize / size_of::<FExportBundleEntry>();
         let export_bundle_entries_start_offset = package_start_offset + summary.export_bundle_entries_offset as u64;
         let expected_export_bundle_entries_count = export_map_count * 2; // Each export must have Create and Serialize
-        assert_eq!(export_bundle_entries_count, expected_export_bundle_entries_count, "Expected to have Create and Serialize commands in export bundle for each export in the package. Got only {} export bundle entries with {} exports",
-            export_bundle_entries_count, export_map_count);
+        if export_bundle_entries_count != expected_export_bundle_entries_count {
+            bail!("Expected to have Create and Serialize commands in export bundle for each export in the package. Got only {} export bundle entries with {} exports", export_bundle_entries_count, export_map_count);
+        }
 
         s.seek(SeekFrom::Start(export_bundle_entries_start_offset))?;
         let export_bundle_entries: Vec<FExportBundleEntry> = s.de_ctx(export_bundle_entries_count)?;
@@ -486,10 +489,12 @@ impl FZenPackageHeader {
         let mut dependency_bundle_headers: Vec<FDependencyBundleHeader> = Vec::new();
         let mut dependency_bundle_entries: Vec<FDependencyBundleEntry> = Vec::new();
 
-        if summary.dependency_bundle_entries_offset > 0 && summary.dependency_bundle_entries_offset > 0 {
+        if summary.dependency_bundle_headers_offset > 0 && summary.dependency_bundle_entries_offset > 0 {
             let dependency_bundle_headers_count = (summary.dependency_bundle_entries_offset - summary.dependency_bundle_headers_offset) as usize / size_of::<FDependencyBundleHeader>();
             let dependency_bundle_headers_start_offset = package_start_offset + summary.dependency_bundle_headers_offset as u64;
-            assert_eq!(dependency_bundle_headers_count, export_map_count, "Expected to have as many dependency bundle headers as the number of exports. Got {} dependency bundle headers for {} exports", dependency_bundle_headers_count, export_map_count);
+            if dependency_bundle_headers_count != export_map_count {
+                bail!("Expected to have as many dependency bundle headers as the number of exports. Got {} dependency bundle headers for {} exports", dependency_bundle_headers_count, export_map_count);
+            }
 
             s.seek(SeekFrom::Start(dependency_bundle_headers_start_offset))?;
             dependency_bundle_headers = s.de_ctx(dependency_bundle_headers_count)?;
