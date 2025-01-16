@@ -542,7 +542,7 @@ mod test {
         )?);
 
         let header = ser_hex::read("trace.json", &mut stream, |x| {
-            FZenPackageHeader::deserialize(x, StoreEntry::default(), EIoStoreTocVersion::OnDemandMetaData, EIoContainerHeaderVersion::NoExportInfo)
+            FZenPackageHeader::deserialize(x, StoreEntry::default(), EIoStoreTocVersion::OnDemandMetaData, EIoContainerHeaderVersion::NoExportInfo, None)
         })?;
         header.name_map.get(header.summary.name);
 
