@@ -95,8 +95,8 @@ struct ActionExtractLegacy {
 
     /// UE5 Object Version
     /// default is EUnrealEngineObjectUE5Version::PropertyTagCompleteTypeName
-    #[arg(long, value_parser = parse_ue5_object_version, default_value = "1012")]
-    version: EUnrealEngineObjectUE5Version,
+    #[arg(long, value_parser = parse_ue5_object_version)]
+    version: Option<EUnrealEngineObjectUE5Version>,
     #[arg(short, long, default_value = "false")]
     verbose: bool,
     #[arg(short, long)]
@@ -425,7 +425,7 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
     let debug_output = args.verbose;
     // TODO @trumank make this an option. Right now it is UE 5.4
     let package_file_version: Option<FPackageFileVersion> =
-        Some(FPackageFileVersion::create_ue5(args.version));
+        args.version.map(FPackageFileVersion::create_ue5);
     let mut package_context = FZenPackageContext::create(iostore.as_ref());
 
     let mut count = 0;
