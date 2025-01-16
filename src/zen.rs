@@ -368,6 +368,72 @@ impl Readable for FDependencyBundleEntry {
     }
 }
 
+// Actual UE type name not known, type layout from AsyncLoading2.cpp SetupSerializedArcs on 5.2.2
+#[derive(Debug, Copy, Clone, Default)]
+pub(crate) struct FInternalDependencyArc {
+    pub(crate) from_export_bundle_index: i32,
+    pub(crate) to_export_bundle_index: i32,
+}
+impl Readable for FInternalDependencyArc {
+    #[instrument(skip_all, name = "FInternalDependencyArc")]
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        Ok(Self{
+            from_export_bundle_index: s.de()?,
+            to_export_bundle_index: s.de()?,
+        })
+    }
+}
+
+// Actual UE type name not known, type layout from AsyncLoading2.cpp SetupSerializedArcs on 5.2.2
+#[derive(Debug, Copy, Clone, Default)]
+pub(crate) struct FExternalDependencyArc {
+    from_import_index: i32,
+    from_command_type: u8,
+    to_export_bundle_index: i32,
+}
+impl Readable for FExternalDependencyArc {
+    #[instrument(skip_all, name = "FExternalDependencyArc")]
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        Ok(Self{
+            from_import_index: s.de()?,
+            from_command_type: s.de()?,
+            to_export_bundle_index: s.de()?,
+        })
+    }
+}
+#[derive(Debug, Clone, Default)]
+pub(crate) struct FImportedPackageDependency {
+    dependency_arcs: Vec<FExternalDependencyArc>,
+}
+impl Readable for FImportedPackageDependency {
+    #[instrument(skip_all, name = "FImportedPackageDependency")]
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        Ok(Self{dependency_arcs: s.de()?})
+    }
+}
+// Legacy, UE 5.2 and below, when there were multiple export bundles instead of just one
+#[derive(Debug, Copy, Clone, Default)]
+#[repr(C)] // needed to determine the offset of the arc data
+struct FExportBundleHeader
+{
+    // Serial offset to the export
+    serial_offset: u64,
+    // Index into ExportBundleEntries to the first entry belonging to this export bundle
+    first_entry_index: u32,
+    // Number of entries in this export bundle
+    entry_count: u32,
+}
+impl Readable for FExportBundleHeader {
+    #[instrument(skip_all, name = "FExportBundleHeader")]
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        Ok(Self{
+            serial_offset: s.de()?,
+            first_entry_index: s.de()?,
+            entry_count: s.de()?,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, FromRepr)]
 #[repr(i32)]
 pub(crate) enum EUnrealEngineObjectUE5Version {
@@ -403,6 +469,10 @@ pub(crate) struct FZenPackageHeader {
     pub(crate) imported_public_export_hashes: Vec<u64>,
     pub(crate) import_map: Vec<FPackageObjectIndex>,
     pub(crate) export_map: Vec<FExportMapEntry>,
+    // Only available before 5.3, where zen packages could have multiple export bundles and not just one
+    pub(crate) export_bundle_headers: Vec<FExportBundleHeader>,
+    // Meaning depending on the version. In 5.2 and below, this array is the data storage for export bundles, their contents are specified by export bundle headers
+    // In 5.3 and later, there is only a single export bundle, and it's contents are represented by export bundle entries
     pub(crate) export_bundle_entries: Vec<FExportBundleEntry>,
     pub(crate) dependency_bundle_headers: Vec<FDependencyBundleHeader>,
     pub(crate) dependency_bundle_entries: Vec<FDependencyBundleEntry>,
@@ -410,6 +480,8 @@ pub(crate) struct FZenPackageHeader {
     pub(crate) imported_packages: Vec<FPackageId>,
     pub(crate) shader_map_hashes: Vec<FSHAHash>,
     pub(crate) is_unversioned: bool,
+    pub(crate) internal_dependency_arcs: Vec<FInternalDependencyArc>,
+    pub(crate) imported_package_dependencies: Vec<FImportedPackageDependency>,
 }
 impl FZenPackageHeader {
     pub(crate) fn package_name(&self) -> String {
@@ -487,6 +559,9 @@ impl FZenPackageHeader {
 
         let mut dependency_bundle_headers: Vec<FDependencyBundleHeader> = Vec::new();
         let mut dependency_bundle_entries: Vec<FDependencyBundleEntry> = Vec::new();
+        let mut internal_dependency_arcs: Vec<FInternalDependencyArc> = Vec::new();
+        let mut imported_package_dependencies: Vec<FImportedPackageDependency> = Vec::new();
+        let mut export_bundle_headers: Vec<FExportBundleHeader> = Vec::new();
 
         if summary.dependency_bundle_headers_offset > 0 && summary.dependency_bundle_entries_offset > 0 {
             let dependency_bundle_headers_count = (summary.dependency_bundle_entries_offset - summary.dependency_bundle_headers_offset) as usize / size_of::<FDependencyBundleHeader>();
@@ -509,7 +584,13 @@ impl FZenPackageHeader {
             let graph_data_start_offset = package_start_offset + summary.graph_data_offset as u64;
             s.seek(SeekFrom::Start(graph_data_start_offset))?;
 
-            // TODO: Read arc data
+            let export_bundles_count = store_entry.export_bundle_count as usize;
+            export_bundle_headers = s.de_ctx(export_bundles_count)?;
+
+            internal_dependency_arcs = s.de()?;
+
+            let external_packages_count = store_entry.imported_packages.len();
+            imported_package_dependencies = s.de_ctx(external_packages_count)?;
         }
 
         // This is technically not necessary to read, but that data can be used for verification and debugging
@@ -536,6 +617,7 @@ impl FZenPackageHeader {
             imported_public_export_hashes,
             import_map,
             export_map,
+            export_bundle_headers,
             export_bundle_entries,
             dependency_bundle_headers,
             dependency_bundle_entries,
@@ -543,6 +625,8 @@ impl FZenPackageHeader {
             imported_packages: store_entry.imported_packages,
             shader_map_hashes: store_entry.shader_map_hashes,
             is_unversioned,
+            internal_dependency_arcs,
+            imported_package_dependencies,
         })
     }
 }
