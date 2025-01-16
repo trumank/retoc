@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use fs_err as fs;
 
 use crate::{
-    container_header::{FIoContainerHeader, StoreEntryRef},
+    container_header::{FIoContainerHeader, StoreEntry},
     ser::*,
     Config, EIoChunkType, FIoChunkId, FPackageId, Toc,
 };
@@ -60,7 +60,7 @@ pub trait IoStoreTrait {
     fn child_containers(&self) -> Box<dyn Iterator<Item = &dyn IoStoreTrait> + '_>;
     /// Get absolute path (including mount point) if it has one
     fn chunk_path(&self, chunk_id: FIoChunkId) -> Option<String>;
-    fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntryRef>;
+    fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntry>;
 }
 
 pub struct ChunkInfo<'a> {
@@ -154,7 +154,7 @@ impl IoStoreTrait for IoStoreBackend {
     fn chunk_path(&self, chunk_id: FIoChunkId) -> Option<String> {
         self.containers.iter().find_map(|c| c.chunk_path(chunk_id))
     }
-    fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntryRef> {
+    fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntry> {
         self.containers
             .iter()
             .find_map(|c| c.package_store_entry(package_id))
@@ -265,7 +265,7 @@ impl IoStoreTrait for IoStoreContainer {
     fn chunk_path(&self, chunk_id: FIoChunkId) -> Option<String> {
         self.toc.file_name(chunk_id)
     }
-    fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntryRef> {
+    fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntry> {
         self.container_header
             .as_ref()
             .and_then(|header| header.get_store_entry(package_id))

@@ -1,4 +1,3 @@
-use crate::container_header::StoreEntryRef;
 use crate::iostore::IoStoreTrait;
 use crate::legacy_asset::{FLegacyPackageFileSummary, FLegacyPackageHeader, FLegacyPackageVersioningInfo, FObjectDataResource, FObjectExport, FObjectImport, FPackageNameMap};
 use crate::name_map::FMappedName;
@@ -98,7 +97,7 @@ impl<'a> FZenPackageContext<'a> {
         }
 
         let mut zen_package_buffer = Cursor::new(package_data?);
-        let zen_package_header = FZenPackageHeader::deserialize(&mut zen_package_buffer, StoreEntryRef::to_owned(&package_store_entry_ref.unwrap()));
+        let zen_package_header = FZenPackageHeader::deserialize(&mut zen_package_buffer, package_store_entry_ref.unwrap());
 
         // Mark the package as failed if we failed to parse the header
         if let Err(header_error) = zen_package_header {

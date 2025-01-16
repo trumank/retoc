@@ -68,10 +68,10 @@ impl Readable for FIoContainerHeader {
     }
 }
 impl FIoContainerHeader {
-    pub(crate) fn get_store_entry(&self, package_id: FPackageId) -> Option<StoreEntryRef> {
+    pub(crate) fn get_store_entry(&self, package_id: FPackageId) -> Option<StoreEntry> {
         // TODO handle redirects?
         let index = *self.package_entry_map.get(&package_id)?;
-        Some(self.store_entries.get_ref(index))
+        Some(self.store_entries.get(index))
     }
     pub(crate) fn package_ids(&self) -> &[FPackageId] {
         &self.package_ids
@@ -124,42 +124,35 @@ impl Readable for FIoContainerHeaderPackageRedirect {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct StoreEntryRef<'a> {
-    pub(crate) imported_packages: &'a [FPackageId],
-    pub(crate) shader_map_hashes: &'a [FSHAHash],
-}
 #[derive(Debug, Default)]
 pub(crate) struct StoreEntry {
+    pub(crate) export_count: i32,
+    pub(crate) export_bundle_count: i32,
     pub(crate) imported_packages: Vec<FPackageId>,
     pub(crate) shader_map_hashes: Vec<FSHAHash>,
-}
-impl StoreEntryRef<'_> {
-    pub(crate) fn to_owned(&self) -> StoreEntry {
-        StoreEntry {
-            imported_packages: self.imported_packages.to_vec(),
-            shader_map_hashes: self.shader_map_hashes.to_vec(),
-        }
-    }
 }
 
 #[derive(Debug)]
 struct StoreEntries {
+    entries: Vec<FFilePackageStoreEntry>,
     imported_packages: HashMap<u32, Vec<FPackageId>>,
     shader_map_hashes: HashMap<u32, Vec<FSHAHash>>,
 }
 impl StoreEntries {
-    fn get_ref(&self, index: u32) -> StoreEntryRef {
-        StoreEntryRef {
+    fn get(&self, index: u32) -> StoreEntry {
+        let entry = &self.entries[index as usize];
+        StoreEntry {
+            export_count: entry.export_count,
+            export_bundle_count: entry.export_bundle_count,
             imported_packages: self
                 .imported_packages
                 .get(&index)
-                .map(Vec::as_slice)
+                .cloned()
                 .unwrap_or_default(),
             shader_map_hashes: self
                 .shader_map_hashes
                 .get(&index)
-                .map(Vec::as_slice)
+                .cloned()
                 .unwrap_or_default(),
         }
     }
@@ -201,6 +194,7 @@ impl ReadableCtx<(EIoContainerHeaderVersion, usize)> for StoreEntries {
             }
         }
         Ok(Self {
+            entries,
             imported_packages,
             shader_map_hashes,
         })
@@ -227,6 +221,10 @@ impl<T> Readable for TFilePackageStoreEntryCArrayView<T> {
 #[derive(Debug)]
 #[repr(C)] // Needed to determine the number of package store entries
 struct FFilePackageStoreEntry {
+    // version < EIoContainerHeaderVersion::NoExportInfo
+    export_count: i32,
+    export_bundle_count: i32,
+
     imported_packages: TFilePackageStoreEntryCArrayView<FPackageId>,
     shader_map_hashes: TFilePackageStoreEntryCArrayView<FSHAHash>,
 }
@@ -236,12 +234,15 @@ impl ReadableCtx<EIoContainerHeaderVersion> for FFilePackageStoreEntry {
         if version == EIoContainerHeaderVersion::Initial {
             todo!()
         } else {
+            let mut export_count = 0;
+            let mut export_bundle_count = 0;
             if version < EIoContainerHeaderVersion::NoExportInfo {
-                // TODO
-                let export_count: u32 = s.de()?;
-                let export_bundle_count: u32 = s.de()?;
+                export_count = s.de()?;
+                export_bundle_count = s.de()?;
             }
             Ok(Self {
+                export_count,
+                export_bundle_count,
                 imported_packages: s.de()?,
                 shader_map_hashes: s.de()?,
             })
