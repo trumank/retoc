@@ -514,14 +514,18 @@ impl FZenPackageHeader {
         }
 
         // This is technically not necessary to read, but that data can be used for verification and debugging
-        let imported_package_names_start_offset = package_start_offset + summary.imported_package_names_offset as u64;
-        s.seek(SeekFrom::Start(imported_package_names_start_offset))?;
+        let mut imported_package_names: Vec<String> = Vec::new();
+        if summary.imported_package_names_offset > 0 {
+            let imported_package_names_start_offset = package_start_offset + summary.imported_package_names_offset as u64;
+            s.seek(SeekFrom::Start(imported_package_names_start_offset))?;
 
-        let mut imported_package_names: Vec<String> = read_name_batch(s)?;
-        let imported_package_name_numbers: Vec<i32> = s.de_ctx(imported_package_names.len())?;
-        for (index, item) in imported_package_names.iter_mut().enumerate() {
-            if imported_package_name_numbers[index] != 0 {
-                *item = format!("{item}_{}", imported_package_name_numbers[index] - 1)
+            imported_package_names = read_name_batch(s)?;
+
+            let imported_package_name_numbers: Vec<i32> = s.de_ctx(imported_package_names.len())?;
+            for (index, item) in imported_package_names.iter_mut().enumerate() {
+                if imported_package_name_numbers[index] != 0 {
+                    *item = format!("{item}_{}", imported_package_name_numbers[index] - 1)
+                }
             }
         }
 
