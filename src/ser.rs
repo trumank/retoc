@@ -69,6 +69,14 @@ pub(crate) trait WriteExt: Write {
     {
         value.ser(self)
     }
+    /// Serialize &[T] without length prefix
+    #[instrument(skip_all)]
+    fn ser_no_length<T: Writeable, S: AsRef<[T]>>(&mut self, value: &S) -> Result<()>
+    where
+        Self: Sized,
+    {
+        T::ser_array(value.as_ref(), self)
+    }
 }
 
 impl<const N: usize, T: Readable + Default + Copy> Readable for [T; N] {

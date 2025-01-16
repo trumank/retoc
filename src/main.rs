@@ -666,7 +666,7 @@ fn write_compression_methods<S: Write>(s: &mut S, toc: &Toc) -> Result<()> {
             .chain(std::iter::repeat(0))
             .take(32)
             .collect();
-        s.ser(&buffer)?;
+        s.ser_no_length(&buffer)?;
     }
     Ok(())
 }
@@ -888,11 +888,11 @@ impl Writeable for Toc {
         };
         s.ser(&header)?;
 
-        s.ser(&self.chunks)?;
-        s.ser(&self.chunk_offset_lengths)?;
-        s.ser(&self.compression_blocks)?;
+        s.ser_no_length(&self.chunks)?;
+        s.ser_no_length(&self.chunk_offset_lengths)?;
+        s.ser_no_length(&self.compression_blocks)?;
         write_compression_methods(s, &self)?;
-        s.ser(&directory_index_buffer)?;
+        s.ser_no_length(&directory_index_buffer)?;
         write_meta(s, &self)?;
 
         Ok(())
@@ -1046,7 +1046,8 @@ impl Toc {
                         cas_stream.read_exact(tmp)?;
                         tmp
                     };
-                    flate2::read::ZlibDecoder::new(tmp).read_exact(&mut out[..uncompressed_size])?;
+                    flate2::read::ZlibDecoder::new(tmp)
+                        .read_exact(&mut out[..uncompressed_size])?;
                 }
                 CompressionMethod::Oodle => {
                     let tmp = if let Some(key) = aes_key {
@@ -1570,11 +1571,8 @@ mod directory_index {
         fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
             if !self.file_entries.is_empty() {
                 s.ser(&self.mount_point)?;
-                s.ser(&(self.directory_entries.len() as u32))?;
                 s.ser(&self.directory_entries)?;
-                s.ser(&(self.file_entries.len() as u32))?;
                 s.ser(&self.file_entries)?;
-                s.ser(&(self.string_table.len() as u32))?;
                 s.ser(&self.string_table)?;
             }
             Ok(())
