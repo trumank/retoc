@@ -263,7 +263,7 @@ pub(crate) enum EExportCommandType {
 }
 #[derive(Debug)]
 #[repr(C)] // Needed to determine the number of export bundle entries
-struct FExportBundleEntry {
+pub(crate) struct FExportBundleEntry {
     pub(crate) local_export_index: u32,
     pub(crate) command_type: EExportCommandType,
 }
@@ -277,16 +277,16 @@ impl Readable for FExportBundleEntry {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone, Default)]
 #[repr(C)] // Needed to determine the number of bundle headers
-struct FDependencyBundleHeader
+pub(crate) struct FDependencyBundleHeader
 {
     pub(crate) first_entry_index: i32,
     // Note that this is defined as uint32 EntryCount[ExportCommandType_Count][ExportCommandType_Count], but this is a really awkward definition to work with,
     // so here it is defined as 4 individual properties: [Create][Create], [Create][Serialize], [Serialize][Create] and [Serialize][Serialize]
     pub(crate) create_before_create_dependencies: u32,
-    pub(crate) create_before_serialize_dependencies: u32,
     pub(crate) serialize_before_create_dependencies: u32,
+    pub(crate) create_before_serialize_dependencies: u32,
     pub(crate) serialize_before_serialize_dependencies: u32,
 }
 impl Readable for FDependencyBundleHeader {
@@ -295,14 +295,14 @@ impl Readable for FDependencyBundleHeader {
         Ok(Self{
             first_entry_index: s.de()?,
             create_before_create_dependencies: s.de()?,
-            create_before_serialize_dependencies: s.de()?,
             serialize_before_create_dependencies: s.de()?,
+            create_before_serialize_dependencies: s.de()?,
             serialize_before_serialize_dependencies: s.de()?,
         })
     }
 }
 
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Hash)]
 pub(crate) struct FPackageIndex {
     index: i32, // positive is index into the export map, negative is index into import map, zero is none
 }
@@ -341,7 +341,7 @@ impl Writeable for FPackageIndex {
 
 #[derive(Debug)]
 #[repr(C)] // Needed to determine the number of bundle entries
-struct FDependencyBundleEntry {
+pub(crate) struct FDependencyBundleEntry {
     pub(crate) local_import_or_export_index: FPackageIndex,
 }
 impl Readable for FDependencyBundleEntry {
