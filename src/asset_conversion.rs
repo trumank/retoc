@@ -807,7 +807,8 @@ fn rebuild_asset_export_data_internal(builder: &LegacyAssetBuilder, raw_exports_
     for export_bundle_index in 0..builder.zen_package.export_bundle_headers.len() {
 
         let export_bundle = builder.zen_package.export_bundle_headers[export_bundle_index].clone();
-        let mut current_serial_offset = export_bundle.serial_offset as usize;
+        let mut current_serial_offset = builder.zen_package.summary.header_size as usize + export_bundle.serial_offset as usize;
+        dbg!(current_serial_offset);
 
         for i in 0..export_bundle.entry_count {
             let export_bundle_entry_index = export_bundle.first_entry_index + i;
@@ -821,6 +822,9 @@ fn rebuild_asset_export_data_internal(builder: &LegacyAssetBuilder, raw_exports_
                 let export_target_serial_offset = builder.legacy_package.exports[export_index].serial_offset as u64;
                 let export_data_start_offset = current_serial_offset;
                 let export_data_end_offset = export_data_start_offset + export_serial_size;
+                dbg!(export_data_start_offset);
+                dbg!(export_target_serial_offset);
+                dbg!(export_serial_size);
 
                 // Write the blob for the current export and skip past it's data
                 exports_data_writer.seek(SeekFrom::Start(export_target_serial_offset))?;
@@ -867,18 +871,11 @@ pub(crate) fn write_asset<P: AsRef<Path>>(builder: &LegacyAssetBuilder, out_asse
     }
 
     // Write the asset file first
-    let mut out_asset_buffer: Vec<u8> = Vec::new();
-    let mut asset_cursor = Cursor::new(&mut out_asset_buffer);
-    FLegacyPackageHeader::serialize(&builder.legacy_package, &mut asset_cursor, debug_output)?;
+    let (header_data, exports_data) = serialize_asset(builder)?;
+    std::fs::write(out_asset_path.as_ref(), &header_data)?;
 
-    std::fs::write(out_asset_path.as_ref(), out_asset_buffer)?;
-
-    // Copy the raw export data from the chunk into the exports file
-    // Note that exports actually start after the zen header
-    let raw_exports_data = builder.package_context.read_full_package_data(builder.package_id)?;
     let export_file_path = out_asset_path.as_ref().with_extension("uexp");
-
-    std::fs::write(export_file_path, &raw_exports_data[builder.zen_package.summary.header_size as usize..])?;
+    std::fs::write(export_file_path, &exports_data)?;
     Ok({})
 }
 

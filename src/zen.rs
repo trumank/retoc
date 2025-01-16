@@ -423,6 +423,7 @@ pub(crate) struct FExportBundleHeader
 {
     // Serial offset to the first serialized export in this bundle. Each bundle begins with an export, and all serialized exports in the bundle are laid out in sequence,
     // one after another. cooked serial offset on the exports is not actually used for locating export blobs by the async loader
+    // This is relative to the zen header size
     pub(crate) serial_offset: u64,
     // Index into ExportBundleEntries to the first entry belonging to this export bundle
     pub(crate) first_entry_index: u32,
