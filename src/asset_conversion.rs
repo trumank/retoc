@@ -8,7 +8,7 @@ use crate::{EIoChunkType, FGuid, FIoChunkId, FPackageId};
 use anyhow::{anyhow, bail};
 use std::cmp::max;
 use std::collections::{HashMap, HashSet};
-use std::io::Cursor;
+use std::io::{Cursor, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::rc::Rc;
 
@@ -296,8 +296,8 @@ struct LegacyAssetBuilder<'a, 'b> {
     zen_import_lookup: HashMap<FPackageObjectIndex, FPackageIndex>,
     // Maps desired (real) import position to the current (temporary) import position
     original_import_order: HashMap<usize, usize>,
-    // Whenever we need to explicitly append footer magic to the end of the exports blob because zen did not preserve it
-    should_write_exports_footer_magic: bool,
+    // Whenever export data needs to be rebuilt from scratch in the order of the exports
+    needs_to_rebuild_exports_data: bool,
 }
 
 // Lifetime: create_asset_builder -> begin_build_summary -> copy_package_sections -> build_import_map -> build_export_map -> resolve_export_dependencies -> finalize_asset -> write_asset
@@ -312,7 +312,7 @@ fn create_asset_builder<'a, 'b>(package_context: &'a mut FZenPackageContext<'b>,
         resolved_import_lookup: HashMap::new(),
         zen_import_lookup: HashMap::new(),
         original_import_order: HashMap::new(),
-        should_write_exports_footer_magic: false,
+        needs_to_rebuild_exports_data: false,
     })
 }
 fn begin_build_summary(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
@@ -446,8 +446,8 @@ fn build_import_map(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
 fn build_export_map(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
     builder.legacy_package.exports.reserve(builder.zen_package.export_map.len());
 
-    // Whenever we cannot trust the export serial offsets and need to remap them using export bundles
-    let needs_export_offset_remapping = !builder.zen_package.export_bundle_headers.is_empty();
+    // If there are export bundle headers, export blobs have been moved from their original positions, and we need to rebuild the export section
+    builder.needs_to_rebuild_exports_data = !builder.zen_package.export_bundle_headers.is_empty();
 
     for export_index in 0..builder.zen_package.export_map.len() {
         let zen_export: FExportMapEntry = builder.zen_package.as_ref().export_map[export_index].clone();
@@ -469,7 +469,7 @@ fn build_export_map(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
         // we retain the relative position here, and package summary serialization code will fix it up with the serialized header size later
         // In 5.2 and earlier, serial offset on exports is meaningless, actual offsets need to be calculated from bundle headers, so do not use that offset in <=5.2
         let serial_size: i64 = zen_export.cooked_serial_size as i64;
-        let serial_offset: i64 = if !needs_export_offset_remapping { zen_export.cooked_serial_offset as i64 } else { -1 };
+        let serial_offset: i64 = if !builder.needs_to_rebuild_exports_data { zen_export.cooked_serial_offset as i64 } else { -1 };
 
         // In legacy assets these are not excluding (can be both not for client and not for server, but only for editor), but in cooked assets generally it is only not for one of either
         let is_not_for_client = zen_export.filter_flags == EExportFilterFlags::NotForClient;
@@ -502,41 +502,21 @@ fn build_export_map(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
         builder.legacy_package.exports.push(new_object_export);
     }
 
-    // If exports have been moved by zen from their original positions, resolve the actual offsets of the exports
-    if needs_export_offset_remapping {
-        for export_bundle_index in 0..builder.zen_package.export_bundle_headers.len() {
+    // If we need to rebuild exports, assign the serial offsets on them in the order in which we will lay them out in the file
+    if builder.needs_to_rebuild_exports_data {
 
-            let export_bundle = builder.zen_package.export_bundle_headers[export_bundle_index].clone();
-            let mut current_serial_offset = export_bundle.serial_offset as i64;
+        // Note that this is relative to the package header, not to the actual start of the file
+        let mut current_export_serial_offset = 0;
 
-            for i in 0..export_bundle.entry_count {
+        for export_index in 0..builder.legacy_package.exports.len() {
 
-                let export_bundle_entry_index = export_bundle.first_entry_index + i;
-                let export_bundle_entry = builder.zen_package.export_bundle_entries[export_bundle_entry_index as usize];
+            let export_serial_size = builder.legacy_package.exports[export_index].serial_size;
+            let new_export_serial_offset = current_export_serial_offset;
 
-                // Only serialize commands decide where export blob is stored
-                if export_bundle_entry.command_type == EExportCommandType::Serialize {
-
-                    let export_index = export_bundle_entry.local_export_index as usize;
-                    let export_serial_size = builder.legacy_package.exports[export_index].serial_size;
-
-                    // Note that the bundle serial offset includes the header size, while legacy package export
-                    // serial offset needs to not include the header size (for it to be adjusted with legacy header size later)
-                    let export_serial_offset = current_serial_offset - builder.zen_package.summary.header_size as i64;
-
-                    // Update the export serial offset to the actual location of the export
-                    builder.legacy_package.exports[export_index].serial_offset = export_serial_offset;
-
-                    // Skip past the current export
-                    current_serial_offset += export_serial_size;
-                }
-            }
+            builder.legacy_package.exports[export_index].serial_offset = new_export_serial_offset;
+            current_export_serial_offset += export_serial_size;
         }
-        // If export offsets were remapped, zen touched the original export file, and did not preserve the footer magic
-        // So we need to append the footer magic after the exports here
-        builder.should_write_exports_footer_magic = true;
     }
-
     Ok({})
 }
 
@@ -812,6 +792,50 @@ pub(crate) fn build_asset_from_zen<'a, 'b>(package_context: &'a mut FZenPackageC
 
     Ok(asset_builder)
 }
+fn rebuild_asset_export_data_internal(builder: &LegacyAssetBuilder, raw_exports_data: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+
+    // Calculate the total size of the exports blob (including the package footer)
+    let mut total_exports_serial_size = size_of::<u32>();
+    for export_index in 0..builder.legacy_package.exports.len() {
+        total_exports_serial_size += builder.legacy_package.exports[export_index].serial_size as usize;
+    }
+
+    // Allocate the underlying storage and copy export blobs into it from the export bundles
+    let mut result_exports_data: Vec<u8> = Vec::with_capacity(total_exports_serial_size);
+    let mut exports_data_writer = Cursor::new(&mut result_exports_data);
+
+    for export_bundle_index in 0..builder.zen_package.export_bundle_headers.len() {
+
+        let export_bundle = builder.zen_package.export_bundle_headers[export_bundle_index].clone();
+        let mut current_serial_offset = export_bundle.serial_offset as usize;
+
+        for i in 0..export_bundle.entry_count {
+            let export_bundle_entry_index = export_bundle.first_entry_index + i;
+            let export_bundle_entry = builder.zen_package.export_bundle_entries[export_bundle_entry_index as usize];
+
+            // Only serialize commands actually encode export blobs
+            if export_bundle_entry.command_type == EExportCommandType::Serialize {
+
+                let export_index = export_bundle_entry.local_export_index as usize;
+                let export_serial_size = builder.legacy_package.exports[export_index].serial_size as usize;
+                let export_target_serial_offset = builder.legacy_package.exports[export_index].serial_offset as u64;
+                let export_data_start_offset = current_serial_offset;
+                let export_data_end_offset = export_data_start_offset + export_serial_size;
+
+                // Write the blob for the current export and skip past it's data
+                exports_data_writer.seek(SeekFrom::Start(export_target_serial_offset))?;
+                exports_data_writer.write(&raw_exports_data[export_data_start_offset..export_data_end_offset])?;
+                current_serial_offset += export_serial_size;
+            }
+        }
+    }
+    // Append the package footer at the end
+    let package_file_magic: u32 = FLegacyPackageFileSummary::PACKAGE_FILE_TAG;
+    exports_data_writer.ser(&package_file_magic)?;
+
+    Ok(result_exports_data)
+}
+
 // Serializes an asset into in-memory buffer. First entry is the uasset file, and the second one is the uexp file
 pub(crate) fn serialize_asset(builder: &LegacyAssetBuilder) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
     // Write the asset file first
@@ -820,19 +844,18 @@ pub(crate) fn serialize_asset(builder: &LegacyAssetBuilder) -> anyhow::Result<(V
     FLegacyPackageHeader::serialize(&builder.legacy_package, &mut asset_cursor, false)?;
 
     // Copy the raw export data from the chunk into the exports file
-    // Note that exports actually start after the zen header
     let raw_exports_data = builder.package_context.read_full_package_data(builder.package_id)?;
-    let mut export_data_blob = raw_exports_data[builder.zen_package.summary.header_size as usize..].to_vec();
 
-    // Append package file magic to the end of exports if we need to
-    if builder.should_write_exports_footer_magic {
-        let mut exports_cursor = Cursor::new(&mut export_data_blob);
-        let package_file_magic: u32 = FLegacyPackageFileSummary::PACKAGE_FILE_TAG;
-        exports_cursor.ser(&package_file_magic)?;
-    }
-
+    let export_data_blob = if builder.needs_to_rebuild_exports_data {
+        // If we need to rebuild export data, do it now
+        rebuild_asset_export_data_internal(builder, &raw_exports_data)?
+    } else {
+        // Otherwise we just need to strip the zen header from the exports
+        raw_exports_data[builder.zen_package.summary.header_size as usize..].to_vec()
+    };
     Ok((out_asset_buffer, export_data_blob))
 }
+
 // Writes asset to the file. Additionally writes to the uexp file next to it
 pub(crate) fn write_asset<P: AsRef<Path>>(builder: &LegacyAssetBuilder, out_asset_path: P) -> anyhow::Result<()> {
 
