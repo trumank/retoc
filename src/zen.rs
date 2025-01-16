@@ -111,7 +111,7 @@ impl FZenPackageSummary {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, FromRepr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
 #[repr(u32)]
 pub(crate) enum EZenPackageVersion {
     Initial,
@@ -483,18 +483,30 @@ impl FZenPackageHeader {
         s.seek(SeekFrom::Start(export_bundle_entries_start_offset))?;
         let export_bundle_entries: Vec<FExportBundleEntry> = s.de_ctx(export_bundle_entries_count)?;
 
-        let dependency_bundle_headers_count = (summary.dependency_bundle_entries_offset - summary.dependency_bundle_headers_offset) as usize / size_of::<FDependencyBundleHeader>();
-        let dependency_bundle_headers_start_offset = package_start_offset + summary.dependency_bundle_headers_offset as u64;
-        assert_eq!(dependency_bundle_headers_count, export_map_count, "Expected to have as many dependency bundle headers as the number of exports. Got {} dependency bundle headers for {} exports", dependency_bundle_headers_count, export_map_count);
+        let mut dependency_bundle_headers: Vec<FDependencyBundleHeader> = Vec::new();
+        let mut dependency_bundle_entries: Vec<FDependencyBundleEntry> = Vec::new();
 
-        s.seek(SeekFrom::Start(dependency_bundle_headers_start_offset))?;
-        let dependency_bundle_headers = s.de_ctx(dependency_bundle_headers_count)?;
+        if summary.dependency_bundle_entries_offset > 0 && summary.dependency_bundle_entries_offset > 0 {
+            let dependency_bundle_headers_count = (summary.dependency_bundle_entries_offset - summary.dependency_bundle_headers_offset) as usize / size_of::<FDependencyBundleHeader>();
+            let dependency_bundle_headers_start_offset = package_start_offset + summary.dependency_bundle_headers_offset as u64;
+            assert_eq!(dependency_bundle_headers_count, export_map_count, "Expected to have as many dependency bundle headers as the number of exports. Got {} dependency bundle headers for {} exports", dependency_bundle_headers_count, export_map_count);
 
-        let dependency_bundle_entries_count = (summary.imported_package_names_offset - summary.dependency_bundle_entries_offset) as usize / size_of::<FDependencyBundleEntry>();
-        let dependency_bundle_entries_start_offset = package_start_offset + summary.dependency_bundle_entries_offset as u64;
+            s.seek(SeekFrom::Start(dependency_bundle_headers_start_offset))?;
+            dependency_bundle_headers = s.de_ctx(dependency_bundle_headers_count)?;
 
-        s.seek(SeekFrom::Start(dependency_bundle_entries_start_offset))?;
-        let dependency_bundle_entries = s.de_ctx(dependency_bundle_entries_count)?;
+            let dependency_bundle_entries_count = (summary.imported_package_names_offset - summary.dependency_bundle_entries_offset) as usize / size_of::<FDependencyBundleEntry>();
+            let dependency_bundle_entries_start_offset = package_start_offset + summary.dependency_bundle_entries_offset as u64;
+
+            s.seek(SeekFrom::Start(dependency_bundle_entries_start_offset))?;
+            dependency_bundle_entries = s.de_ctx(dependency_bundle_entries_count)?;
+        }
+        else if summary.graph_data_offset > 0 {
+
+            let graph_data_start_offset = package_start_offset + summary.graph_data_offset as u64;
+            s.seek(SeekFrom::Start(graph_data_start_offset))?;
+
+            // TODO: Read arc data
+        }
 
         // This is technically not necessary to read, but that data can be used for verification and debugging
         let imported_package_names_start_offset = package_start_offset + summary.imported_package_names_offset as u64;
