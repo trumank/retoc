@@ -167,38 +167,48 @@ impl ReadableCtx<(EIoContainerHeaderVersion, usize)> for StoreEntries {
         let buffer: Vec<u8> = s.de()?;
         let mut cur = Cursor::new(buffer);
 
-        let mut imported_packages = HashMap::new();
-        let mut shader_map_hashes = HashMap::new();
+        let (member_offset, entry_size) = if version >= EIoContainerHeaderVersion::NoExportInfo {
+            (0, 16)
+        } else {
+            (8, 24)
+        };
 
-        let entries: Vec<FFilePackageStoreEntry> =
-            read_array(package_count, &mut cur, |s| s.de_ctx(version))?;
-        for (i, entry) in entries.iter().enumerate() {
-            let offset = i * 16; // sizeof(FFilePackageStoreEntry)
+        ser_hex::read("trace.json", &mut cur, |cur| {
+            let mut imported_packages = HashMap::new();
+            let mut shader_map_hashes = HashMap::new();
 
-            let num = entry.imported_packages.array_num as usize;
-            if num != 0 {
-                let offset = offset
-                    + entry.imported_packages.offset_to_data_from_this as usize
-                    + 0; // offset_of(FFilePackageStoreEntry::imported_packages)
-                cur.seek(SeekFrom::Start(offset as u64))?;
-                let array: Vec<_> = cur.de_ctx(num)?;
-                imported_packages.insert(i as u32, array);
+            let entries: Vec<FFilePackageStoreEntry> =
+                read_array(package_count, cur, |s| s.de_ctx(version))?;
+            for (i, entry) in entries.iter().enumerate() {
+                let offset = i * entry_size; // sizeof(FFilePackageStoreEntry)
+
+                let num = entry.imported_packages.array_num as usize;
+                if num != 0 {
+                    let offset = offset
+                        + member_offset
+                        + entry.imported_packages.offset_to_data_from_this as usize
+                        + 0; // offset_of(FFilePackageStoreEntry::imported_packages)
+                    cur.seek(SeekFrom::Start(offset as u64))?;
+                    let array: Vec<_> = cur.de_ctx(num)?;
+                    imported_packages.insert(i as u32, array);
+                }
+
+                let num = entry.shader_map_hashes.array_num as usize;
+                if num != 0 {
+                    let offset = offset
+                        + member_offset
+                        + entry.shader_map_hashes.offset_to_data_from_this as usize
+                        + 8; // offset_of(FFilePackageStoreEntry::shader_map_hashes)
+                    cur.seek(SeekFrom::Start(offset as u64))?;
+                    let array: Vec<_> = cur.de_ctx(num)?;
+                    shader_map_hashes.insert(i as u32, array);
+                }
             }
-
-            let num = entry.shader_map_hashes.array_num as usize;
-            if num != 0 {
-                let offset = offset
-                    + entry.shader_map_hashes.offset_to_data_from_this as usize
-                    + 8; // offset_of(FFilePackageStoreEntry::shader_map_hashes)
-                cur.seek(SeekFrom::Start(offset as u64))?;
-                let array: Vec<_> = cur.de_ctx(num)?;
-                shader_map_hashes.insert(i as u32, array);
-            }
-        }
-        Ok(Self {
-            entries,
-            imported_packages,
-            shader_map_hashes,
+            Ok(Self {
+                entries,
+                imported_packages,
+                shader_map_hashes,
+            })
         })
     }
 }
