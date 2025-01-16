@@ -9,6 +9,7 @@ use crate::script_objects::FPackageObjectIndex;
 use crate::ser::{WriteExt, Writeable};
 use crate::{name_map::{FMappedName, FNameMap}, EIoStoreTocVersion, FGuid, FPackageId, FSHAHash, ReadExt, Readable};
 use crate::container_header::{EIoContainerHeaderVersion, StoreEntry};
+use crate::version_heuristics::{heuristic_zen_has_bulk_data, heuristic_zen_package_version};
 
 pub(crate) fn get_package_name(data: &[u8], container_header_version: EIoContainerHeaderVersion) -> Result<String> {
     FZenPackageHeader::get_package_name(&mut Cursor::new(data), container_header_version)
@@ -67,7 +68,7 @@ pub(crate) struct FZenPackageSummary {
     pub(crate) name: FMappedName,
     pub(crate) package_flags: u32,
     pub(crate) cooked_header_size: u32,
-    imported_public_export_hashes_offset: i32,
+    pub(crate) imported_public_export_hashes_offset: i32,
     import_map_offset: i32,
     export_map_offset: i32,
     export_bundle_entries_offset: i32,
@@ -396,7 +397,7 @@ pub(crate) enum EUnrealEngineObjectUE4Version {
 #[derive(Debug)]
 pub(crate) struct FZenPackageHeader {
     pub(crate) summary: FZenPackageSummary,
-    pub(crate) versioning_info: Option<FZenPackageVersioningInfo>,
+    pub(crate) versioning_info: FZenPackageVersioningInfo,
     pub(crate) name_map: FNameMap,
     pub(crate) bulk_data: Vec<FBulkDataMapEntry>,
     pub(crate) imported_public_export_hashes: Vec<u64>,
@@ -408,6 +409,7 @@ pub(crate) struct FZenPackageHeader {
     pub(crate) imported_package_names: Vec<String>,
     pub(crate) imported_packages: Vec<FPackageId>,
     pub(crate) shader_map_hashes: Vec<FSHAHash>,
+    pub(crate) is_unversioned: bool,
 }
 impl FZenPackageHeader {
     pub(crate) fn package_name(&self) -> String {
@@ -422,15 +424,33 @@ impl FZenPackageHeader {
         let name_map: FNameMap = s.de()?;
         Ok(name_map.get(summary.name).to_string())
     }
+
     #[instrument(skip_all, name = "FZenPackageHeader")]
-    pub(crate) fn deserialize<S: Read + Seek>(s: &mut S, store_entry: StoreEntry, container_version: EIoStoreTocVersion, header_version: EIoContainerHeaderVersion) -> Result<Self> {
+    pub(crate) fn deserialize<S: Read + Seek>(s: &mut S, store_entry: StoreEntry, container_version: EIoStoreTocVersion, header_version: EIoContainerHeaderVersion, package_version_override: Option<FPackageFileVersion>) -> Result<Self> {
 
         let package_start_offset = s.stream_position()?;
         let summary: FZenPackageSummary = FZenPackageSummary::deserialize(s, header_version)?;
-        let versioning_info: Option<FZenPackageVersioningInfo> = if summary.has_versioning_info != 0 { Some(s.de()?) } else { None };
+        let optional_versioning_info: Option<FZenPackageVersioningInfo> = if summary.has_versioning_info != 0 { Some(s.de()?) } else { None };
         let name_map: FNameMap = s.de()?;
 
-        let has_bulk_data = versioning_info.as_ref().map(|x| x.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::DataResources as i32).unwrap_or(true);
+        let optional_package_version = optional_versioning_info.as_ref()
+            .map(|x| { x.package_file_version })
+            .or_else(|| { package_version_override });
+
+        let has_bulk_data: bool = if let Some(package_version) = optional_package_version.as_ref() {
+            package_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::DataResources as i32
+        } else {
+            // Use the heuristic if we do not have the version data
+            let current_start_relative_offset = (s.stream_position()? - package_start_offset) as i32;
+            heuristic_zen_has_bulk_data(&summary, header_version, current_start_relative_offset)
+        };
+
+        // This is enough information to determine the package file version for unversioned zen packages
+        let is_unversioned: bool = optional_versioning_info.is_none();
+        let versioning_info: FZenPackageVersioningInfo = if optional_versioning_info.is_some() { optional_versioning_info.unwrap() } else {
+            heuristic_zen_package_version(optional_package_version, container_version, header_version, has_bulk_data)?
+        };
+
         let bulk_data: Vec<FBulkDataMapEntry> = if has_bulk_data {
             let bulk_data_map_size: i64 = s.de()?;
             let bulk_data_count = bulk_data_map_size as usize / size_of::<FBulkDataMapEntry>();
@@ -502,6 +522,7 @@ impl FZenPackageHeader {
             imported_package_names,
             imported_packages: store_entry.imported_packages,
             shader_map_hashes: store_entry.shader_map_hashes,
+            is_unversioned,
         })
     }
 }
@@ -520,7 +541,9 @@ mod test {
             "bad.uasset",
         )?);
 
-        let header = ser_hex::read("trace.json", &mut stream, |x| { FZenPackageHeader::deserialize(x, StoreEntry::default()) })?;
+        let header = ser_hex::read("trace.json", &mut stream, |x| {
+            FZenPackageHeader::deserialize(x, StoreEntry::default(), EIoStoreTocVersion::OnDemandMetaData, EIoContainerHeaderVersion::NoExportInfo)
+        })?;
         header.name_map.get(header.summary.name);
 
         //dbg!(field);

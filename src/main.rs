@@ -9,6 +9,7 @@ mod name_map;
 mod script_objects;
 mod ser;
 mod zen;
+mod version_heuristics;
 
 use aes::cipher::KeyInit as _;
 use anyhow::{bail, Context, Result};
@@ -426,7 +427,7 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
     // TODO @trumank make this an option. Right now it is UE 5.4
     let package_file_version: Option<FPackageFileVersion> =
         Some(FPackageFileVersion::create_ue5(args.version));
-    let mut package_context = FZenPackageContext::create(iostore.as_ref());
+    let mut package_context = FZenPackageContext::create(iostore.as_ref(), package_file_version, true, debug_output);
 
     let mut count = 0;
     let start_time = Instant::now();
@@ -478,8 +479,6 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
                     &mut package_context,
                     package_info.id(),
                     path,
-                    package_file_version,
-                    debug_output,
                 )?;
                 count += 1;
             }

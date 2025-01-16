@@ -20,16 +20,24 @@ pub(crate) struct FZenPackageContext<'a> {
     script_objects_resolved_as_classes: HashSet<FPackageObjectIndex>,
     package_headers_cache: HashMap<FPackageId, Rc<FZenPackageHeader>>,
     packages_failed_load: HashSet<FPackageId>,
+    fallback_package_file_version: Option<FPackageFileVersion>,
+    allow_stdout: bool,
+    verbose_stdout: bool,
+    has_logged_detected_package_version: bool,
 }
 impl<'a> FZenPackageContext<'a> {
-    pub(crate) fn create(store_access: &'a dyn IoStoreTrait) -> Self {
+    pub(crate) fn create(store_access: &'a dyn IoStoreTrait, fallback_package_file_version: Option<FPackageFileVersion>, allow_stdout: bool, verbose: bool) -> Self {
         Self {
             store_access,
             script_objects_loaded: false,
             script_objects: None,
             script_objects_resolved_as_classes: HashSet::new(),
             package_headers_cache: HashMap::new(),
-            packages_failed_load: HashSet::new()
+            packages_failed_load: HashSet::new(),
+            fallback_package_file_version,
+            allow_stdout,
+            verbose_stdout: verbose,
+            has_logged_detected_package_version: false,
         }
     }
     fn load_script_objects(&mut self) -> anyhow::Result<()> {
@@ -100,7 +108,7 @@ impl<'a> FZenPackageContext<'a> {
         let container_version = self.store_access.container_file_version().ok_or_else(|| { anyhow!("Failed to retrieve container TOC version") })?;
         let container_header_version = self.store_access.container_header_version().ok_or_else(|| { anyhow!("Failed to retrieve container header version") })?;
 
-        let zen_package_header = FZenPackageHeader::deserialize(&mut zen_package_buffer, package_store_entry_ref.unwrap(), container_version, container_header_version);
+        let zen_package_header = FZenPackageHeader::deserialize(&mut zen_package_buffer, package_store_entry_ref.unwrap(), container_version, container_header_version, self.fallback_package_file_version);
 
         // Mark the package as failed if we failed to parse the header
         if let Err(header_error) = zen_package_header {
@@ -304,7 +312,7 @@ fn create_asset_builder<'a, 'b>(package_context: &'a mut FZenPackageContext<'b>,
         original_import_order: HashMap::new()
     })
 }
-fn begin_build_summary(builder: &mut LegacyAssetBuilder, fallback_package_file_version: Option<FPackageFileVersion>) -> anyhow::Result<()> {
+fn begin_build_summary(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
     // Populate package summary with basic data
     let mut legacy_package_summary = FLegacyPackageFileSummary::default();
     legacy_package_summary.package_name = builder.zen_package.name_map.get(builder.zen_package.summary.name).to_string();
@@ -312,30 +320,22 @@ fn begin_build_summary(builder: &mut LegacyAssetBuilder, fallback_package_file_v
     legacy_package_summary.package_guid = FGuid{a: 0, b: 0, c: 0, d: 0};
     legacy_package_summary.package_source = 0;
 
-    // If zen package has versioning data, we can transfer it to the package. Otherwise, the package is written unversioned
-    // However, we still need to know the package file version to determine the disk format of the legacy package
-    if builder.zen_package.versioning_info.is_some() {
-        let zen_versions: &FZenPackageVersioningInfo = builder.zen_package.versioning_info.as_ref().unwrap();
+    let zen_versions: FZenPackageVersioningInfo = builder.zen_package.versioning_info.clone();
 
-        legacy_package_summary.versioning_info = FLegacyPackageVersioningInfo{
-            package_file_version: zen_versions.package_file_version,
-            licensee_version: zen_versions.licensee_version,
-            custom_versions: zen_versions.custom_versions.clone(),
-            is_unversioned: false,
-            ..FLegacyPackageVersioningInfo::default()
-        };
+    // If the zen package is unversioned, fallback package version is not provided, we have not logged it before
+    if builder.zen_package.is_unversioned && builder.package_context.fallback_package_file_version.is_none() && !builder.package_context.has_logged_detected_package_version && builder.package_context.allow_stdout {
+        builder.package_context.has_logged_detected_package_version = true;
+        println!("Detected package version: FPackageFileVersion(UE4: {}, UE5: {}), EZenPackageVersion: {}",
+                 zen_versions.package_file_version.file_version_ue4, zen_versions.package_file_version.file_version_ue5, zen_versions.zen_version as u32);
     }
-    else {
-        // TODO: Derive package file version from Zen. This has to be done in FZenPackageVersioningInfo since there are parsing differences for zen asset
-        if fallback_package_file_version.is_none() {
-            bail!("Cannot build legacy asset from unversioned zen asset without explicit package file version. Please provide explicit package file version");
-        }
-        legacy_package_summary.versioning_info = FLegacyPackageVersioningInfo{
-            package_file_version: fallback_package_file_version.unwrap(),
-            is_unversioned: true,
-            ..FLegacyPackageVersioningInfo::default()
-        };
-    }
+
+    legacy_package_summary.versioning_info = FLegacyPackageVersioningInfo{
+        package_file_version: zen_versions.package_file_version,
+        licensee_version: zen_versions.licensee_version,
+        custom_versions: zen_versions.custom_versions.clone(),
+        is_unversioned: builder.zen_package.is_unversioned,
+        ..FLegacyPackageVersioningInfo::default()
+    };
 
     // Create legacy package header
     builder.legacy_package = FLegacyPackageHeader {summary: legacy_package_summary, ..FLegacyPackageHeader::default()};
@@ -641,10 +641,10 @@ fn finalize_asset(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
 }
 
 // Builds an asset from zen container, returns a builder that can be used to write the payload to the file or read it directly
-pub(crate) fn build_asset_from_zen<'a, 'b>(package_context: &'a mut FZenPackageContext<'b>, package_id: FPackageId, fallback_package_file_version: Option<FPackageFileVersion>) -> anyhow::Result<LegacyAssetBuilder<'a, 'b>> {
+pub(crate) fn build_asset_from_zen<'a, 'b>(package_context: &'a mut FZenPackageContext<'b>, package_id: FPackageId) -> anyhow::Result<LegacyAssetBuilder<'a, 'b>> {
 
     let mut asset_builder = create_asset_builder(package_context, package_id)?;
-    begin_build_summary(&mut asset_builder, fallback_package_file_version)?;
+    begin_build_summary(&mut asset_builder)?;
     copy_package_sections(&mut asset_builder)?;
     build_import_map(&mut asset_builder)?;
     build_export_map(&mut asset_builder)?;
@@ -668,9 +668,10 @@ pub(crate) fn serialize_asset(builder: &LegacyAssetBuilder) -> anyhow::Result<(V
     Ok((out_asset_buffer, export_data_blob))
 }
 // Writes asset to the file. Additionally writes to the uexp file next to it
-pub(crate) fn write_asset<P: AsRef<Path>>(builder: &LegacyAssetBuilder, out_asset_path: P, debug_output: bool) -> anyhow::Result<()> {
+pub(crate) fn write_asset<P: AsRef<Path>>(builder: &LegacyAssetBuilder, out_asset_path: P) -> anyhow::Result<()> {
 
     // Dump zen package and legacy package for debugging
+    let debug_output = builder.package_context.allow_stdout && builder.package_context.verbose_stdout;
     if debug_output {
         dbg!(builder.zen_package.clone());
         dbg!(builder.legacy_package.clone());
@@ -695,14 +696,12 @@ pub(crate) fn write_asset<P: AsRef<Path>>(builder: &LegacyAssetBuilder, out_asse
 pub(crate) fn build_legacy<P: AsRef<Path>>(
     package_context: &mut FZenPackageContext,
     package_id: FPackageId,
-    out_path: P,
-    fallback_package_file_version: Option<FPackageFileVersion>,
-    debug_output: bool,
+    out_path: P
 ) -> anyhow::Result<()> {
 
     // Build the asset from zen
-    let asset_builder = build_asset_from_zen(package_context, package_id, fallback_package_file_version)?;
+    let asset_builder = build_asset_from_zen(package_context, package_id)?;
     // Write the asset to the file
-    write_asset(&asset_builder, out_path, debug_output)?;
+    write_asset(&asset_builder, out_path)?;
     Ok(())
 }
