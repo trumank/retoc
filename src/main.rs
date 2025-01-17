@@ -15,7 +15,7 @@ mod version_heuristics;
 mod zen;
 
 use aes::cipher::KeyInit as _;
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use bitflags::{bitflags, Flags};
 use clap::Parser;
 use compression::{decompress, CompressionMethod};
@@ -99,6 +99,10 @@ struct ActionExtractLegacy {
     utoc: PathBuf,
     #[arg(index = 2)]
     output: PathBuf,
+
+    /// Whenever shader libraries should be extracted as well
+    #[arg(short, long, default_value = "true")]
+    shader_libraries: bool,
 
     /// Engine version override
     #[arg(long)]
@@ -556,6 +560,47 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
         count,
         output.to_string_lossy()
     );
+
+    if args.shader_libraries {
+        let mut libraries_extracted: i32 = 0;
+        iostore
+            .chunks()
+            .filter(|x| { x.id().get_chunk_type() == EIoChunkType::ShaderCodeLibrary })
+            .try_for_each(|chunk_info| -> Result<()> {
+
+                let shader_library_path = chunk_info.container().chunk_path(chunk_info.id())
+                    .ok_or_else(|| { anyhow!("Failed to retrieve pathname for shader library chunk {:?}", chunk_info.id()) })?;
+
+                if let Some(filter) = &args.filter {
+                    if !shader_library_path.contains(filter) {
+                        return Ok({});
+                    }
+                }
+                if args.verbose {
+                    println!("Extracting Shader Library: {shader_library_path}");
+                }
+                // TODO make configurable
+                let path = shader_library_path.strip_prefix("../../../").with_context(|| {
+                    format!("failed to strip mount prefix from {shader_library_path:?}")
+                })?;
+
+                let path = output.join(path);
+                let dir = path.parent().unwrap();
+                fs::create_dir_all(dir)?;
+
+                let shader_library_buffer = rebuild_shader_library_from_io_store(chunk_info.container(), chunk_info.id())?;
+                fs::write(path, &shader_library_buffer)?;
+                Ok({})
+            })?;
+
+        if libraries_extracted > 0 {
+            println!(
+                "extracted {} shader code libraries to {}",
+                libraries_extracted,
+                output.to_string_lossy()
+            );
+        }
+    }
 
     Ok(())
 }
@@ -1613,6 +1658,7 @@ use crate::container_header::EIoContainerHeaderVersion;
 use crate::zen::{EUnrealEngineObjectUE5Version, FPackageFileVersion};
 use directory_index::*;
 use zen::get_package_name;
+use crate::shader_library::rebuild_shader_library_from_io_store;
 
 mod directory_index {
     use super::*;

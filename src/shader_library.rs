@@ -1,15 +1,13 @@
-use std::fmt::{Debug, Formatter};
-use std::io::{Cursor, Read, Seek, SeekFrom, Write};
-use std::iter::repeat;
-use std::ops::Deref;
-use std::rc::Rc;
-use anyhow::{anyhow, bail};
-use strum::FromRepr;
-use crate::{EIoStoreTocVersion, FIoChunkId, FSHAHash};
 use crate::compression::{decompress, CompressionMethod};
 use crate::container_header::EIoContainerHeaderVersion;
 use crate::iostore::IoStoreTrait;
 use crate::ser::{ReadExt, Readable, WriteExt, Writeable};
+use crate::{EIoStoreTocVersion, FIoChunkId, FSHAHash};
+use anyhow::{anyhow, bail};
+use std::fmt::{Debug, Formatter};
+use std::io::{Cursor, Read, Seek, Write};
+use std::ops::Deref;
+use strum::FromRepr;
 
 #[derive(Debug, Copy, Clone, Default)]
 struct FIoStoreShaderMapEntry
@@ -125,7 +123,7 @@ fn decompress_shader_group_chunk(shader_group_data: &Vec<u8>, container_version:
     if shader_group_data.is_empty() {
         bail!("Invalid shader group compressed data");
     }
-    let mut result_uncompressed_data: Vec<u8> = Vec::with_capacity(uncompressed_size);
+    let mut result_uncompressed_data: Vec<u8> = vec![0; uncompressed_size];
 
     // There is no indication of what compression algorithm is used, however, starting with UE5.3, it is always oodle
     let is_compression_always_oodle = container_version >= EIoStoreTocVersion::OnDemandMetaData ||
@@ -150,6 +148,7 @@ fn decompress_shader_group_chunk(shader_group_data: &Vec<u8>, container_version:
     Ok(result_uncompressed_data)
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct IoStoreShaderCodeArchive {
     pub(crate) version: EIoStoreShaderLibraryVersion,
     pub(crate) header: FIoStoreShaderCodeArchiveHeader,
@@ -171,7 +170,7 @@ impl IoStoreShaderCodeArchive {
         let shader_library_header = FIoStoreShaderCodeArchiveHeader::deserialize(&mut shader_library_reader, zen_shader_library_version)?;
 
         // Read and decompress individual shader groups belonging to this library, and extract shader code from them
-        let mut decompressed_shaders: Vec<Vec<u8>> = Vec::with_capacity(shader_library_header.shader_entries.len());
+        let mut decompressed_shaders: Vec<Vec<u8>> = vec![Vec::new(); shader_library_header.shader_entries.len()];
         let mut total_shader_code_size: usize = 0;
 
         for shader_group_index in 0..shader_library_header.shader_group_entries.len() {
@@ -187,9 +186,13 @@ impl IoStoreShaderCodeArchive {
                 let container_version = store_access.container_file_version().ok_or_else(|| { anyhow!("Failed to retrieve container file version") })?;
                 let container_header_version = store_access.container_header_version();
                 shader_group_data = decompress_shader_group_chunk(&shader_group_data, container_version, container_header_version, shader_group_entry.uncompressed_size as usize)?;
+                if shader_group_data.len() != shader_group_entry.uncompressed_size as usize {
+                    bail!("Invalid amount of uncompressed data from decompress_shader_group_chunk: Expected {}, got {}", shader_group_entry.uncompressed_size, shader_group_data.len());
+                }
             }
 
-            // Copy individual shaders code from the group
+            // Extract shader indices and their offsets from the shader group
+            let mut shader_id_and_offset: Vec<(usize, usize)> = Vec::with_capacity(shader_group_entry.num_shaders as usize);
             for i in 0..shader_group_entry.num_shaders {
 
                 // Resolve the actual shader index and it's shader entry
@@ -197,30 +200,34 @@ impl IoStoreShaderCodeArchive {
                 let shader_index = shader_library_header.shader_indices[shader_indices_index] as usize;
                 let shader_entry = shader_library_header.shader_entries[shader_index].clone();
 
-                let current_shader_offset = shader_entry.shader_uncompressed_offset_in_group();
+                // Make sure that this shader actually belongs to this group
+                if shader_entry.shader_group_index() != shader_group_index {
+                    bail!("Shader {} has conflicting group index: shader points at group {}, but group {} claims that it contains the shader",
+                        shader_index, shader_entry.shader_group_index(), shader_group_index);
+                }
+                shader_id_and_offset.push((shader_index, shader_entry.shader_uncompressed_offset_in_group()))
+            }
 
-                // Calculate the size of this shader by subtracting the next shader offset from this shader offset
-                // NOTE: This code can be adjusted to assume non-sequential shader placement, but right now all UE versions lay shaders sequentially in groups
-                let next_shader_offset: usize = if (i + 1) < shader_group_entry.num_shaders {
-                    let next_shader_indices_index = (shader_group_entry.shader_indices_offset + i + 1) as usize;
-                    let next_shader_index = shader_library_header.shader_indices[next_shader_indices_index] as usize;
-                    let next_shader_entry = shader_library_header.shader_entries[next_shader_index].clone();
+            // Sort shaders based on their offsets. This is needed to be able to calculate their sizes by looking at the offset of the next shader
+            // This is generally not necessary because UnrealPak always lays out shaders sequentially already, but it does not hurt to double check and not rely on that assumption
+            shader_id_and_offset.sort_by_key(|(_, shader_group_offset)| { *shader_group_offset });
 
-                    // Next shader offset must follow this shader offset
-                    let next_shader_offset = next_shader_entry.shader_uncompressed_offset_in_group();
-                    if next_shader_offset <= current_shader_offset {
-                        bail!("Shader placement is non-sequential for shader group {:?} shader at index {}. Expected next shader data to start after current shader data ({}), but it starts at {}",
-                            shader_group_chunk_id, shader_index, current_shader_offset, next_shader_offset);
-                    }
-                    next_shader_offset
-                } else {
-                    // This is the last shader in the group, so it ends at the size of uncompressed data
-                    shader_group_entry.uncompressed_size as usize
-                };
-                // Copy the decompressed shader data
-                let shader_uncompressed_size = next_shader_offset - current_shader_offset;
-                decompressed_shaders[shader_index] = shader_group_data[current_shader_offset..next_shader_offset].to_vec();
-                total_shader_code_size += shader_uncompressed_size;
+            // Copy the decompressed shader data for all shaders except the last one
+            for i in 0..(shader_id_and_offset.len() - 1) {
+                let (shader_index, shader_start_offset) = shader_id_and_offset[i].clone();
+                let (_, shader_end_offset) = shader_id_and_offset[i + 1].clone();
+
+                decompressed_shaders[shader_index] = shader_group_data[shader_start_offset..shader_end_offset].to_vec();
+                total_shader_code_size += decompressed_shaders[shader_index].len();
+            }
+
+            // Copy the shader data for the last shader. It's end offset is the size of the shader group
+            if !shader_id_and_offset.is_empty() {
+                let (shader_index, shader_start_offset) = shader_id_and_offset.last().unwrap().clone();
+                let shader_end_offset = shader_group_entry.uncompressed_size as usize;
+
+                decompressed_shaders[shader_index] = shader_group_data[shader_start_offset..shader_end_offset].to_vec();
+                total_shader_code_size += decompressed_shaders[shader_index].len();
             }
         }
 
@@ -320,7 +327,7 @@ struct WriteShaderCodeResult {
 fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive) -> anyhow::Result<WriteShaderCodeResult> {
     // Calculate how many maps reference each shader. Shaders that are only referenced by one shader map can be put next to each other and preloaded as one region
     let total_shaders = shader_library.header.shader_entries.len();
-    let mut shader_reference_count: Vec<u32> = repeat(0).take(total_shaders).collect();
+    let mut shader_reference_count: Vec<u32> = vec![0; total_shaders];
 
     for shader_map_index in 0..shader_library.header.shader_map_entries.len() {
         let shader_map_entry = shader_library.header.shader_map_entries[shader_map_index].clone();
@@ -335,8 +342,8 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive) -> anyhow
     // Write shaders depending on how many shader maps they appeared in
     let mut shader_code_buffer: Vec<u8> = Vec::with_capacity(shader_library.total_shader_code_size);
     let mut shader_code_writer = Cursor::new(&mut shader_code_buffer);
-    let mut shader_file_regions: Vec<(i64, usize, bool)> = repeat((-1, 0, false)).take(total_shaders).collect();
-    let mut shader_map_file_regions: Vec<(i64, usize)> = repeat((-1, 0)).take(shader_library.header.shader_map_entries.len()).collect();
+    let mut shader_file_regions: Vec<(i64, usize, bool)> = vec![(-1, 0, false); total_shaders];
+    let mut shader_map_file_regions: Vec<(i64, usize)> = vec![(-1, 0); shader_library.header.shader_map_entries.len()];
 
     fn write_shader<S: Write + Seek>(writer: &mut S, shader_file_regions: &mut Vec<(i64, usize, bool)>, shader_library: &IoStoreShaderCodeArchive, shader_index: usize, unique: bool) -> anyhow::Result<()> {
         let shader_offset = writer.stream_position()? as i64;
@@ -494,9 +501,9 @@ pub(crate) fn rebuild_shader_library_from_io_store(store_access: &dyn IoStoreTra
 
 #[cfg(test)]
 mod test {
+    use super::*;
     use std::fs;
     use std::io::BufReader;
-    use super::*;
 
     #[test]
     fn test_read_container_shader_library() -> anyhow::Result<()> {
