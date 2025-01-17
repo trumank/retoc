@@ -47,7 +47,9 @@ impl Readable for FIoContainerHeader {
         let localized_packages = s.de()?;
         let package_redirects = s.de()?;
 
-        // TODO SoftPackageReferences
+        if version >= EIoContainerHeaderVersion::SoftPackageReferences {
+            todo!()
+        }
 
         let package_entry_map = package_ids
             .iter()
@@ -269,9 +271,10 @@ mod test {
 
     #[test]
     fn test_container_header() -> Result<()> {
-        let mut stream = BufReader::new(fs::File::open("containerheader.bin")?);
+        let stream = BufReader::new(fs::File::open("tests/UE5.3/ContainerHeader_1.bin")?);
 
-        let header = ser_hex::read("trace.json", &mut stream, FIoContainerHeader::de)?;
+        let header: FIoContainerHeader =
+            ser_hex::TraceStream::new("out/container_header.trace.json", stream).de()?;
         dbg!(header.store_entries.shader_map_hashes);
 
         Ok(())
