@@ -31,7 +31,6 @@ impl IoStoreWriter {
 
         let mut toc = Toc::new();
         toc.compression_block_size = 0x10000;
-        toc.compression_methods.push(CompressionMethod::None);
         toc.version = version;
         toc.container_id = FIoContainerId::from_name(&name);
         toc.directory_index.mount_point = mount_point;
