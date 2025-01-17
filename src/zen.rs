@@ -641,24 +641,25 @@ impl FZenPackageHeader {
 #[cfg(test)]
 mod test {
     use super::*;
-
     use fs_err as fs;
     use std::io::BufReader;
 
     #[test]
-    fn test_zen() -> Result<()> {
+    fn test_zen_asset_parsing() -> Result<()> {
         let mut stream = BufReader::new(fs::File::open(
-            //"zen_out/AbioticFactor/Content/Audio/Abiotic_Dialog_NarrativeNPC.uasset",
-            "bad.uasset",
+            "tests/UE5.4/BP_Russian_pool_table.uasset",
         )?);
 
-        let header = ser_hex::read("trace.json", &mut stream, |x| {
+        let header = ser_hex::read("out/zen_asset_parsing.trace.json", &mut stream, |x| {
             FZenPackageHeader::deserialize(x, StoreEntry::default(), EIoStoreTocVersion::OnDemandMetaData, EIoContainerHeaderVersion::NoExportInfo, None)
         })?;
-        header.name_map.get(header.summary.name);
+        let package_name = header.package_name();
 
-        //dbg!(field);
+        assert_eq!(package_name, "/Game/Billiards/Blueprints/BP_Russian_pool_table");
+        assert_eq!(header.name_map.get(header.export_map[5].object_name), "SCS_Node_10");
 
+        //dbg!(package_name);
+        //dbg!(header);
         Ok(())
     }
 }

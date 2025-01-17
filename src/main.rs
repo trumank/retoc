@@ -10,6 +10,7 @@ mod script_objects;
 mod ser;
 mod zen;
 mod version_heuristics;
+mod shader_library;
 
 use aes::cipher::KeyInit as _;
 use anyhow::{bail, Context, Result};
