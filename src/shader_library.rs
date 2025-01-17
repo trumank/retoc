@@ -1,6 +1,10 @@
 use std::fmt::{Debug, Formatter};
-use std::io::Read;
-use crate::{FIoChunkId, FSHAHash};
+use std::io::{Cursor, Read};
+use anyhow::{anyhow, bail};
+use strum::FromRepr;
+use crate::{EIoStoreTocVersion, FIoChunkId, FSHAHash};
+use crate::container_header::EIoContainerHeaderVersion;
+use crate::iostore::IoStoreTrait;
 use crate::ser::{ReadExt, Readable};
 
 #[derive(Debug, Copy, Clone, Default)]
@@ -71,6 +75,12 @@ impl Readable for FIoStoreShaderGroupEntry {
     }
 }
 
+#[derive(Debug, Copy, Clone, FromRepr)]
+#[repr(u32)]
+enum EIoStoreShaderLibraryVersion {
+    Initial = 1,
+}
+
 #[derive(Debug, Clone, Default)]
 struct FIoStoreShaderCodeArchiveHeader {
     shader_map_hashes: Vec<FSHAHash>,
@@ -82,8 +92,8 @@ struct FIoStoreShaderCodeArchiveHeader {
     shader_group_entries: Vec<FIoStoreShaderGroupEntry>,
     shader_indices: Vec<u32>,
 }
-impl Readable for FIoStoreShaderCodeArchiveHeader {
-    fn de<S: Read>(s: &mut S) -> anyhow::Result<Self> {
+impl FIoStoreShaderCodeArchiveHeader {
+    fn deserialize<S: Read>(s: &mut S, _version: EIoStoreShaderLibraryVersion) -> anyhow::Result<Self> {
 
         let shader_map_hashes: Vec<FSHAHash> = s.de()?;
         let shader_hashes: Vec<FSHAHash> = s.de()?;
@@ -103,6 +113,63 @@ impl Readable for FIoStoreShaderCodeArchiveHeader {
             shader_indices,
         })
     }
+}
+
+fn decompress_shader_group_chunk(shader_group_data: &Vec<u8>, container_version: EIoStoreTocVersion, container_header_version: Option<EIoContainerHeaderVersion>) -> Result<Vec<u8>> {
+
+    // Sanity check against empty compressed data chunks
+    if shader_group_data.is_empty() {
+        bail!("Invalid shader group compressed data");
+    }
+
+    // There is no indication of what compression algorithm is used, however, starting with UE5.3, it is always oodle
+    let is_compression_always_oodle = container_version >= EIoStoreTocVersion::OnDemandMetaData ||
+        (container_header_version.is_some() && container_header_version.unwrap() >= EIoContainerHeaderVersion::NoExportInfo);
+
+    // If we know for sure that this is oodle, decompress with oodle
+    if is_compression_always_oodle {
+
+    }
+    // Otherwise, it can be any compression format UE supports. However, by default it is always Oodle, and it is known that to change it an engine patch is necessary
+    // The only known game to have used non-oodle shader compression in UE5.2 is Satisfactory U8, where it used Zlib instead
+    // We can determine if it's Zlib by checking if it starts with 0x78 or 0x58. Otherwise, we assume oodle
+    let is_zlib_marker = shader_group_data[0] == 0x78 || shader_group_data[0] == 0x58;
+    if is_zlib_marker {
+
+    }
+    // Assume Oodle by default. This can be changed to account for other algorithms if games using them are discovered
+    bail!("TODO");
+}
+
+// Returns the file contents of the reassembled shader library on success
+pub(crate) fn reassemble_shader_library_from_io_store(store_access: &dyn IoStoreTrait, library_chunk_id: FIoChunkId) -> Result<Vec<u8>> {
+
+    // Read shader library header raw data
+    let shader_library_header_data = store_access.read(library_chunk_id)?;
+    let mut shader_library_reader = Cursor::new(&shader_library_header_data);
+
+    // Deserialize the shader library header and version
+    let shader_library_version_raw: u32 = shader_library_reader.de()?;
+    let shader_library_version = EIoStoreShaderLibraryVersion::from_repr(shader_library_version_raw)
+        .ok_or_else(|| { anyhow!("Unknown shader library version: {}", shader_library_version_raw) })?;
+    let shader_library_header = FIoStoreShaderCodeArchiveHeader::deserialize(&mut shader_library_reader, shader_library_version)?;
+
+    // Read and decompress individual shader groups belonging to this library
+    let decompressed_shader_groups: Vec<Vec<u8>> = Vec::with_capacity(shader_library_header.shader_group_entries.len());
+
+    for shader_group_index in 0..shader_library_header.shader_group_entries.len() {
+
+        let shader_group_chunk_id = shader_library_header.shader_group_chunk_ids[shader_group_index];
+        let shader_group_entry = shader_library_header.shader_group_entries[shader_group_index].clone();
+
+        // Read shader group chunk
+        let mut shader_group_data = store_access.read(shader_group_chunk_id)?;
+        if shader_group_entry.compressed_size != shader_group_entry.uncompressed_size {
+
+        }
+    }
+
+    Ok(Vec::new())
 }
 
 #[cfg(test)]
