@@ -932,7 +932,7 @@ impl Writeable for Toc {
             toc_compressed_block_entry_count: self.compression_blocks.len() as u32,
             toc_compressed_block_entry_size: std::mem::size_of::<FIoStoreTocCompressedBlockEntry>()
                 as u32,
-            compression_method_name_count: self.compression_methods.len() as u32 - 1,
+            compression_method_name_count: self.compression_methods.len() as u32,
             compression_method_name_length: 32,
             compression_block_size: self.compression_block_size,
             directory_index_size: directory_index_buffer.len() as u32,
