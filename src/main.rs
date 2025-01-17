@@ -1,5 +1,6 @@
 mod asset_conversion;
 mod compact_binary;
+mod compression;
 mod container_header;
 mod iostore;
 mod iostore_writer;
@@ -16,6 +17,7 @@ use aes::cipher::KeyInit as _;
 use anyhow::{bail, Context, Result};
 use bitflags::{bitflags, Flags};
 use clap::Parser;
+use compression::{decompress, CompressionMethod};
 use fs_err as fs;
 use iostore::IoStoreTrait;
 use iostore_writer::IoStoreWriter;
@@ -702,7 +704,7 @@ fn read_compression_methods<R: Read>(
     stream: &mut R,
     header: &FIoStoreTocHeader,
 ) -> Result<Vec<CompressionMethod>> {
-    let mut methods = vec![CompressionMethod::None];
+    let mut methods = vec![];
     for _ in 0..header.compression_method_name_count {
         let name = String::from_utf8(
             stream
@@ -711,16 +713,15 @@ fn read_compression_methods<R: Read>(
                 .take_while(|&b| b != 0)
                 .collect(),
         )?;
-        methods.push(
-            CompressionMethod::from_str(&name)
-                .with_context(|| format!("unknown compression method: {name:?}"))?,
-        )
+        let method = CompressionMethod::from_str(&name)
+            .with_context(|| format!("unknown compression method: {name:?}"))?;
+        methods.push(method);
     }
     Ok(methods)
 }
 #[instrument(skip_all)]
 fn write_compression_methods<S: Write>(s: &mut S, toc: &Toc) -> Result<()> {
-    for name in toc.compression_methods.iter().skip(1) {
+    for name in &toc.compression_methods {
         let buffer: Vec<u8> = name
             .as_ref()
             .as_bytes()
@@ -841,12 +842,6 @@ struct TocSignatures {
     block_signature: Vec<u8>,
     chunk_block_signatures: Vec<FSHAHash>,
 }
-#[derive(Debug, EnumString, AsRefStr)]
-enum CompressionMethod {
-    None,
-    Zlib,
-    Oodle,
-}
 impl Readable for Toc {
     fn de<S: Read>(stream: &mut S) -> Result<Self> {
         stream.de_ctx(Arc::new(Config::default()))
@@ -855,7 +850,6 @@ impl Readable for Toc {
 impl ReadableCtx<Arc<Config>> for Toc {
     fn de<S: Read>(stream: &mut S, config: Arc<Config>) -> Result<Self> {
         let header: FIoStoreTocHeader = stream.de()?;
-        dbg!(&header);
 
         let chunk_ids = read_chunk_ids(stream, &header)?;
         let chunk_offset_lengths = read_chunk_offsets(stream, &header)?;
@@ -939,7 +933,7 @@ impl Writeable for Toc {
             toc_compressed_block_entry_count: self.compression_blocks.len() as u32,
             toc_compressed_block_entry_size: std::mem::size_of::<FIoStoreTocCompressedBlockEntry>()
                 as u32,
-            compression_method_name_count: self.compression_methods.len() as u32 - 1,
+            compression_method_name_count: self.compression_methods.len() as u32,
             compression_method_name_length: 32,
             compression_block_size: self.compression_block_size,
             directory_index_size: directory_index_buffer.len() as u32,
@@ -1088,9 +1082,15 @@ impl Toc {
             let out = &mut data[cur..];
 
             cas_stream.seek(SeekFrom::Start(block.get_offset()))?;
-            // TODO use compression names table
-            match self.compression_methods[block.get_compression_method_index() as usize] {
-                CompressionMethod::None => {
+
+            let compression_method_index = block.get_compression_method_index() as usize;
+            let compression_method = if compression_method_index == 0 {
+                None
+            } else {
+                Some(self.compression_methods[compression_method_index - 1])
+            };
+            match compression_method {
+                None => {
                     if let Some(key) = aes_key {
                         let out = &mut out[..align_usize(uncompressed_size, 16)];
                         cas_stream.read_exact(out)?;
@@ -1101,7 +1101,7 @@ impl Toc {
                         cas_stream.read_exact(&mut out[..uncompressed_size])?;
                     }
                 }
-                CompressionMethod::Zlib => {
+                Some(method) => {
                     let tmp = if let Some(key) = aes_key {
                         let tmp = &mut buffer[..align_usize(compressed_size, 16)];
                         cas_stream.read_exact(tmp)?;
@@ -1115,24 +1115,7 @@ impl Toc {
                         cas_stream.read_exact(tmp)?;
                         tmp
                     };
-                    flate2::read::ZlibDecoder::new(tmp)
-                        .read_exact(&mut out[..uncompressed_size])?;
-                }
-                CompressionMethod::Oodle => {
-                    let tmp = if let Some(key) = aes_key {
-                        let tmp = &mut buffer[..align_usize(compressed_size, 16)];
-                        cas_stream.read_exact(tmp)?;
-
-                        for block in tmp.chunks_mut(16) {
-                            key.0.decrypt_block(block.into());
-                        }
-                        &tmp[..compressed_size]
-                    } else {
-                        let tmp = &mut buffer[..compressed_size];
-                        cas_stream.read_exact(tmp)?;
-                        tmp
-                    };
-                    oodle_loader::decompress().unwrap()(tmp, &mut out[..uncompressed_size]);
+                    decompress(method, tmp, &mut out[..uncompressed_size])?;
                 }
             }
             cur += uncompressed_size;
