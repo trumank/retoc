@@ -3,6 +3,7 @@ use std::io::{Cursor, Read};
 use anyhow::{anyhow, bail};
 use strum::FromRepr;
 use crate::{EIoStoreTocVersion, FIoChunkId, FSHAHash};
+use crate::compression::{decompress, CompressionMethod};
 use crate::container_header::EIoContainerHeaderVersion;
 use crate::iostore::IoStoreTrait;
 use crate::ser::{ReadExt, Readable};
@@ -115,12 +116,13 @@ impl FIoStoreShaderCodeArchiveHeader {
     }
 }
 
-fn decompress_shader_group_chunk(shader_group_data: &Vec<u8>, container_version: EIoStoreTocVersion, container_header_version: Option<EIoContainerHeaderVersion>) -> Result<Vec<u8>> {
+fn decompress_shader_group_chunk(shader_group_data: &Vec<u8>, container_version: EIoStoreTocVersion, container_header_version: Option<EIoContainerHeaderVersion>, uncompressed_size: usize) -> anyhow::Result<Vec<u8>> {
 
     // Sanity check against empty compressed data chunks
     if shader_group_data.is_empty() {
         bail!("Invalid shader group compressed data");
     }
+    let mut result_uncompressed_data: Vec<u8> = Vec::with_capacity(uncompressed_size);
 
     // There is no indication of what compression algorithm is used, however, starting with UE5.3, it is always oodle
     let is_compression_always_oodle = container_version >= EIoStoreTocVersion::OnDemandMetaData ||
@@ -128,21 +130,25 @@ fn decompress_shader_group_chunk(shader_group_data: &Vec<u8>, container_version:
 
     // If we know for sure that this is oodle, decompress with oodle
     if is_compression_always_oodle {
-
+        decompress(CompressionMethod::Oodle, shader_group_data, &mut result_uncompressed_data)?;
+        return Ok(result_uncompressed_data)
     }
     // Otherwise, it can be any compression format UE supports. However, by default it is always Oodle, and it is known that to change it an engine patch is necessary
     // The only known game to have used non-oodle shader compression in UE5.2 is Satisfactory U8, where it used Zlib instead
     // We can determine if it's Zlib by checking if it starts with 0x78 or 0x58. Otherwise, we assume oodle
     let is_zlib_marker = shader_group_data[0] == 0x78 || shader_group_data[0] == 0x58;
     if is_zlib_marker {
-
+        decompress(CompressionMethod::Zlib, shader_group_data, &mut result_uncompressed_data)?;
+        return Ok(result_uncompressed_data)
     }
+
     // Assume Oodle by default. This can be changed to account for other algorithms if games using them are discovered
-    bail!("TODO");
+    decompress(CompressionMethod::Oodle, shader_group_data, &mut result_uncompressed_data)?;
+    Ok(result_uncompressed_data)
 }
 
 // Returns the file contents of the reassembled shader library on success
-pub(crate) fn reassemble_shader_library_from_io_store(store_access: &dyn IoStoreTrait, library_chunk_id: FIoChunkId) -> Result<Vec<u8>> {
+pub(crate) fn reassemble_shader_library_from_io_store(store_access: &dyn IoStoreTrait, library_chunk_id: FIoChunkId) -> anyhow::Result<Vec<u8>> {
 
     // Read shader library header raw data
     let shader_library_header_data = store_access.read(library_chunk_id)?;
@@ -164,9 +170,15 @@ pub(crate) fn reassemble_shader_library_from_io_store(store_access: &dyn IoStore
 
         // Read shader group chunk
         let mut shader_group_data = store_access.read(shader_group_chunk_id)?;
-        if shader_group_entry.compressed_size != shader_group_entry.uncompressed_size {
 
+        // Decompress the shader group chunk if it's compressed size does not match it's uncompressed size
+        if shader_group_entry.compressed_size != shader_group_entry.uncompressed_size {
+            let container_version = store_access.container_file_version().ok_or_else(|| { anyhow!("Failed to retrieve container file version") })?;
+            let container_header_version = store_access.container_header_version();
+            shader_group_data = decompress_shader_group_chunk(&shader_group_data, container_version, container_header_version, shader_group_entry.uncompressed_size as usize)?;
         }
+
+
     }
 
     Ok(Vec::new())
@@ -188,7 +200,7 @@ mod test {
         let shader_library_header = ser_hex::read("out/read_container_shader_library.trace.json", &mut stream, |x| {
             let library_version: u32 = x.de()?;
             assert_eq!(library_version, 1, "expected shader library header version to be initial");
-            FIoStoreShaderCodeArchiveHeader::de(x)
+            FIoStoreShaderCodeArchiveHeader::deserialize(x, EIoStoreShaderLibraryVersion::Initial)
         })?;
         //dbg!(shader_library_header.shader_group_entries);
 
