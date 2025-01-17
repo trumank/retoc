@@ -9,9 +9,10 @@ mod manifest;
 mod name_map;
 mod script_objects;
 mod ser;
+mod shader_library;
+mod version;
 mod version_heuristics;
 mod zen;
-mod shader_library;
 
 use aes::cipher::KeyInit as _;
 use anyhow::{bail, Context, Result};
@@ -34,8 +35,9 @@ use std::{
     str::FromStr,
     sync::{Arc, Mutex},
 };
-use strum::{AsRefStr, EnumString, FromRepr};
+use strum::{AsRefStr, EnumString, FromRepr, VariantNames as _};
 use tracing::instrument;
+use version::EngineVersion;
 
 fn parse_ue5_object_version(string: &str) -> Result<EUnrealEngineObjectUE5Version> {
     EUnrealEngineObjectUE5Version::from_repr(string.parse()?).context("invalid UE5 Object Version")
@@ -98,10 +100,9 @@ struct ActionExtractLegacy {
     #[arg(index = 2)]
     output: PathBuf,
 
-    /// UE5 Object Version
-    /// default is EUnrealEngineObjectUE5Version::PropertyTagCompleteTypeName
-    #[arg(long, value_parser = parse_ue5_object_version)]
-    version: Option<EUnrealEngineObjectUE5Version>,
+    /// Engine version override
+    #[arg(long)]
+    version: Option<EngineVersion>,
     #[arg(short, long, default_value = "false")]
     verbose: bool,
     #[arg(short, long)]
@@ -492,8 +493,9 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
 
     let output = args.output;
     let debug_output = args.verbose;
-    let package_file_version: Option<FPackageFileVersion> =
-        args.version.map(FPackageFileVersion::create_ue5);
+    let package_file_version: Option<FPackageFileVersion> = args
+        .version
+        .map(|v| FPackageFileVersion::create_ue5(EngineVersion::object_ue5_version(v)));
     let mut package_context =
         FZenPackageContext::create(iostore.as_ref(), package_file_version, true, debug_output);
 
