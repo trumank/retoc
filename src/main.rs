@@ -8,8 +8,8 @@ mod manifest;
 mod name_map;
 mod script_objects;
 mod ser;
-mod zen;
 mod version_heuristics;
+mod zen;
 
 use aes::cipher::KeyInit as _;
 use anyhow::{bail, Context, Result};
@@ -20,8 +20,9 @@ use iostore::IoStoreTrait;
 use iostore_writer::IoStoreWriter;
 use rayon::prelude::*;
 use ser::*;
-use serde::Serializer;
+use serde::{Deserialize, Serialize, Serializer};
 use std::fmt::{Debug, Display, Formatter};
+use std::io::BufWriter;
 use std::time::{Duration, Instant};
 use std::{
     collections::HashMap,
@@ -198,7 +199,8 @@ fn action_manifest(args: ActionManifest, config: Arc<Config>) -> Result<()> {
                 let data = toc.read(ucas, toc.file_map[file_name])?;
 
                 // TODO @trumank fix this
-                let package_name = get_package_name(&data, EIoContainerHeaderVersion::NoExportInfo).with_context(|| file_name.to_string())?;
+                let package_name = get_package_name(&data, EIoContainerHeaderVersion::NoExportInfo)
+                    .with_context(|| file_name.to_string())?;
 
                 let mut entry = manifest::Op {
                     packagestoreentry: manifest::PackageStoreEntry {
@@ -384,19 +386,74 @@ fn action_unpack(args: ActionUnpack, config: Arc<Config>) -> Result<()> {
     Ok(())
 }
 
+mod raw {
+    use std::collections::HashMap;
+
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use crate::{EIoStoreTocVersion, FIoChunkId};
+
+    #[derive(Serialize, Deserialize)]
+    pub(crate) struct RawIoManifest {
+        pub(crate) chunk_paths: HashMap<ChunkId, String>,
+        pub(crate) version: EIoStoreTocVersion,
+        pub(crate) mount_point: String,
+    }
+    #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    pub(crate) struct ChunkId(
+        #[serde(serialize_with = "to_hex", deserialize_with = "from_hex")] pub(crate) FIoChunkId,
+    );
+    impl From<FIoChunkId> for ChunkId {
+        fn from(value: FIoChunkId) -> Self {
+            Self(value)
+        }
+    }
+
+    fn to_hex<S>(chunk_id: &FIoChunkId, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&hex::encode(chunk_id.id))
+    }
+    fn from_hex<'de, D>(deserializer: D) -> Result<FIoChunkId, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s: String = Deserialize::deserialize(deserializer)?;
+        let v = hex::decode(s).map_err(serde::de::Error::custom)?;
+        Ok(FIoChunkId {
+            id: v.try_into().map_err(|v: Vec<u8>| {
+                serde::de::Error::invalid_length(v.len(), &"a 12 byte hex string")
+            })?,
+        })
+    }
+}
+
 fn action_unpack_raw(args: ActionUnpackRaw, config: Arc<Config>) -> Result<()> {
     let iostore = iostore::open(args.utoc, config)?;
 
     let output = args.output;
     let chunks_dir = output.join("chunks");
+    let manifest_path = output.join("manifest.json");
 
     fs::create_dir(&output)?;
     fs::create_dir(&chunks_dir)?;
 
+    let mut manifest = raw::RawIoManifest {
+        chunk_paths: Default::default(),
+        version: iostore.container_file_version().unwrap(),
+        mount_point: "../../../".to_string(),
+    };
+
     for chunk in iostore.chunks() {
         let data = chunk.read()?;
         fs::write(chunks_dir.join(hex::encode(chunk.id())), data)?;
+        if let Some(path) = chunk.path() {
+            manifest.chunk_paths.insert(chunk.id().into(), path);
+        }
     }
+
+    serde_json::to_writer_pretty(BufWriter::new(fs::File::create(manifest_path)?), &manifest)?;
 
     println!(
         "unpacked {} chunks to {}",
@@ -408,12 +465,20 @@ fn action_unpack_raw(args: ActionUnpackRaw, config: Arc<Config>) -> Result<()> {
 }
 
 fn action_pack_raw(args: ActionPackRaw, _config: Arc<Config>) -> Result<()> {
-    let mut writer = IoStoreWriter::new(args.utoc)?;
+    let manifest: raw::RawIoManifest = serde_json::from_reader(BufReader::new(fs::File::open(
+        args.input.join("manifest.json"),
+    )?))?;
+
+    let mut writer = IoStoreWriter::new(args.utoc, manifest.version, manifest.mount_point)?;
     for entry in args.input.join("chunks").read_dir()? {
         let entry = entry?;
         let chunk_id = FIoChunkId::from_str(entry.file_name().to_string_lossy().as_ref())?;
+        let path = manifest
+            .chunk_paths
+            .get(&chunk_id.into())
+            .map(String::as_ref);
         let data = fs::read(entry.path())?;
-        writer.write_chunk(chunk_id, None, &data)?;
+        writer.write_chunk(chunk_id, path, &data)?;
     }
     writer.finalize()?;
     Ok(())
@@ -424,8 +489,10 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
 
     let output = args.output;
     let debug_output = args.verbose;
-    let package_file_version: Option<FPackageFileVersion> = args.version.map(FPackageFileVersion::create_ue5);
-    let mut package_context = FZenPackageContext::create(iostore.as_ref(), package_file_version, true, debug_output);
+    let package_file_version: Option<FPackageFileVersion> =
+        args.version.map(FPackageFileVersion::create_ue5);
+    let mut package_context =
+        FZenPackageContext::create(iostore.as_ref(), package_file_version, true, debug_output);
 
     let mut count = 0;
     let start_time = Instant::now();
@@ -473,11 +540,7 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
                 let path = output.join(path);
                 let dir = path.parent().unwrap();
                 fs::create_dir_all(dir)?;
-                asset_conversion::build_legacy(
-                    &mut package_context,
-                    package_info.id(),
-                    path,
-                )?;
+                asset_conversion::build_legacy(&mut package_context, package_info.id(), path)?;
                 count += 1;
             }
             Ok(())
@@ -553,7 +616,9 @@ impl Readable for FIoStoreTocHeader {
             reserved7: stream.de()?,
             reserved8: stream.de()?,
         };
-        assert_eq!(&res.toc_magic, b"-==--==--==--==-");
+        if res.toc_magic != Self::MAGIC {
+            bail!("unrecognized TOC magic, this is a .utoc file?")
+        }
         assert_eq!(res.toc_header_size, 0x90);
         Ok(res)
     }
@@ -744,6 +809,7 @@ type UEPath = typed_path::Utf8UnixPath;
 struct Toc {
     config: Arc<Config>,
 
+    // serialized members
     chunks: Vec<FIoChunkId>,
     chunk_offset_lengths: Vec<FIoOffsetAndLength>,
     chunk_perfect_hash_seeds: Vec<i32>,
@@ -753,13 +819,16 @@ struct Toc {
     signatures: Option<TocSignatures>,
     chunk_metas: Vec<FIoStoreTocEntryMeta>,
 
+    // serialized in header
     version: EIoStoreTocVersion,
+    container_id: FIoContainerId,
     compression_block_size: u32,
     partition_size: u64,
     partition_count: u32,
     encryption_key_guid: FGuid,
     container_flags: EIoContainerFlags,
 
+    // transient indexes
     directory_index: FIoDirectoryIndexResource,
     file_map: HashMap<String, u32>,
     file_map_lower: HashMap<String, u32>,
@@ -785,6 +854,7 @@ impl Readable for Toc {
 impl ReadableCtx<Arc<Config>> for Toc {
     fn de<S: Read>(stream: &mut S, config: Arc<Config>) -> Result<Self> {
         let header: FIoStoreTocHeader = stream.de()?;
+        dbg!(&header);
 
         let chunk_ids = read_chunk_ids(stream, &header)?;
         let chunk_offset_lengths = read_chunk_offsets(stream, &header)?;
@@ -836,6 +906,7 @@ impl ReadableCtx<Arc<Config>> for Toc {
             chunk_metas,
 
             version: header.version,
+            container_id: header.container_id,
             compression_block_size: header.compression_block_size,
             partition_size: header.partition_size,
             partition_count: header.partition_count,
@@ -858,7 +929,7 @@ impl Writeable for Toc {
         // TODO encrypt directory index
 
         let header = FIoStoreTocHeader {
-            toc_magic: *b"-==--==--==--==-",
+            toc_magic: FIoStoreTocHeader::MAGIC,
             version: self.version,
             reserved0: 0,
             reserved1: 0,
@@ -872,13 +943,13 @@ impl Writeable for Toc {
             compression_block_size: self.compression_block_size,
             directory_index_size: directory_index_buffer.len() as u32,
             partition_count: 1,
-            container_id: FIoContainerId::default(), // TODO
+            container_id: self.container_id,
             encryption_key_guid: Default::default(),
             container_flags: EIoContainerFlags::empty(),
             reserved3: 0,
             reserved4: 0,
             toc_chunk_perfect_hash_seeds_count: 0,
-            partition_size: 0,                        // TODO
+            partition_size: self.partition_size,
             toc_chunks_without_perfect_hash_count: 0, // TODO
             reserved7: 0,
             reserved8: [0, 0, 0, 0, 0],
@@ -1090,14 +1161,19 @@ impl Display for FPackageId {
 }
 impl FPackageId {
     fn from_name(name: &str) -> Self {
-        let bytes = name
-            .to_ascii_lowercase()
-            .encode_utf16()
-            .flat_map(u16::to_le_bytes)
-            .collect::<Vec<u8>>();
-        Self(cityhasher::hash(bytes))
+        Self(lower_utf16_cityhash(name))
     }
 }
+
+fn lower_utf16_cityhash(s: &str) -> u64 {
+    let bytes = s
+        .to_ascii_lowercase()
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<u8>>();
+    cityhasher::hash(bytes)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -1180,18 +1256,21 @@ impl FIoChunkId {
         self.id[0..11].try_into().unwrap()
     }
 }
-#[derive(Debug, Default)]
-struct FIoContainerId {
-    id: u64,
+#[derive(Debug, Default, Clone, Copy)]
+struct FIoContainerId(u64);
+impl FIoContainerId {
+    fn from_name(name: &str) -> Self {
+        Self(lower_utf16_cityhash(name))
+    }
 }
 impl Readable for FIoContainerId {
     fn de<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(Self { id: stream.de()? })
+        Ok(Self(stream.de()?))
     }
 }
 impl Writeable for FIoContainerId {
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
-        s.ser(&self.id)
+        s.ser(&self.0)
     }
 }
 #[derive(Debug, Default, Clone, Copy)]
@@ -1436,7 +1515,9 @@ impl Writeable for FIoStoreTocEntryMetaFlags {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, FromRepr, Serialize, Deserialize,
+)]
 #[repr(u8)]
 enum EIoStoreTocVersion {
     #[default]
@@ -1487,6 +1568,9 @@ struct FIoStoreTocHeader {
     toc_chunks_without_perfect_hash_count: u32,
     reserved7: u32,
     reserved8: [u64; 5],
+}
+impl FIoStoreTocHeader {
+    const MAGIC: [u8; 16] = *b"-==--==--==--==-";
 }
 
 #[derive(Debug)]
@@ -1539,10 +1623,10 @@ enum EIoChunkType {
 }
 
 use crate::asset_conversion::FZenPackageContext;
+use crate::container_header::EIoContainerHeaderVersion;
 use crate::zen::{EUnrealEngineObjectUE5Version, FPackageFileVersion};
 use directory_index::*;
 use zen::get_package_name;
-use crate::container_header::EIoContainerHeaderVersion;
 
 mod directory_index {
     use super::*;

@@ -4,11 +4,11 @@ use std::{
 };
 
 use crate::{
-    ser::*, CompressionMethod, EIoStoreTocVersion, FIoChunkHash, FIoChunkId,
+    ser::*, CompressionMethod, EIoStoreTocVersion, FIoChunkHash, FIoChunkId, FIoContainerId,
     FIoOffsetAndLength, FIoStoreTocCompressedBlockEntry, FIoStoreTocEntryMeta,
     FIoStoreTocEntryMetaFlags, Toc,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use fs_err as fs;
 
 pub(crate) struct IoStoreWriter {
@@ -17,17 +17,25 @@ pub(crate) struct IoStoreWriter {
     cas_stream: BufWriter<fs::File>,
     toc: Toc,
 }
+
 impl IoStoreWriter {
-    pub(crate) fn new<P: AsRef<Path>>(toc_path: P) -> Result<Self> {
+    pub(crate) fn new<P: AsRef<Path>>(
+        toc_path: P,
+        version: EIoStoreTocVersion,
+        mount_point: String,
+    ) -> Result<Self> {
         let toc_path = toc_path.as_ref().to_path_buf();
+        let name = toc_path.file_stem().unwrap().to_string_lossy();
         let toc_stream = BufWriter::new(fs::File::create(&toc_path)?);
         let cas_stream = BufWriter::new(fs::File::create(toc_path.with_extension("ucas"))?);
 
         let mut toc = Toc::new();
         toc.compression_block_size = 0x10000;
         toc.compression_methods.push(CompressionMethod::None);
-        toc.version = EIoStoreTocVersion::OnDemandMetaData;
-        toc.directory_index.mount_point = "../../../".to_string();
+        toc.version = version;
+        toc.container_id = FIoContainerId::from_name(&name);
+        toc.directory_index.mount_point = mount_point;
+        toc.partition_size = u64::MAX;
 
         Ok(Self {
             toc_path,
@@ -39,13 +47,18 @@ impl IoStoreWriter {
     pub(crate) fn write_chunk(
         &mut self,
         chunk_id: FIoChunkId,
-        file_name: Option<&str>,
+        path: Option<&str>,
         data: &[u8],
     ) -> Result<()> {
-        if let Some(file_name) = file_name {
-            self.toc
-                .directory_index
-                .add_file(file_name, self.toc.chunks.len() as u32);
+        if let Some(path) = path {
+            let index = &mut self.toc.directory_index;
+            let relative_path = path.strip_prefix(&index.mount_point).with_context(|| {
+                format!(
+                    "mount point {} does not contain path {path:?}",
+                    index.mount_point
+                )
+            })?;
+            index.add_file(relative_path, self.toc.chunks.len() as u32);
         }
 
         let mut offset = self.cas_stream.stream_position()?;
@@ -99,7 +112,11 @@ mod test {
 
     #[test]
     fn test_write_container() -> Result<()> {
-        let mut writer = IoStoreWriter::new("new.utoc")?;
+        let mut writer = IoStoreWriter::new(
+            "new.utoc",
+            EIoStoreTocVersion::PerfectHashWithOverflow,
+            "../../..".to_string(),
+        )?;
 
         let data = fs::read("script_objects.bin")?;
         writer.write_chunk(

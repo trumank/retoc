@@ -8,7 +8,11 @@ use std::{
 use anyhow::{bail, Context, Result};
 use fs_err as fs;
 
-use crate::{container_header::{FIoContainerHeader, EIoContainerHeaderVersion, StoreEntry}, ser::*, Config, EIoChunkType, EIoStoreTocVersion, FIoChunkId, FPackageId, Toc};
+use crate::{
+    container_header::{EIoContainerHeaderVersion, FIoContainerHeader, StoreEntry},
+    ser::*,
+    Config, EIoChunkType, EIoStoreTocVersion, FIoChunkId, FPackageId, Toc,
+};
 
 macro_rules! indent_println {
     ($indent:expr, $($arg:tt)*) => {
@@ -131,7 +135,6 @@ impl IoStoreBackend {
 
             // Check that container header version matches the previous container
             if let Some(this_container_header_version) = container.container_header_version() {
-
                 if previous_header_container_version.is_none() {
                     previous_header_container_name = this_container_name.clone();
                     previous_header_container_version = Some(this_container_header_version);
@@ -154,11 +157,15 @@ impl IoStoreTrait for IoStoreBackend {
         "VIRTUAL"
     }
     fn container_file_version(&self) -> Option<EIoStoreTocVersion> {
-        self.containers.first().and_then(|x| x.container_file_version())
+        self.containers
+            .first()
+            .and_then(|x| x.container_file_version())
     }
     fn container_header_version(&self) -> Option<EIoContainerHeaderVersion> {
         // Some containers might not have a container header, so take the first container with a header
-        self.containers.iter().find_map(|x| { x.container_header_version() })
+        self.containers
+            .iter()
+            .find_map(|x| x.container_header_version())
     }
     fn print_info(&self, mut depth: usize) {
         indent_println!(depth, "{}", self.container_name());
@@ -252,7 +259,7 @@ impl IoStoreTrait for IoStoreContainer {
         Some(self.toc.version)
     }
     fn container_header_version(&self) -> Option<EIoContainerHeaderVersion> {
-        self.container_header.as_ref().map(|x| { x.version })
+        self.container_header.as_ref().map(|x| x.version)
     }
     fn print_info(&self, mut depth: usize) {
         indent_println!(depth, "{}", self.container_name());
@@ -274,7 +281,7 @@ impl IoStoreTrait for IoStoreContainer {
         );
         indent_println!(
             depth,
-            "compression_names: {:?}",
+            "compression_methods: {:?}",
             self.toc.compression_methods
         );
     }
