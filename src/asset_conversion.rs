@@ -851,24 +851,41 @@ fn rebuild_asset_export_data_internal(builder: &LegacyAssetBuilder, raw_exports_
     Ok(result_exports_data)
 }
 
-// Serializes an asset into in-memory buffer. First entry is the uasset file, and the second one is the uexp file
-pub(crate) fn serialize_asset(builder: &LegacyAssetBuilder) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
+pub(crate) struct FSerializedAssetBundle {
+    pub(crate) asset_file_buffer: Vec<u8>, // uasset
+    pub(crate) exports_file_buffer: Vec<u8>, // uexp
+    pub(crate) bulk_data_buffer: Option<Vec<u8>>, // .ubulk
+    pub(crate) optional_bulk_data_buffer: Option<Vec<u8>>, // .uptnl
+    pub(crate) memory_mapped_bulk_data_buffer: Option<Vec<u8>>, // .m.ubulk
+}
+
+// Serializes an asset into in-memory buffer. Returns each region of the associated asset as a separate buffer
+pub(crate) fn serialize_asset(builder: &LegacyAssetBuilder) -> anyhow::Result<FSerializedAssetBundle> {
     // Write the asset file first
-    let mut out_asset_buffer: Vec<u8> = Vec::new();
-    let mut asset_cursor = Cursor::new(&mut out_asset_buffer);
+    let mut asset_file_buffer: Vec<u8> = Vec::new();
+    let mut asset_cursor = Cursor::new(&mut asset_file_buffer);
     FLegacyPackageHeader::serialize(&builder.legacy_package, &mut asset_cursor, false)?;
 
     // Copy the raw export data from the chunk into the exports file
     let raw_exports_data = builder.package_context.read_full_package_data(builder.package_id)?;
-
-    let export_data_blob = if builder.needs_to_rebuild_exports_data {
+    let exports_file_buffer = if builder.needs_to_rebuild_exports_data {
         // If we need to rebuild export data, do it now
         rebuild_asset_export_data_internal(builder, &raw_exports_data)?
     } else {
         // Otherwise we just need to strip the zen header from the exports
         raw_exports_data[builder.zen_package.summary.header_size as usize..].to_vec()
     };
-    Ok((out_asset_buffer, export_data_blob))
+
+    let bulk_data_chunk_id = FIoChunkId::from_package_id(builder.package_id, 0, EIoChunkType::BulkData);
+    let optional_bulk_data_chunk_id = FIoChunkId::from_package_id(builder.package_id, 0, EIoChunkType::OptionalBulkData);
+    let memory_mapped_bulk_data_chunk_id = FIoChunkId::from_package_id(builder.package_id, 0, EIoChunkType::MemoryMappedBulkData);
+
+    let store_access: &dyn IoStoreTrait = builder.package_context.store_access;
+    let bulk_data_buffer = if store_access.has_chunk_id(bulk_data_chunk_id) { Some(store_access.read(bulk_data_chunk_id)?) } else { None };
+    let optional_bulk_data_buffer = if store_access.has_chunk_id(optional_bulk_data_chunk_id) { Some(store_access.read(optional_bulk_data_chunk_id)?) } else { None };
+    let memory_mapped_bulk_data_buffer = if store_access.has_chunk_id(memory_mapped_bulk_data_chunk_id) { Some(store_access.read(memory_mapped_bulk_data_chunk_id)?) } else { None };
+
+    Ok(FSerializedAssetBundle{asset_file_buffer, exports_file_buffer, bulk_data_buffer, optional_bulk_data_buffer, memory_mapped_bulk_data_buffer})
 }
 
 // Writes asset to the file. Additionally writes to the uexp file next to it
@@ -880,13 +897,30 @@ pub(crate) fn write_asset<P: AsRef<Path>>(builder: &LegacyAssetBuilder, out_asse
         dbg!(builder.zen_package.clone());
         dbg!(builder.legacy_package.clone());
     }
+    // Serialize the asset
+    let serialized_asset = serialize_asset(builder)?;
 
-    // Write the asset file first
-    let (header_data, exports_data) = serialize_asset(builder)?;
-    std::fs::write(out_asset_path.as_ref(), &header_data)?;
-
+    // Write the asset file
+    std::fs::write(out_asset_path.as_ref(), &serialized_asset.asset_file_buffer)?;
+    // Write the exports file
     let export_file_path = out_asset_path.as_ref().with_extension("uexp");
-    std::fs::write(export_file_path, &exports_data)?;
+    std::fs::write(export_file_path, &serialized_asset.exports_file_buffer)?;
+
+    // Write the bulk data file
+    if let Some(bulk_data_buffer) = &serialized_asset.bulk_data_buffer {
+        let bulk_data_file_path = out_asset_path.as_ref().with_extension("ubulk");
+        std::fs::write(bulk_data_file_path, bulk_data_buffer)?;
+    }
+    // Write the optional bulk data file
+    if let Some(optional_bulk_data_buffer) = &serialized_asset.optional_bulk_data_buffer {
+        let optional_bulk_data_file_path = out_asset_path.as_ref().with_extension("uptnl");
+        std::fs::write(optional_bulk_data_file_path, optional_bulk_data_buffer)?;
+    }
+    // Write the memory mapped bulk data file
+    if let Some(memory_mapped_bulk_data_buffer) = &serialized_asset.memory_mapped_bulk_data_buffer {
+        let memory_mapped_bulk_data_file_path = out_asset_path.as_ref().with_extension("m.ubulk");
+        std::fs::write(memory_mapped_bulk_data_file_path, memory_mapped_bulk_data_buffer)?;
+    }
     Ok({})
 }
 
