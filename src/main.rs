@@ -588,7 +588,7 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
                 let dir = path.parent().unwrap();
                 fs::create_dir_all(dir)?;
 
-                let shader_library_buffer = rebuild_shader_library_from_io_store(chunk_info.container(), chunk_info.id())?;
+                let shader_library_buffer = rebuild_shader_library_from_io_store(chunk_info.container(), chunk_info.id(), true)?;
                 fs::write(path, &shader_library_buffer)?;
                 Ok({})
             })?;

@@ -321,6 +321,9 @@ struct WriteShaderCodeResult {
     shader_code_buffer: Vec<u8>,
     shader_regions: Vec<(i64, usize, bool)>,
     shader_map_regions: Vec<(i64, usize)>,
+    total_shared_shaders: usize,
+    total_unique_shaders: usize,
+    total_detached_shaders: usize,
 }
 
 // Lays out shader code to match its likely order of access into a single file, using shader maps to group shaders that are accessed together close to each other
@@ -355,10 +358,15 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive) -> anyhow
         Ok({})
     };
 
+    let mut total_shared_shaders: usize = 0;
+    let mut total_unique_shaders: usize = 0;
+    let mut total_detached_shaders: usize = 0;
+
     // Write shaders that are considered "Shared" first, e.g. shaders have been seen in multiple shader maps
     for shader_index in 0..total_shaders {
         if shader_reference_count[shader_index] > 1 {
             write_shader(&mut shader_code_writer, &mut shader_file_regions, shader_library, shader_index, false)?;
+            total_shared_shaders += 1;
         }
     }
 
@@ -375,6 +383,7 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive) -> anyhow
             // Only consider this shader if this is the only shader map that referenced it
             if shader_reference_count[shader_index] == 1 {
                 write_shader(&mut shader_code_writer, &mut shader_file_regions, shader_library, shader_index, true)?;
+                total_unique_shaders += 1;
             }
         }
 
@@ -384,10 +393,12 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive) -> anyhow
         shader_map_file_regions[shader_map_index] = (shader_map_start_offset as i64, shader_map_total_size);
     }
 
-    // Write shaders that belong to no shader map, e.g. "Inline" shaders
+    // Write shaders that belong to no shader map. Generally such shaders should not exist, but we should still handle and preserve them just in case
+    // I refer to them as "detached" shaders. Generally such shaders cannot be loaded in runtime because runtime operates on shader maps during serialization and not singular shaders
     for shader_index in 0..total_shaders {
         if shader_reference_count[shader_index] == 0 {
             write_shader(&mut shader_code_writer, &mut shader_file_regions, shader_library, shader_index, false)?;
+            total_detached_shaders += 1;
         }
     }
 
@@ -400,15 +411,23 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive) -> anyhow
     Ok(WriteShaderCodeResult{
         shader_code_buffer,
         shader_regions: shader_file_regions,
-        shader_map_regions: shader_map_file_regions
+        shader_map_regions: shader_map_file_regions,
+        total_unique_shaders,
+        total_shared_shaders,
+        total_detached_shaders,
     })
 }
 
 // Returns the file contents of the built shader library on success
-pub(crate) fn rebuild_shader_library_from_io_store(store_access: &dyn IoStoreTrait, library_chunk_id: FIoChunkId) -> anyhow::Result<Vec<u8>> {
+pub(crate) fn rebuild_shader_library_from_io_store(store_access: &dyn IoStoreTrait, library_chunk_id: FIoChunkId, allow_stdout: bool) -> anyhow::Result<Vec<u8>> {
 
     // Read IoStore shader library
     let io_store_shader_library = IoStoreShaderCodeArchive::read(store_access, library_chunk_id)?;
+
+    // Retrieve the library name. Right now it is used only for stats, but in the future it can be used to reassemble shader libraries squashed into multiple containers
+    let library_name = store_access.chunk_path(library_chunk_id).and_then(|x| {
+        std::path::Path::new(&x).with_extension("").file_name().map(|y| { y.to_string_lossy().to_string() })
+    }).ok_or_else(|| { anyhow!("Failed to retrieve IoStore shader library name for shader library chunk {:?}", library_chunk_id) })?;
 
     // Write shader code into the shared buffer
     let shader_code = layout_write_shader_code(&io_store_shader_library)?;
@@ -496,6 +515,12 @@ pub(crate) fn rebuild_shader_library_from_io_store(store_access: &dyn IoStoreTra
     // Serialize shader code
     result_library_writer.write(&shader_code.shader_code_buffer)?;
 
+    // Print shader library statistics to stdout if allowed
+    if allow_stdout {
+        println!("Shader Library {} statistics: Shared Shaders: {}; Unique Shaders: {}; Detached Shaders: {}; Shader Maps: {}, Uncompressed Size: {}KB, Compressed Size: {}KB",
+            library_name.clone(), shader_code.total_shared_shaders, shader_code.total_unique_shaders, shader_code.total_detached_shaders, shader_library.shader_map_entries.len(),
+             io_store_shader_library.total_shader_code_size / 1024, shader_code.shader_code_buffer.len() / 1024);
+    }
     Ok(result_shader_library_buffer)
 }
 
