@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    io::{Cursor, Read, Seek as _, SeekFrom},
+    io::{Cursor, Read, Seek as _, SeekFrom, Write},
     marker::PhantomData,
 };
 
@@ -32,7 +32,7 @@ impl Readable for FIoContainerHeader {
     #[instrument(skip_all, name = "FIoContainerHeader")]
     fn de<S: Read>(s: &mut S) -> Result<Self> {
         let signature: u32 = s.de()?;
-        if signature != 0x496f436e {
+        if signature != Self::MAGIC {
             bail!("invalid ContainerHeader signature")
         }
 
@@ -71,7 +71,27 @@ impl Readable for FIoContainerHeader {
         })
     }
 }
+impl Writeable for FIoContainerHeader {
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        todo!();
+
+        s.ser(&Self::MAGIC)?;
+        s.ser(&self.version)?;
+        s.ser(&self.container_id)?;
+        //s.ser(&self.store_entries)?;
+        s.ser(&self.optional_segment_package_ids)?;
+        s.ser(&self.optional_segment_store_entries)?;
+        //s.ser(&self.redirect_name_map)?;
+        s.ser(&self.localized_packages)?;
+        s.ser(&self.package_redirects)?;
+
+
+        Ok(())
+    }
+}
 impl FIoContainerHeader {
+    const MAGIC: u32 = 0x496f436e;
+
     pub(crate) fn get_store_entry(&self, package_id: FPackageId) -> Option<StoreEntry> {
         // TODO handle redirects?
         let index = *self.package_entry_map.get(&package_id)?;
@@ -92,9 +112,15 @@ pub(crate) enum EIoContainerHeaderVersion {
     SoftPackageReferences = 4,
 }
 impl Readable for EIoContainerHeaderVersion {
+    #[instrument(skip_all, name = "EIoContainerHeaderVersion")]
     fn de<S: Read>(s: &mut S) -> Result<Self> {
         let value = s.de()?;
         Self::from_repr(value).with_context(|| format!("invalid EIoStoreTocVersion value: {value}"))
+    }
+}
+impl Writeable for EIoContainerHeaderVersion {
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&(*self as u32))
     }
 }
 
@@ -104,11 +130,19 @@ struct FIoContainerHeaderLocalizedPackage {
     source_package_name: FMappedName,
 }
 impl Readable for FIoContainerHeaderLocalizedPackage {
+    #[instrument(skip_all, name = "FIoContainerHeaderLocalizedPackage")]
     fn de<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self {
             source_package_id: s.de()?,
             source_package_name: s.de()?,
         })
+    }
+}
+impl Writeable for FIoContainerHeaderLocalizedPackage {
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.source_package_id)?;
+        s.ser(&self.source_package_name)?;
+        Ok(())
     }
 }
 
@@ -119,12 +153,21 @@ struct FIoContainerHeaderPackageRedirect {
     source_package_name: FMappedName,
 }
 impl Readable for FIoContainerHeaderPackageRedirect {
+    #[instrument(skip_all, name = "FIoContainerHeaderPackageRedirect")]
     fn de<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self {
             source_package_id: s.de()?,
             target_package_id: s.de()?,
             source_package_name: s.de()?,
         })
+    }
+}
+impl Writeable for FIoContainerHeaderPackageRedirect {
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.source_package_id)?;
+        s.ser(&self.target_package_id)?;
+        s.ser(&self.source_package_name)?;
+        Ok(())
     }
 }
 
@@ -162,6 +205,7 @@ impl StoreEntries {
     }
 }
 impl ReadableCtx<(EIoContainerHeaderVersion, usize)> for StoreEntries {
+    #[instrument(skip_all, name = "StoreEntries")]
     fn de<S: Read>(
         s: &mut S,
         (version, package_count): (EIoContainerHeaderVersion, usize),
