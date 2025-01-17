@@ -2,6 +2,7 @@ use std::fmt::{Debug, Formatter};
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::iter::repeat;
 use std::ops::Deref;
+use std::rc::Rc;
 use anyhow::{anyhow, bail};
 use strum::FromRepr;
 use crate::{EIoStoreTocVersion, FIoChunkId, FSHAHash};
@@ -170,7 +171,7 @@ impl IoStoreShaderCodeArchive {
         let shader_library_header = FIoStoreShaderCodeArchiveHeader::deserialize(&mut shader_library_reader, zen_shader_library_version)?;
 
         // Read and decompress individual shader groups belonging to this library, and extract shader code from them
-        let decompressed_shaders: Vec<Vec<u8>> = Vec::with_capacity(shader_library_header.shader_entries.len());
+        let mut decompressed_shaders: Vec<Vec<u8>> = Vec::with_capacity(shader_library_header.shader_entries.len());
         let mut total_shader_code_size: usize = 0;
 
         for shader_group_index in 0..shader_library_header.shader_group_entries.len() {
@@ -208,8 +209,8 @@ impl IoStoreShaderCodeArchive {
                     // Next shader offset must follow this shader offset
                     let next_shader_offset = next_shader_entry.shader_uncompressed_offset_in_group();
                     if next_shader_offset <= current_shader_offset {
-                        bail!("Shader placement is non-sequential for shader group {} shader at index {}. Expected next shader data to start after current shader data ({}), but it starts at {}",
-                        shader_group_chunk_id, shader_index, current_shader_offset, next_shader_offset);
+                        bail!("Shader placement is non-sequential for shader group {:?} shader at index {}. Expected next shader data to start after current shader data ({}), but it starts at {}",
+                            shader_group_chunk_id, shader_index, current_shader_offset, next_shader_offset);
                     }
                     next_shader_offset
                 } else {
@@ -337,21 +338,20 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive) -> anyhow
     let mut shader_file_regions: Vec<(i64, usize, bool)> = repeat((-1, 0, false)).take(total_shaders).collect();
     let mut shader_map_file_regions: Vec<(i64, usize)> = repeat((-1, 0)).take(shader_library.header.shader_map_entries.len()).collect();
 
-    let write_shader = |shader_index: usize, unique: bool| -> anyhow::Result<()> {
-
-        let shader_offset = shader_code_writer.stream_position()? as i64;
+    fn write_shader<S: Write + Seek>(writer: &mut S, shader_file_regions: &mut Vec<(i64, usize, bool)>, shader_library: &IoStoreShaderCodeArchive, shader_index: usize, unique: bool) -> anyhow::Result<()> {
+        let shader_offset = writer.stream_position()? as i64;
         let shader_compressed_size = shader_library.shaders_code[shader_index].len();
 
         // TODO: Should we try and compress the shaders using the same compression method that IoStore shader library uses?
         shader_file_regions[shader_index] = (shader_offset, shader_compressed_size, unique);
-        shader_code_writer.write(&shader_library.shaders_code[shader_index])?;
+        writer.write(&shader_library.shaders_code[shader_index])?;
         Ok({})
     };
 
     // Write shaders that are considered "Shared" first, e.g. shaders have been seen in multiple shader maps
     for shader_index in 0..total_shaders {
         if shader_reference_count[shader_index] > 1 {
-            write_shader(shader_index, false)?;
+            write_shader(&mut shader_code_writer, &mut shader_file_regions, shader_library, shader_index, false)?;
         }
     }
 
@@ -367,7 +367,7 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive) -> anyhow
 
             // Only consider this shader if this is the only shader map that referenced it
             if shader_reference_count[shader_index] == 1 {
-                write_shader(shader_index, true)?;
+                write_shader(&mut shader_code_writer, &mut shader_file_regions, shader_library, shader_index, true)?;
             }
         }
 
@@ -380,7 +380,7 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive) -> anyhow
     // Write shaders that belong to no shader map, e.g. "Inline" shaders
     for shader_index in 0..total_shaders {
         if shader_reference_count[shader_index] == 0 {
-            write_shader(shader_index, false)?;
+            write_shader(&mut shader_code_writer, &mut shader_file_regions, shader_library, shader_index, false)?;
         }
     }
 
