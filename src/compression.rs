@@ -14,7 +14,7 @@ pub fn decompress(compression: CompressionMethod, input: &[u8], output: &mut [u8
             flate2::read::ZlibDecoder::new(input).read_exact(output)?;
         }
         CompressionMethod::Oodle => {
-            let status = oodle_loader::decompress().unwrap()(input, output);
+            let status = oodle_loader::oodle()?.decompress(input, output);
             if status < 0 || status as usize != output.len() {
                 bail!(
                     "Oodle decompression failed: expected {} output bytes, got {}",
