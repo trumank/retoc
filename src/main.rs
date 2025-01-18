@@ -103,6 +103,9 @@ struct ActionExtractLegacy {
     /// Whenever shader libraries should be extracted as well
     #[arg(short, long, default_value = "true")]
     shader_libraries: bool,
+    /// Whenever extracted shader libraries should be compressed
+    #[arg(long, default_value = "true")]
+    compress_shaders: bool,
 
     /// Engine version override
     #[arg(long)]
@@ -565,6 +568,7 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
     );
 
     if args.shader_libraries {
+        let compress_shaders = args.compress_shaders;
         let mut libraries_extracted: i32 = 0;
         iostore
             .chunks()
@@ -591,7 +595,7 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
                 let dir = path.parent().unwrap();
                 fs::create_dir_all(dir)?;
 
-                let shader_library_buffer = rebuild_shader_library_from_io_store(chunk_info.container(), chunk_info.id(), true)?;
+                let shader_library_buffer = rebuild_shader_library_from_io_store(chunk_info.container(), chunk_info.id(), true, compress_shaders)?;
                 fs::write(path, &shader_library_buffer)?;
                 Ok({})
             })?;

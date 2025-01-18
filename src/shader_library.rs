@@ -1,4 +1,4 @@
-use crate::compression::{decompress, CompressionMethod};
+use crate::compression::{compress, decompress, CompressionMethod};
 use crate::container_header::EIoContainerHeaderVersion;
 use crate::iostore::IoStoreTrait;
 use crate::ser::{ReadExt, Readable, WriteExt, Writeable};
@@ -117,13 +117,7 @@ impl FIoStoreShaderCodeArchiveHeader {
     }
 }
 
-fn decompress_shader_group_chunk(shader_group_data: &Vec<u8>, container_version: EIoStoreTocVersion, container_header_version: Option<EIoContainerHeaderVersion>, uncompressed_size: usize) -> anyhow::Result<Vec<u8>> {
-
-    // Sanity check against empty compressed data chunks
-    if shader_group_data.is_empty() {
-        bail!("Invalid shader group compressed data");
-    }
-    let mut result_uncompressed_data: Vec<u8> = vec![0; uncompressed_size];
+fn determine_compression_method_for_shader_group(shader_group_data: &Vec<u8>, container_version: EIoStoreTocVersion, container_header_version: Option<EIoContainerHeaderVersion>) -> CompressionMethod {
 
     // There is no indication of what compression algorithm is used, however, starting with UE5.3, it is always oodle
     let is_compression_always_oodle = container_version >= EIoStoreTocVersion::OnDemandMetaData ||
@@ -131,27 +125,41 @@ fn decompress_shader_group_chunk(shader_group_data: &Vec<u8>, container_version:
 
     // If we know for sure that this is oodle, decompress with oodle
     if is_compression_always_oodle {
-        decompress(CompressionMethod::Oodle, shader_group_data, &mut result_uncompressed_data)?;
-        return Ok(result_uncompressed_data)
+        return CompressionMethod::Oodle
     }
     // Otherwise, it can be any compression format UE supports. However, by default it is always Oodle, and it is known that to change it an engine patch is necessary
     // The only known game to have used non-oodle shader compression in UE5.2 is Satisfactory U8, where it used Zlib instead
     // We can determine if it's Zlib by checking if it starts with 0x78 or 0x58. Otherwise, we assume oodle
-    let is_zlib_marker = shader_group_data[0] == 0x78 || shader_group_data[0] == 0x58;
+    let is_zlib_marker = !shader_group_data.is_empty() && shader_group_data[0] == 0x78 || shader_group_data[0] == 0x58;
     if is_zlib_marker {
-        decompress(CompressionMethod::Zlib, shader_group_data, &mut result_uncompressed_data)?;
-        return Ok(result_uncompressed_data)
+        return CompressionMethod::Zlib
     }
-
     // Assume Oodle by default. This can be changed to account for other algorithms if games using them are discovered
-    decompress(CompressionMethod::Oodle, shader_group_data, &mut result_uncompressed_data)?;
+    CompressionMethod::Oodle
+}
+
+fn decompress_shader_group_chunk(shader_group_data: &Vec<u8>, compression_method: CompressionMethod, uncompressed_size: usize) -> anyhow::Result<Vec<u8>> {
+
+    // Sanity check against empty compressed data chunks
+    if shader_group_data.is_empty() {
+        bail!("Invalid shader group compressed data");
+    }
+    let mut result_uncompressed_data: Vec<u8> = vec![0; uncompressed_size];
+    decompress(compression_method, shader_group_data, &mut result_uncompressed_data)?;
     Ok(result_uncompressed_data)
+}
+
+fn compress_shader(shader_data: &Vec<u8>, compression_method: CompressionMethod) -> anyhow::Result<Vec<u8>> {
+    let mut compression_buffer: Vec<u8> = Vec::with_capacity(shader_data.len());
+    compress(compression_method, shader_data, Cursor::new(&mut compression_buffer))?;
+    Ok(compression_buffer)
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct IoStoreShaderCodeArchive {
     pub(crate) version: EIoStoreShaderLibraryVersion,
     pub(crate) header: FIoStoreShaderCodeArchiveHeader,
+    pub(crate) compression_method: Option<CompressionMethod>,
     pub(crate) shaders_code: Vec<Vec<u8>>,
     pub(crate) total_shader_code_size: usize,
 }
@@ -168,6 +176,7 @@ impl IoStoreShaderCodeArchive {
         let zen_shader_library_version = EIoStoreShaderLibraryVersion::from_repr(zen_shader_library_version_raw)
             .ok_or_else(|| { anyhow!("Unknown shader library version: {}", zen_shader_library_version_raw) })?;
         let shader_library_header = FIoStoreShaderCodeArchiveHeader::deserialize(&mut shader_library_reader, zen_shader_library_version)?;
+        let mut compression_method: Option<CompressionMethod> = None;
 
         // Read and decompress individual shader groups belonging to this library, and extract shader code from them
         let mut decompressed_shaders: Vec<Vec<u8>> = vec![Vec::new(); shader_library_header.shader_entries.len()];
@@ -183,9 +192,16 @@ impl IoStoreShaderCodeArchive {
 
             // Decompress the shader group chunk if it's compressed size does not match it's uncompressed size
             if shader_group_entry.compressed_size != shader_group_entry.uncompressed_size {
-                let container_version = store_access.container_file_version().ok_or_else(|| { anyhow!("Failed to retrieve container file version") })?;
-                let container_header_version = store_access.container_header_version();
-                shader_group_data = decompress_shader_group_chunk(&shader_group_data, container_version, container_header_version, shader_group_entry.uncompressed_size as usize)?;
+
+                // Establish which compression method is used for this shader library. The entire library must use the same compression method
+                if compression_method.is_none() {
+                    let container_version = store_access.container_file_version().ok_or_else(|| { anyhow!("Failed to retrieve container file version") })?;
+                    let container_header_version = store_access.container_header_version();
+
+                    compression_method = Some(determine_compression_method_for_shader_group(&shader_group_data, container_version, container_header_version))
+                }
+                shader_group_data = decompress_shader_group_chunk(&shader_group_data, compression_method.unwrap(), shader_group_entry.uncompressed_size as usize)?;
+
                 if shader_group_data.len() != shader_group_entry.uncompressed_size as usize {
                     bail!("Invalid amount of uncompressed data from decompress_shader_group_chunk: Expected {}, got {}", shader_group_entry.uncompressed_size, shader_group_data.len());
                 }
@@ -243,6 +259,7 @@ impl IoStoreShaderCodeArchive {
         Ok(IoStoreShaderCodeArchive {
             version: zen_shader_library_version,
             header: shader_library_header,
+            compression_method,
             shaders_code: decompressed_shaders,
             total_shader_code_size,
         })
@@ -327,7 +344,7 @@ struct WriteShaderCodeResult {
 }
 
 // Lays out shader code to match its likely order of access into a single file, using shader maps to group shaders that are accessed together close to each other
-fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive) -> anyhow::Result<WriteShaderCodeResult> {
+fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive, compress_shaders: bool) -> anyhow::Result<WriteShaderCodeResult> {
     // Calculate how many maps reference each shader. Shaders that are only referenced by one shader map can be put next to each other and preloaded as one region
     let total_shaders = shader_library.header.shader_entries.len();
     let mut shader_reference_count: Vec<u32> = vec![0; total_shaders];
@@ -348,12 +365,24 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive) -> anyhow
     let mut shader_file_regions: Vec<(i64, usize, bool)> = vec![(-1, 0, false); total_shaders];
     let mut shader_map_file_regions: Vec<(i64, usize)> = vec![(-1, 0); shader_library.header.shader_map_entries.len()];
 
-    fn write_shader<S: Write + Seek>(writer: &mut S, shader_file_regions: &mut Vec<(i64, usize, bool)>, shader_library: &IoStoreShaderCodeArchive, shader_index: usize, unique: bool) -> anyhow::Result<()> {
+    fn write_shader<S: Write + Seek>(writer: &mut S, shader_file_regions: &mut Vec<(i64, usize, bool)>, shader_library: &IoStoreShaderCodeArchive, should_compress_shader: bool, shader_index: usize, unique: bool) -> anyhow::Result<()> {
         let shader_offset = writer.stream_position()? as i64;
-        let shader_compressed_size = shader_library.shaders_code[shader_index].len();
+        let shader_uncompressed_size = shader_library.shaders_code[shader_index].len();
 
-        // TODO: Should we try and compress the shaders using the same compression method that IoStore shader library uses?
-        shader_file_regions[shader_index] = (shader_offset, shader_compressed_size, unique);
+        // Compress shader if we are allowed to and compression method is known
+        if should_compress_shader && shader_library.compression_method.is_some() {
+            let shader_compressed_data = compress_shader(&shader_library.shaders_code[shader_index], shader_library.compression_method.unwrap())?;
+            let shader_compressed_size = shader_compressed_data.len();
+
+            // Sometimes compression can result in larger size for some small shaders, so only write compressed data if it's actually smaller than uncompressed size
+            if shader_compressed_size < shader_uncompressed_size {
+                shader_file_regions[shader_index] = (shader_offset, shader_compressed_size, unique);
+                writer.write(&shader_compressed_data)?;
+                return Ok({})
+            }
+        }
+        // Write shader uncompressed otherwise
+        shader_file_regions[shader_index] = (shader_offset, shader_uncompressed_size, unique);
         writer.write(&shader_library.shaders_code[shader_index])?;
         Ok({})
     };
@@ -365,7 +394,7 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive) -> anyhow
     // Write shaders that are considered "Shared" first, e.g. shaders have been seen in multiple shader maps
     for shader_index in 0..total_shaders {
         if shader_reference_count[shader_index] > 1 {
-            write_shader(&mut shader_code_writer, &mut shader_file_regions, shader_library, shader_index, false)?;
+            write_shader(&mut shader_code_writer, &mut shader_file_regions, shader_library, compress_shaders, shader_index, false)?;
             total_shared_shaders += 1;
         }
     }
@@ -382,7 +411,7 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive) -> anyhow
 
             // Only consider this shader if this is the only shader map that referenced it
             if shader_reference_count[shader_index] == 1 {
-                write_shader(&mut shader_code_writer, &mut shader_file_regions, shader_library, shader_index, true)?;
+                write_shader(&mut shader_code_writer, &mut shader_file_regions, shader_library, compress_shaders, shader_index, true)?;
                 total_unique_shaders += 1;
             }
         }
@@ -397,7 +426,7 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive) -> anyhow
     // I refer to them as "detached" shaders. Generally such shaders cannot be loaded in runtime because runtime operates on shader maps during serialization and not singular shaders
     for shader_index in 0..total_shaders {
         if shader_reference_count[shader_index] == 0 {
-            write_shader(&mut shader_code_writer, &mut shader_file_regions, shader_library, shader_index, false)?;
+            write_shader(&mut shader_code_writer, &mut shader_file_regions, shader_library, compress_shaders, shader_index, false)?;
             total_detached_shaders += 1;
         }
     }
@@ -419,7 +448,7 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive) -> anyhow
 }
 
 // Returns the file contents of the built shader library on success
-pub(crate) fn rebuild_shader_library_from_io_store(store_access: &dyn IoStoreTrait, library_chunk_id: FIoChunkId, allow_stdout: bool) -> anyhow::Result<Vec<u8>> {
+pub(crate) fn rebuild_shader_library_from_io_store(store_access: &dyn IoStoreTrait, library_chunk_id: FIoChunkId, allow_stdout: bool, compress_shaders: bool) -> anyhow::Result<Vec<u8>> {
 
     // Read IoStore shader library
     let io_store_shader_library = IoStoreShaderCodeArchive::read(store_access, library_chunk_id)?;
@@ -430,7 +459,7 @@ pub(crate) fn rebuild_shader_library_from_io_store(store_access: &dyn IoStoreTra
     }).ok_or_else(|| { anyhow!("Failed to retrieve IoStore shader library name for shader library chunk {:?}", library_chunk_id) })?;
 
     // Write shader code into the shared buffer
-    let shader_code = layout_write_shader_code(&io_store_shader_library)?;
+    let shader_code = layout_write_shader_code(&io_store_shader_library, compress_shaders)?;
 
     // Create shader library from the IoStore shader archive
     let mut shader_library: FShaderLibraryHeader = FShaderLibraryHeader::default();
@@ -517,9 +546,11 @@ pub(crate) fn rebuild_shader_library_from_io_store(store_access: &dyn IoStoreTra
 
     // Print shader library statistics to stdout if allowed
     if allow_stdout {
-        println!("Shader Library {} statistics: Shared Shaders: {}; Unique Shaders: {}; Detached Shaders: {}; Shader Maps: {}, Uncompressed Size: {}KB, Compressed Size: {}KB",
+        let compression_ratio = f64::round((io_store_shader_library.total_shader_code_size as f64 / shader_code.shader_code_buffer.len() as f64) * 100.0f64) as i64;
+        println!("Shader Library {} statistics: Shared Shaders: {}; Unique Shaders: {}; Detached Shaders: {}; Shader Maps: {}, Uncompressed Size: {}MB, Compressed Size: {}MB, Compression Ratio: {}%",
             library_name.clone(), shader_code.total_shared_shaders, shader_code.total_unique_shaders, shader_code.total_detached_shaders, shader_library.shader_map_entries.len(),
-             io_store_shader_library.total_shader_code_size / 1024, shader_code.shader_code_buffer.len() / 1024);
+             io_store_shader_library.total_shader_code_size / 1024 / 1024, shader_code.shader_code_buffer.len() / 1024 / 1024, compression_ratio,
+        );
     }
     Ok(result_shader_library_buffer)
 }
