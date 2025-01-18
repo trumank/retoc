@@ -29,7 +29,7 @@ impl Readable for FPackageFileSummary {
         let tag = s.de()?;
         assert_eq!(tag, 0x9e2a83c1);
 
-        let legacy_file_version: i32 = dbg!(s.de()?);
+        let legacy_file_version: i32 = s.de()?;
 
         if legacy_file_version != -4 {
             let _legacy_ue3_version: i32 = s.de()?;

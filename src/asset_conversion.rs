@@ -23,10 +23,11 @@ pub(crate) struct FZenPackageContext<'a> {
     fallback_package_file_version: Option<FPackageFileVersion>,
     allow_stdout: bool,
     verbose_stdout: bool,
+    very_verbose_stdout: bool,
     has_logged_detected_package_version: bool,
 }
 impl<'a> FZenPackageContext<'a> {
-    pub(crate) fn create(store_access: &'a dyn IoStoreTrait, fallback_package_file_version: Option<FPackageFileVersion>, allow_stdout: bool, verbose: bool) -> Self {
+    pub(crate) fn create(store_access: &'a dyn IoStoreTrait, fallback_package_file_version: Option<FPackageFileVersion>, allow_stdout: bool, verbose: bool, debug: bool) -> Self {
         Self {
             store_access,
             script_objects_loaded: false,
@@ -37,6 +38,7 @@ impl<'a> FZenPackageContext<'a> {
             fallback_package_file_version,
             allow_stdout,
             verbose_stdout: verbose,
+            very_verbose_stdout: debug,
             has_logged_detected_package_version: false,
         }
     }
@@ -864,7 +866,8 @@ pub(crate) fn serialize_asset(builder: &LegacyAssetBuilder) -> anyhow::Result<FS
     // Write the asset file first
     let mut asset_file_buffer: Vec<u8> = Vec::new();
     let mut asset_cursor = Cursor::new(&mut asset_file_buffer);
-    FLegacyPackageHeader::serialize(&builder.legacy_package, &mut asset_cursor, false)?;
+    let dump_package_summary = builder.package_context.allow_stdout && builder.package_context.very_verbose_stdout;
+    FLegacyPackageHeader::serialize(&builder.legacy_package, &mut asset_cursor, dump_package_summary)?;
 
     // Copy the raw export data from the chunk into the exports file
     let raw_exports_data = builder.package_context.read_full_package_data(builder.package_id)?;
@@ -892,8 +895,8 @@ pub(crate) fn serialize_asset(builder: &LegacyAssetBuilder) -> anyhow::Result<FS
 pub(crate) fn write_asset<P: AsRef<Path>>(builder: &LegacyAssetBuilder, out_asset_path: P) -> anyhow::Result<()> {
 
     // Dump zen package and legacy package for debugging
-    let debug_output = builder.package_context.allow_stdout && builder.package_context.verbose_stdout;
-    if debug_output {
+    let dump_packages = builder.package_context.allow_stdout && builder.package_context.very_verbose_stdout;
+    if dump_packages {
         dbg!(builder.zen_package.clone());
         dbg!(builder.legacy_package.clone());
     }

@@ -109,6 +109,8 @@ struct ActionExtractLegacy {
     version: Option<EngineVersion>,
     #[arg(short, long, default_value = "false")]
     verbose: bool,
+    #[arg(long, default_value = "false")]
+    debug: bool,
     #[arg(short, long)]
     filter: Option<String>,
 }
@@ -496,12 +498,13 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
     let iostore = iostore::open(args.utoc, config)?;
 
     let output = args.output;
-    let debug_output = args.verbose;
+    let verbose = args.verbose;
+    let debug = args.debug;
     let package_file_version: Option<FPackageFileVersion> = args
         .version
         .map(|v| FPackageFileVersion::create_ue5(EngineVersion::object_ue5_version(v)));
     let mut package_context =
-        FZenPackageContext::create(iostore.as_ref(), package_file_version, true, debug_output);
+        FZenPackageContext::create(iostore.as_ref(), package_file_version, true, verbose, debug);
 
     let mut count = 0;
     let start_time = Instant::now();
