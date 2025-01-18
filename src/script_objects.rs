@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::io::Seek;
 
 use anyhow::Result;
@@ -116,6 +116,13 @@ impl Readable for FPackageObjectIndex {
 impl Display for FPackageObjectIndex {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.serialize_u64(self.type_and_id)
+    }
+}
+impl Writeable for FPackageObjectIndex {
+    #[instrument(skip_all, name = "FPackageObjectIndex")]
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.type_and_id)?;
+        Ok({})
     }
 }
 

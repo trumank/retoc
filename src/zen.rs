@@ -7,7 +7,7 @@ use tracing::instrument;
 use crate::name_map::read_name_batch;
 use crate::script_objects::FPackageObjectIndex;
 use crate::ser::{WriteExt, Writeable};
-use crate::{name_map::{FMappedName, FNameMap}, EIoStoreTocVersion, FGuid, FPackageId, FSHAHash, ReadExt, Readable};
+use crate::{align_u64, align_usize, break_down_name_string, name_map::{FMappedName, FNameMap}, EIoStoreTocVersion, FGuid, FPackageId, FSHAHash, ReadExt, Readable};
 use crate::container_header::{EIoContainerHeaderVersion, StoreEntry};
 use crate::version_heuristics::{heuristic_zen_has_bulk_data, heuristic_zen_package_version};
 
@@ -109,6 +109,29 @@ impl FZenPackageSummary {
             import_map_offset, export_map_offset, export_bundle_entries_offset, graph_data_offset,
             dependency_bundle_headers_offset, dependency_bundle_entries_offset, imported_package_names_offset})
     }
+
+    #[instrument(skip_all, name = "FZenPackageSummary")]
+    fn serialize<S: Write>(&self, s: &mut S, container_header_version: EIoContainerHeaderVersion) -> Result<()> {
+
+        s.ser(&self.has_versioning_info)?;
+        s.ser(&self.header_size)?;
+        s.ser(&self.name)?;
+        s.ser(&self.package_flags)?;
+        s.ser(&self.cooked_header_size)?;
+        s.ser(&self.imported_public_export_hashes_offset)?;
+        s.ser(&self.import_map_offset)?;
+        s.ser(&self.export_map_offset)?;
+        s.ser(&self.export_bundle_entries_offset)?;
+
+        if container_header_version >= EIoContainerHeaderVersion::NoExportInfo {
+            s.ser(&self.dependency_bundle_headers_offset)?;
+            s.ser(&self.dependency_bundle_entries_offset)?;
+            s.ser(&self.imported_package_names_offset)?;
+        } else {
+            s.ser(&self.graph_data_offset)?;
+        }
+        Ok({})
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
@@ -193,6 +216,18 @@ impl Readable for FZenPackageVersioningInfo {
         })
     }
 }
+impl Writeable for FZenPackageVersioningInfo {
+    #[instrument(skip_all, name = "FZenPackageVersioningInfo")]
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+
+        let zen_version_raw: u32 = self.zen_version as u32;
+        s.ser(&zen_version_raw)?;
+        s.ser(&self.package_file_version)?;
+        s.ser(&self.licensee_version)?;
+        s.ser(&self.custom_versions)?;
+        Ok({})
+    }
+}
 
 #[derive(Debug, Copy, Clone, Default)]
 #[repr(C)] // Needed to determine the number of bulk data entries
@@ -213,6 +248,18 @@ impl Readable for FBulkDataMapEntry {
             flags: s.de()?,
             pad: s.de()?,
         })
+    }
+}
+impl Writeable for FBulkDataMapEntry {
+    #[instrument(skip_all, name = "FBulkDataMapEntry")]
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+
+        s.ser(&self.serial_offset)?;
+        s.ser(&self.duplicate_serial_offset)?;
+        s.ser(&self.serial_size)?;
+        s.ser(&self.flags)?;
+        s.ser(&self.pad)?;
+        Ok({})
     }
 }
 
@@ -269,6 +316,24 @@ impl Readable for FExportMapEntry {
         })
     }
 }
+impl Writeable for FExportMapEntry {
+    #[instrument(skip_all, name = "FExportMapEntry")]
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.cooked_serial_offset)?;
+        s.ser(&self.cooked_serial_size)?;
+        s.ser(&self.object_name)?;
+        s.ser(&self.outer_index)?;
+        s.ser(&self.class_index)?;
+        s.ser(&self.super_index)?;
+        s.ser(&self.template_index)?;
+        s.ser(&self.public_export_hash)?;
+        s.ser(&self.object_flags)?;
+        let raw_filter_flags: u8 = self.filter_flags as u8;
+        s.ser(&raw_filter_flags)?;
+        s.ser(&self.padding)?;
+        Ok({})
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, FromRepr)]
 #[repr(u32)]
@@ -289,6 +354,15 @@ impl Readable for FExportBundleEntry {
             local_export_index: s.de()?,
             command_type: EExportCommandType::from_repr(s.de()?).unwrap()
         })
+    }
+}
+impl Writeable for FExportBundleEntry {
+    #[instrument(skip_all, name = "FExportBundleEntry")]
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.local_export_index)?;
+        let raw_command_type: u32 = self.command_type as u32;
+        s.ser(&raw_command_type)?;
+        Ok({})
     }
 }
 
@@ -314,6 +388,17 @@ impl Readable for FDependencyBundleHeader {
             create_before_serialize_dependencies: s.de()?,
             serialize_before_serialize_dependencies: s.de()?,
         })
+    }
+}
+impl Writeable for FDependencyBundleHeader {
+    #[instrument(skip_all, name = "FDependencyBundleHeader")]
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.first_entry_index)?;
+        s.ser(&self.create_before_create_dependencies)?;
+        s.ser(&self.serialize_before_create_dependencies)?;
+        s.ser(&self.create_before_serialize_dependencies)?;
+        s.ser(&self.serialize_before_serialize_dependencies)?;
+        Ok({})
     }
 }
 
@@ -367,6 +452,13 @@ impl Readable for FDependencyBundleEntry {
         })
     }
 }
+impl Writeable for FDependencyBundleEntry {
+    #[instrument(skip_all, name = "FDependencyBundleEntry")]
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.local_import_or_export_index)?;
+        Ok({})
+    }
+}
 
 // Actual UE type name not known, type layout from AsyncLoading2.cpp SetupSerializedArcs on 5.2.2
 #[derive(Debug, Copy, Clone, Default)]
@@ -381,6 +473,14 @@ impl Readable for FInternalDependencyArc {
             from_export_bundle_index: s.de()?,
             to_export_bundle_index: s.de()?,
         })
+    }
+}
+impl Writeable for FInternalDependencyArc {
+    #[instrument(skip_all, name = "FInternalDependencyArc")]
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.from_export_bundle_index)?;
+        s.ser(&self.to_export_bundle_index)?;
+        Ok({})
     }
 }
 
@@ -406,6 +506,18 @@ impl Readable for FExternalDependencyArc {
         })
     }
 }
+impl Writeable for FExternalDependencyArc {
+    #[instrument(skip_all, name = "FExternalDependencyArc")]
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.from_import_index)?;
+        // EExportCommandType serialization is inconsistent: it is serialized as uint8 in external arcs, but as uint32 in export bundle entries
+        let raw_from_command_type: u8 = self.from_command_type as u8;
+        s.ser(&raw_from_command_type)?;
+        s.ser(&self.to_export_bundle_index)?;
+        Ok({})
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct FImportedPackageDependency {
     pub(crate) dependency_arcs: Vec<FExternalDependencyArc>,
@@ -416,6 +528,14 @@ impl Readable for FImportedPackageDependency {
         Ok(Self{dependency_arcs: s.de()?})
     }
 }
+impl Writeable for FImportedPackageDependency {
+    #[instrument(skip_all, name = "FImportedPackageDependency")]
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.dependency_arcs)?;
+        Ok({})
+    }
+}
+
 // Legacy, UE 5.2 and below, when there were multiple export bundles instead of just one
 #[derive(Debug, Copy, Clone, Default)]
 #[repr(C)] // needed to determine the offset of the arc data
@@ -438,6 +558,15 @@ impl Readable for FExportBundleHeader {
             first_entry_index: s.de()?,
             entry_count: s.de()?,
         })
+    }
+}
+impl Writeable for FExportBundleHeader {
+    #[instrument(skip_all, name = "FExportBundleHeader")]
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.serial_offset)?;
+        s.ser(&self.first_entry_index)?;
+        s.ser(&self.entry_count)?;
+        Ok({})
     }
 }
 
@@ -465,6 +594,47 @@ pub(crate) enum EUnrealEngineObjectUE4Version {
     NonOuterPackageImport = 520,
     AssetRegistryDependencyFlags = 521,
     CorrectLicenseeFlag = 522,
+}
+
+#[derive(Debug, Clone, Default)]
+struct FZenPackageImportedPackageNamesContainer {
+    imported_package_names: Vec<String>,
+}
+impl Readable for FZenPackageImportedPackageNamesContainer {
+    #[instrument(skip_all, name = "FZenPackageImportedPackageNamesContainer")]
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        let mut imported_package_names: Vec<String> = read_name_batch(s)?;
+
+        let imported_package_name_numbers: Vec<i32> = s.de_ctx(imported_package_names.len())?;
+        for (index, item) in imported_package_names.iter_mut().enumerate() {
+            if imported_package_name_numbers[index] != 0 {
+                *item = format!("{item}_{}", imported_package_name_numbers[index] - 1)
+            }
+        }
+        Ok(Self{ imported_package_names })
+    }
+}
+impl Writeable for FZenPackageImportedPackageNamesContainer {
+    #[instrument(skip_all, name = "FZenPackageImportedPackageNamesContainer")]
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+
+        let mut imported_package_names: Vec<String> = Vec::with_capacity(self.imported_package_names.len());
+        let mut imported_package_name_numbers: Vec<i32> = Vec::with_capacity(self.imported_package_names.len());
+
+        for imported_package_name in &self.imported_package_names {
+            let (name_without_number, name_number) = break_down_name_string(imported_package_name);
+
+            imported_package_names.push(name_without_number.to_string());
+            imported_package_name_numbers.push(name_number);
+        }
+        
+        // TODO @trumank name batch writing
+        // write_name_batch(&imported_package_names);
+        bail!("Truman help");
+
+        s.ser(&imported_package_name_numbers)?;
+        Ok({})
+    }
 }
 
 #[derive(Debug)]
@@ -609,19 +779,11 @@ impl FZenPackageHeader {
         }
 
         // This is technically not necessary to read, but that data can be used for verification and debugging
-        let mut imported_package_names: Vec<String> = Vec::new();
+        let mut imported_package_names: FZenPackageImportedPackageNamesContainer = FZenPackageImportedPackageNamesContainer::default();
         if summary.imported_package_names_offset > 0 {
             let imported_package_names_start_offset = package_start_offset + summary.imported_package_names_offset as u64;
             s.seek(SeekFrom::Start(imported_package_names_start_offset))?;
-
-            imported_package_names = read_name_batch(s)?;
-
-            let imported_package_name_numbers: Vec<i32> = s.de_ctx(imported_package_names.len())?;
-            for (index, item) in imported_package_names.iter_mut().enumerate() {
-                if imported_package_name_numbers[index] != 0 {
-                    *item = format!("{item}_{}", imported_package_name_numbers[index] - 1)
-                }
-            }
+            imported_package_names = s.de()?;
         }
 
         Ok(Self{
@@ -636,13 +798,150 @@ impl FZenPackageHeader {
             export_bundle_entries,
             dependency_bundle_headers,
             dependency_bundle_entries,
-            imported_package_names,
+            imported_package_names: imported_package_names.imported_package_names,
             imported_packages: store_entry.imported_packages,
             shader_map_hashes: store_entry.shader_map_hashes,
             is_unversioned,
             internal_dependency_arcs,
             imported_package_dependencies,
         })
+    }
+
+    #[instrument(skip_all, name = "FZenPackageHeader")]
+    pub(crate) fn serialize<S: Write + Seek>(&self, s: &mut S, store_entry: &mut StoreEntry, container_header_version: EIoContainerHeaderVersion) -> Result<()> {
+
+        let mut package_summary = self.summary.clone();
+        package_summary.has_versioning_info = if self.is_unversioned { 0 } else { 1 };
+
+        // Write dummy package summary. We will seek back to it once we have all the data necessary to populate it
+        let package_summary_offset = s.stream_position()?;
+        FZenPackageSummary::serialize(&package_summary, s, container_header_version)?;
+
+        // Write versioning info if this package is not unversioned
+        if package_summary.has_versioning_info != 0 {
+            s.ser(&self.versioning_info)?;
+        }
+
+        s.ser(&self.name_map)?;
+
+        // Bulk data is only serialized in UE5.2+ packages
+        if self.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::DataResources as i32 {
+
+            // In UE5.4+, there is padding before the bulk data map size
+            // Padding must ensure that bulk data size starts at 8-byte aligned reader position
+            if self.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::PropertyTagCompleteTypeName as i32 {
+
+                let current_writer_position = s.stream_position()? - package_summary_offset;
+                let bulk_data_padding: u64 = align_u64(current_writer_position, 8) - current_writer_position;
+                s.ser(&bulk_data_padding)?;
+                for _ in 0..bulk_data_padding {
+                    let padding: u8 = 0;
+                    s.ser(&padding)?;
+                }
+            }
+
+            // Remember the offset of the bulk map data size. We will need to patch it up once we have written the bulk data
+            let bulk_data_map_size_offset = s.stream_position()?;
+            let mut bulk_data_map_size: i64 = -1;
+            s.ser(&bulk_data_map_size)?;
+            let pre_bulk_data_map_position = s.stream_position()?;
+
+            // Serialize bulk data map
+            for bulk_data_map_entry in &self.bulk_data {
+                s.ser(bulk_data_map_entry)?;
+            }
+
+            // We know the bulk data map size now, so seek back to its position and write it
+            let post_bulk_data_map_position = s.stream_position()?;
+            bulk_data_map_size = (post_bulk_data_map_position - pre_bulk_data_map_position) as i64;
+            s.seek(SeekFrom::Start(bulk_data_map_size_offset))?;
+            s.ser(&bulk_data_map_size)?;
+
+            // Seek back to the end of the writer to continue writing zen asset data
+            s.seek(SeekFrom::Start(post_bulk_data_map_position))?;
+        }
+
+        // Imported public export hashes start directly after bulk data
+        package_summary.imported_public_export_hashes_offset = (s.stream_position()? - package_summary_offset) as i32;
+        for public_export_hash in &self.imported_public_export_hashes {
+            s.ser(public_export_hash)?;
+        }
+
+        // Import map starts directly after imported public hashes
+        package_summary.import_map_offset = (s.stream_position()? - package_summary_offset) as i32;
+        for import_map_package_index in &self.imported_packages {
+            s.ser(import_map_package_index)?;
+        }
+
+        // Export map starts directly after import map
+        package_summary.export_map_offset = (s.stream_position()? - package_summary_offset) as i32;
+        for export_map_entry in &self.export_map {
+            s.ser(export_map_entry)?;
+        }
+
+        // Export bundle entries start directly after export map
+        package_summary.export_bundle_entries_offset = (s.stream_position()? - package_summary_offset) as i32;
+        for export_bundle_entry in &self.export_bundle_entries {
+            s.ser(export_bundle_entry)?;
+        }
+
+        // Write imported package IDs and shader map IDs into the store entry
+        store_entry.imported_packages = self.imported_packages.clone();
+        store_entry.shader_map_hashes = self.shader_map_hashes.clone();
+
+        // Write dependency bundles and imported package names in UE5.3+ zen packages
+        if container_header_version >= EIoContainerHeaderVersion::NoExportInfo {
+
+            // Dependency bundle headers start directly after export bundle entries
+            package_summary.dependency_bundle_headers_offset = (s.stream_position()? - package_summary_offset) as i32;
+            for dependency_bundle_header in &self.dependency_bundle_headers {
+                s.ser(dependency_bundle_header)?;
+            }
+
+            // Dependency bundle entries start directly after dependency bundle headers
+            package_summary.dependency_bundle_entries_offset = (s.stream_position()? - package_summary_offset) as i32;
+            for dependency_bundle_entry in &self.dependency_bundle_entries {
+                s.ser(dependency_bundle_entry)?;
+            }
+
+            // Serialize imported package names. They are not actually read by the game in runtime, but should be preserved
+            package_summary.imported_package_names_offset = (s.stream_position()? - package_summary_offset) as i32;
+            let imported_package_names = FZenPackageImportedPackageNamesContainer{imported_package_names: self.imported_package_names.clone()};
+            s.ser(&imported_package_names)?;
+        // Write graph data, which includes dependency bundle headers and arcs
+        } else {
+
+            // Write export count for packages with graph data
+            store_entry.export_count = self.export_map.len() as i32;
+
+            // Graph data starts directly after export bundle entries
+            package_summary.graph_data_offset = (s.stream_position()? - package_summary_offset) as i32;
+
+            // Write export bundle count into the package store entry, and then write export bundle header for each of them
+            store_entry.export_bundle_count = self.export_bundle_headers.len() as i32;
+            for export_bundle_header in &self.export_bundle_headers {
+                s.ser(export_bundle_header)?;
+            }
+
+            // Write internal dependency arcs after export bundle headers
+            s.ser(&self.internal_dependency_arcs)?;
+
+            // Write external dependency arcs. Note that we must have as many of them as there are imported packages
+            for imported_package_arcs in &self.imported_package_dependencies {
+                s.ser(imported_package_arcs)?;
+            }
+        }
+
+        // We know the total size of the zen package header now
+        let package_header_end_offset = s.stream_position()?;
+        package_summary.header_size = (package_header_end_offset - package_summary_offset) as u32;
+
+        // Go back to the package summary and patch it up with the offsets that we know now, and then seek back
+        s.seek(SeekFrom::Start(package_summary_offset))?;
+        FZenPackageSummary::serialize(&package_summary, s, container_header_version)?;
+        s.seek(SeekFrom::Start(package_header_end_offset))?;
+
+        Ok({})
     }
 }
 

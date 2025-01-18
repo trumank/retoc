@@ -38,6 +38,7 @@ use std::{
 use strum::{AsRefStr, EnumString, FromRepr, VariantNames as _};
 use tracing::instrument;
 use version::EngineVersion;
+use crate::legacy_asset::FMinimalName;
 
 fn parse_ue5_object_version(string: &str) -> Result<EUnrealEngineObjectUE5Version> {
     EUnrealEngineObjectUE5Version::from_repr(string.parse()?).context("invalid UE5 Object Version")
@@ -1021,6 +1022,26 @@ fn align_u64(value: u64, alignment: u64) -> u64 {
 fn align_usize(value: usize, alignment: usize) -> usize {
     (value + alignment - 1) & !(alignment - 1)
 }
+
+// Breaks down a combined FName string into a base name and a number. Number is 0 if there is no number
+pub(crate) fn break_down_name_string<'a>(name: &'a str) -> (&'a str, i32) {
+    let mut name_without_number: &'a str = name;
+    let mut name_number: i32 = 0; // 0 means no number
+
+    // Attempt to break down the composite name into the name part and the number part
+    if let Some((left, right)) = name.rsplit_once('_') {
+        // Right part needs to be parsed as a valid signed integer that is >= 0 and converts back to the same string
+        // Last part is important for not touching names like: Rocket_04 - 04 should stay a part of the name, not a number, otherwise we would actually get Rocket_4 when deserializing!
+        if let Ok(parsed_number) = i32::from_str_radix(right, 10) {
+            if parsed_number >= 0 && parsed_number.to_string() == right {
+                name_without_number = left;
+                name_number = parsed_number + 1; // stored as 1 more than the actual number
+            }
+        }
+    }
+    (name_without_number, name_number)
+}
+
 impl Toc {
     pub(crate) fn new() -> Self {
         Self::default()

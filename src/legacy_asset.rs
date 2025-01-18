@@ -1,5 +1,5 @@
 use crate::zen::{EUnrealEngineObjectUE4Version, EUnrealEngineObjectUE5Version, FCustomVersion, FPackageFileVersion, FPackageIndex};
-use crate::{iostore::IoStoreTrait, ser::*, FGuid};
+use crate::{break_down_name_string, iostore::IoStoreTrait, ser::*, FGuid};
 use anyhow::{anyhow, bail, Result};
 use std::borrow::Cow;
 use std::cmp::max;
@@ -523,20 +523,7 @@ impl FPackageNameMap {
         }
     }
     pub(crate) fn store(&mut self, name: &str) -> FMinimalName {
-        let mut name_without_number: &str = name;
-        let mut name_number: i32 = 0; // 0 means no number
-
-        // Attempt to break down the composite name into the name part and the number part
-        if let Some((left, right)) = name.rsplit_once('_') {
-            // Right part needs to be parsed as a valid signed integer that is >= 0 and converts back to the same string
-            // Last part is important for not touching names like: Rocket_04 - 04 should stay a part of the name, not a number, otherwise we would actually get Rocket_4 when deserializing!
-            if let Ok(parsed_number) = i32::from_str_radix(right, 10) {
-                if parsed_number >= 0 && parsed_number.to_string() == right {
-                    name_without_number = left;
-                    name_number = parsed_number + 1; // stored as 1 more than the actual number
-                }
-            }
-        }
+        let (name_without_number, name_number) = break_down_name_string(name);
 
         // Attempt to resolve the existing name through lookup
         if let Some(existing_index) = self.name_lookup.get(name_without_number) {

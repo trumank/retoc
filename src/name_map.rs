@@ -1,6 +1,6 @@
 use std::{borrow::Cow, io::Read};
 use std::io::Write;
-use anyhow::Result;
+use anyhow::{bail, Result};
 use strum::{Display, FromRepr};
 use tracing::instrument;
 
@@ -38,6 +38,13 @@ impl Readable for FNameMap {
     fn de<S: Read>(s: &mut S) -> Result<Self> {
         let names: Vec<String> = read_name_batch(s)?;
         Ok(Self { names })
+    }
+}
+impl Writeable for FNameMap {
+    #[instrument(skip_all, "FNameMap")]
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        // TODO @trumank: Implement
+        bail!("Send help truman")
     }
 }
 impl FNameMap {
