@@ -6,7 +6,6 @@ use crate::{EIoStoreTocVersion, FIoChunkId, FSHAHash};
 use anyhow::{anyhow, bail};
 use std::fmt::{Debug, Formatter};
 use std::io::{Cursor, Read, Seek, Write};
-use std::ops::Deref;
 use strum::FromRepr;
 
 #[derive(Debug, Copy, Clone, Default)]
@@ -365,71 +364,132 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive, compress_
     let mut shader_file_regions: Vec<(i64, usize, bool)> = vec![(-1, 0, false); total_shaders];
     let mut shader_map_file_regions: Vec<(i64, usize)> = vec![(-1, 0); shader_library.header.shader_map_entries.len()];
 
-    fn write_shader<S: Write + Seek>(writer: &mut S, shader_file_regions: &mut Vec<(i64, usize, bool)>, shader_library: &IoStoreShaderCodeArchive, should_compress_shader: bool, shader_index: usize, unique: bool) -> anyhow::Result<()> {
-        let shader_offset = writer.stream_position()? as i64;
-        let shader_uncompressed_size = shader_library.shaders_code[shader_index].len();
-
-        // Compress shader if we are allowed to and compression method is known
-        if should_compress_shader && shader_library.compression_method.is_some() {
-            let shader_compressed_data = compress_shader(&shader_library.shaders_code[shader_index], shader_library.compression_method.unwrap())?;
-            let shader_compressed_size = shader_compressed_data.len();
-
-            // Sometimes compression can result in larger size for some small shaders, so only write compressed data if it's actually smaller than uncompressed size
-            if shader_compressed_size < shader_uncompressed_size {
-                shader_file_regions[shader_index] = (shader_offset, shader_compressed_size, unique);
-                writer.write(&shader_compressed_data)?;
-                return Ok({})
-            }
-        }
-        // Write shader uncompressed otherwise
-        shader_file_regions[shader_index] = (shader_offset, shader_uncompressed_size, unique);
-        writer.write(&shader_library.shaders_code[shader_index])?;
-        Ok({})
-    };
-
     let mut total_shared_shaders: usize = 0;
     let mut total_unique_shaders: usize = 0;
     let mut total_detached_shaders: usize = 0;
 
-    // Write shaders that are considered "Shared" first, e.g. shaders have been seen in multiple shader maps
-    for shader_index in 0..total_shaders {
-        if shader_reference_count[shader_index] > 1 {
-            write_shader(&mut shader_code_writer, &mut shader_file_regions, shader_library, compress_shaders, shader_index, false)?;
-            total_shared_shaders += 1;
-        }
+    let (tx, rx) = std::sync::mpsc::sync_channel(10);
+
+    enum Message<'a> {
+        StartMap,
+        EndMap {
+            shader_map_index: usize,
+        },
+        Compress {
+            shader_index: usize,
+            unique: bool,
+        },
+        Write {
+            shader_index: usize,
+            data: std::borrow::Cow<'a, [u8]>,
+            unique: bool,
+        },
     }
 
-    // Write shaders that only belong to a single shader map now, e.g. "Unique" shaders
-    for shader_map_index in 0..shader_library.header.shader_map_entries.len() {
-
-        let shader_map_entry = shader_library.header.shader_map_entries[shader_map_index].clone();
-        let shader_map_start_offset = shader_code_writer.stream_position()?;
-
-        for i in 0..shader_map_entry.num_shaders {
-            let shader_indices_index = (shader_map_entry.shader_indices_offset + i) as usize;
-            let shader_index = shader_library.header.shader_indices[shader_indices_index] as usize;
-
-            // Only consider this shader if this is the only shader map that referenced it
-            if shader_reference_count[shader_index] == 1 {
-                write_shader(&mut shader_code_writer, &mut shader_file_regions, shader_library, compress_shaders, shader_index, true)?;
-                total_unique_shaders += 1;
+    pariter::scope(|s| -> anyhow::Result<()> {
+        s.spawn(|_| -> anyhow::Result<()> {
+            // Write shaders that are considered "Shared" first, e.g. shaders have been seen in multiple shader maps
+            for shader_index in 0..total_shaders {
+                if shader_reference_count[shader_index] > 1 {
+                    tx.send(Message::Compress { shader_index, unique: false })?;
+                    total_shared_shaders += 1;
+                }
             }
-        }
 
-        // Track the position and size of the shader map exclusive shaders, so we can create a single preload dependency for them later
-        let shader_map_end_offset = shader_code_writer.stream_position()?;
-        let shader_map_total_size = (shader_map_end_offset - shader_map_start_offset) as usize;
-        shader_map_file_regions[shader_map_index] = (shader_map_start_offset as i64, shader_map_total_size);
-    }
+            // Write shaders that only belong to a single shader map now, e.g. "Unique" shaders
+            for shader_map_index in 0..shader_library.header.shader_map_entries.len() {
 
-    // Write shaders that belong to no shader map. Generally such shaders should not exist, but we should still handle and preserve them just in case
-    // I refer to them as "detached" shaders. Generally such shaders cannot be loaded in runtime because runtime operates on shader maps during serialization and not singular shaders
-    for shader_index in 0..total_shaders {
-        if shader_reference_count[shader_index] == 0 {
-            write_shader(&mut shader_code_writer, &mut shader_file_regions, shader_library, compress_shaders, shader_index, false)?;
-            total_detached_shaders += 1;
-        }
-    }
+                let shader_map_entry = shader_library.header.shader_map_entries[shader_map_index].clone();
+
+                // Send signal to mark current stream position
+                tx.send(Message::StartMap).unwrap();
+
+                for i in 0..shader_map_entry.num_shaders {
+                    let shader_indices_index = (shader_map_entry.shader_indices_offset + i) as usize;
+                    let shader_index = shader_library.header.shader_indices[shader_indices_index] as usize;
+
+                    // Only consider this shader if this is the only shader map that referenced it
+                    if shader_reference_count[shader_index] == 1 {
+                        tx.send(Message::Compress { shader_index, unique: true })?;
+                        total_unique_shaders += 1;
+                    }
+                }
+
+                // Send signal to mark current stream position and populate shader map entry with offsets
+                tx.send(Message::EndMap { shader_map_index }).unwrap();
+            }
+
+            // Write shaders that belong to no shader map. Generally such shaders should not exist, but we should still handle and preserve them just in case
+            // I refer to them as "detached" shaders. Generally such shaders cannot be loaded in runtime because runtime operates on shader maps during serialization and not singular shaders
+            for shader_index in 0..total_shaders {
+                if shader_reference_count[shader_index] == 0 {
+                    tx.send(Message::Compress { shader_index, unique: false })?;
+                    total_detached_shaders += 1;
+                }
+            }
+
+            // close channel signaling end
+            drop(tx);
+
+            Ok(())
+        });
+
+        use pariter::IteratorExt as _;
+
+        let mut shader_map_start_offset = 0;
+
+        rx.into_iter().parallel_map_scoped(s, |message| {
+            match message {
+                Message::Compress { shader_index, unique } => {
+                    let shader_uncompressed_size = shader_library.shaders_code[shader_index].len();
+
+                    let shader_uncompressed_data = &shader_library.shaders_code[shader_index];
+
+                    let mut data = shader_uncompressed_data.into();
+
+                    // Compress shader if we are allowed to and compression method is known
+                    if compress_shaders && shader_library.compression_method.is_some() {
+                        let shader_compressed_data = compress_shader(&shader_uncompressed_data, shader_library.compression_method.unwrap())?;
+                        let shader_compressed_size = shader_compressed_data.len();
+
+                        // Sometimes compression can result in larger size for some small shaders, so only write compressed data if it's actually smaller than uncompressed size
+                        if shader_compressed_size < shader_uncompressed_size {
+                            data = shader_compressed_data.into();
+                        }
+                    }
+
+                    Ok(Message::Write {
+                        shader_index,
+                        data,
+                        unique,
+                    })
+                },
+                _ => Ok(message) // pass through
+            }
+        }).map(|message: anyhow::Result<Message>| -> anyhow::Result<()> {
+            let stream_position = shader_code_writer.stream_position()?;
+            match message? {
+                Message::StartMap => {
+                    shader_map_start_offset = stream_position;
+                }
+                Message::EndMap { shader_map_index } => {
+                    // Track the position and size of the shader map exclusive shaders, so we can create a single preload dependency for them later
+                    let shader_map_end_offset = stream_position;
+                    let shader_map_total_size = (shader_map_end_offset - shader_map_start_offset) as usize;
+                    shader_map_file_regions[shader_map_index] = (shader_map_start_offset as i64, shader_map_total_size);
+                }
+                Message::Write { shader_index, data, unique } => {
+                    shader_file_regions[shader_index] = (stream_position as i64, data.len(), unique);
+                    shader_code_writer.write(&data)?;
+                }
+                Message::Compress { .. } => unreachable!(),
+            }
+            Ok(())
+        }).collect::<anyhow::Result<()>>()?;
+
+        Ok(())
+
+    }).unwrap()?;
 
     // Make sure that all shaders have been written into the file
     for shader_index in 0..total_shaders {
