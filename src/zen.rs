@@ -194,7 +194,7 @@ impl Readable for FZenPackageVersioningInfo {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone, Default)]
 #[repr(C)] // Needed to determine the number of bulk data entries
 pub(crate) struct FBulkDataMapEntry {
     pub(crate) serial_offset: i64,
@@ -531,6 +531,14 @@ impl FZenPackageHeader {
         };
 
         let bulk_data: Vec<FBulkDataMapEntry> = if has_bulk_data {
+
+            // In 5.4+, there is padding before the bulk data map size
+            if versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::PropertyTagCompleteTypeName as i32 {
+                let bulk_data_padding: u64 = s.de()?;
+                for _ in 0..bulk_data_padding {
+                    let _padding: u8 = s.de()?;
+                }
+            }
             let bulk_data_map_size: i64 = s.de()?;
             let bulk_data_count = bulk_data_map_size as usize / size_of::<FBulkDataMapEntry>();
             s.de_ctx(bulk_data_count)?
