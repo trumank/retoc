@@ -13,6 +13,7 @@ use crate::{
     ser::*,
     FIoContainerId, FPackageId, FSHAHash, ReadExt,
 };
+use crate::name_map::EMappedNameType;
 
 #[derive(Debug)]
 pub(crate) struct FIoContainerHeader {
@@ -43,7 +44,7 @@ impl Readable for FIoContainerHeader {
         let store_entries = s.de_ctx((version, package_ids.len()))?;
         let optional_segment_package_ids = s.de()?;
         let optional_segment_store_entries = s.de()?;
-        let redirect_name_map = s.de()?;
+        let redirect_name_map = FNameMap::deserialize(s, EMappedNameType::Container)?;
         let localized_packages = s.de()?;
         let package_redirects = s.de()?;
 

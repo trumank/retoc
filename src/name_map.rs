@@ -1,10 +1,11 @@
 use std::{borrow::Cow, io::Read};
+use std::collections::HashMap;
 use std::io::Write;
 use anyhow::{bail, Result};
 use strum::{Display, FromRepr};
 use tracing::instrument;
 
-use crate::{read_array, read_string, ser::*};
+use crate::{break_down_name_string, read_array, read_string, ser::*};
 
 pub(crate) fn read_name_batch<S: Read>(s: &mut S) -> Result<Vec<String>> {
     let num: u32 = s.de()?;
@@ -31,24 +32,36 @@ pub(crate) fn read_name_batch<S: Read>(s: &mut S) -> Result<Vec<String>> {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct FNameMap {
+    kind: EMappedNameType,
     names: Vec<String>,
+    name_lookup: HashMap<String, usize>,
 }
-impl Readable for FNameMap {
+impl FNameMap {
     #[instrument(skip_all, "FNameMap")]
-    fn de<S: Read>(s: &mut S) -> Result<Self> {
+    pub(crate) fn deserialize<S: Read>(s: &mut S, kind: EMappedNameType) -> Result<Self> {
         let names: Vec<String> = read_name_batch(s)?;
-        Ok(Self { names })
+        Ok(Self::create_from_names(kind, names))
     }
-}
-impl Writeable for FNameMap {
     #[instrument(skip_all, "FNameMap")]
-    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+    pub(crate) fn serialize<S: Write>(&self, s: &mut S) -> Result<()> {
         // TODO @trumank: Implement
         bail!("Send help truman")
     }
 }
+
 impl FNameMap {
+    pub(crate) fn create(kind: EMappedNameType) -> Self {
+        Self{kind, names: Vec::new(), name_lookup: HashMap::new()}
+    }
+    pub(crate) fn create_from_names(kind: EMappedNameType, names: Vec<String>) -> Self {
+        let mut name_lookup: HashMap<String, usize> = HashMap::with_capacity(names.len());
+        for name_index in 0..names.len() {
+            name_lookup.insert(names[name_index].clone(), name_index);
+        }
+        Self{kind, names, name_lookup}
+    }
     pub(crate) fn get(&self, name: FMappedName) -> Cow<'_, str> {
+        assert_eq!(name.kind(), self.kind, "Attempt to map name of the different kind in this name map Name Kind is {}, but name map kind is {}", name.kind(), self.kind);
         let n = &self.names[name.index() as usize];
         if name.number != 0 {
             format!("{n}_{}", name.number - 1).into()
@@ -56,13 +69,29 @@ impl FNameMap {
             n.into()
         }
     }
+
+    pub(crate) fn store(&mut self, name: &str) -> FMappedName {
+        let (name_without_number, name_number) = break_down_name_string(name);
+
+        // Attempt to resolve the existing name through lookup
+        if let Some(existing_index) = self.name_lookup.get(name_without_number) {
+            return FMappedName::create((*existing_index) as u32, self.kind, name_number as u32);
+        }
+
+        // Create a new name and add it to the names list and to the name lookup
+        let new_name_index = self.names.len();
+        self.name_lookup.insert(name_without_number.to_string(), new_name_index);
+        self.names.push(name_without_number.to_string());
+        FMappedName::create(new_name_index as u32, self.kind, name_number as u32)
+    }
+
     pub(crate) fn copy_raw_names(&self) -> Vec<String> { self.names.clone() }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Display, FromRepr)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Display, FromRepr)]
 #[repr(u32)]
-enum EMappedNameType {
-    Package = 0,
+pub(crate) enum EMappedNameType {
+    #[default] Package = 0,
     Container = 1,
     Global = 2,
 }

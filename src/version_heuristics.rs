@@ -18,6 +18,26 @@ pub(crate) fn heuristic_zen_has_bulk_data(summary: &FZenPackageSummary, containe
     summary.imported_public_export_hashes_offset > current_reader_pos
 }
 
+// Derives zen package file version from package file version and container header version
+pub(crate) fn heuristic_zen_version_from_package_file_version(package_file_version: FPackageFileVersion, container_header_version: EIoContainerHeaderVersion) -> EZenPackageVersion {
+    // UE 4.27, 5.0 and 5.1: initial
+    if package_file_version.file_version_ue5 <= EUnrealEngineObjectUE5Version::AddSoftObjectPathList as i32 {
+        EZenPackageVersion::Initial
+    // Can be either 5.2 or 5.3, cannot tell apart from just package file version. Need to look at container header as well
+    } else if package_file_version.file_version_ue5 <= EUnrealEngineObjectUE5Version::DataResources as i32 {
+        // UE 5.2: data resource table
+        if container_header_version < EIoContainerHeaderVersion::NoExportInfo {
+            EZenPackageVersion::DataResourceTable
+        // UE 5.3: extra dependencies
+        } else {
+            EZenPackageVersion::ExtraDependencies
+        }
+    // UE 5.4+: extra dependencies
+    } else {
+        EZenPackageVersion::ExtraDependencies
+    }
+}
+
 // Establishes a zen package version from the provided package version hint and information from the container
 pub(crate) fn heuristic_zen_package_version(optional_package_version: Option<FPackageFileVersion>, container_version: EIoStoreTocVersion, container_header_version: EIoContainerHeaderVersion, has_bulk_data: bool) -> anyhow::Result<FZenPackageVersioningInfo> {
 
@@ -48,24 +68,7 @@ pub(crate) fn heuristic_zen_package_version(optional_package_version: Option<FPa
     }).ok_or_else(|| { anyhow!("Failed to derive the UE package version from container version and header version. Please provide the engine version manually") })?;
 
     // Derive zen package version from engine version
-    let zen_version: EZenPackageVersion = {
-        // UE 4.27, 5.0 and 5.1: initial
-        if package_file_version.file_version_ue5 <= EUnrealEngineObjectUE5Version::AddSoftObjectPathList as i32 {
-            EZenPackageVersion::Initial
-        // Can be either 5.2 or 5.3, cannot tell apart from just package file version. Need to look at container header as well
-        } else if package_file_version.file_version_ue5 <= EUnrealEngineObjectUE5Version::DataResources as i32 {
-            // UE 5.2: data resource table
-            if container_header_version < EIoContainerHeaderVersion::NoExportInfo {
-                EZenPackageVersion::DataResourceTable
-            // UE 5.3: extra dependencies
-            } else {
-                EZenPackageVersion::ExtraDependencies
-            }
-        // UE 5.4+: extra dependencies
-        } else {
-            EZenPackageVersion::ExtraDependencies
-        }
-    };
+    let zen_version: EZenPackageVersion = heuristic_zen_version_from_package_file_version(package_file_version, container_header_version);
 
     // Assume 0 for licensee version and no custom versions, they are not relevant for the package header serialization
     Ok(FZenPackageVersioningInfo{

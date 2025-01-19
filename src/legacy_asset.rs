@@ -194,7 +194,7 @@ pub(crate) enum EPackageFlags {
 pub(crate) struct FLegacyPackageFileSummary
 {
     pub(crate) versioning_info: FLegacyPackageVersioningInfo,
-    total_header_size: i32,
+    pub(crate) total_header_size: i32,
     pub(crate) package_name: String,
     pub(crate) package_flags: u32,
     pub(crate) names: FCountOffsetPair,
@@ -207,7 +207,7 @@ pub(crate) struct FLegacyPackageFileSummary
     pub(crate) package_guid: FGuid,
     pub(crate) package_source: u32,
     world_tile_info_data_offset: i32,
-    pub(crate) chunk_ids: Vec<i32>,
+    chunk_ids: Vec<i32>,
     preload_dependencies: FCountOffsetPair,
     pub(crate) names_referenced_from_export_data_count: i32,
     data_resource_offset: i32,
@@ -536,6 +536,7 @@ impl FPackageNameMap {
         self.names.push(name_without_number.to_string());
         FMinimalName{ index: new_name_index as i32, number: name_number }
     }
+    pub(crate) fn copy_raw_names(&self) -> Vec<String> { self.names.clone() }
 }
 
 #[derive(Debug, Clone, Default)]

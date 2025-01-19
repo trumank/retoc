@@ -4,7 +4,7 @@ use anyhow::{anyhow, bail, Result};
 use strum::FromRepr;
 use tracing::instrument;
 
-use crate::name_map::read_name_batch;
+use crate::name_map::{read_name_batch, EMappedNameType};
 use crate::script_objects::FPackageObjectIndex;
 use crate::ser::{WriteExt, Writeable};
 use crate::{align_u64, align_usize, break_down_name_string, name_map::{FMappedName, FNameMap}, EIoStoreTocVersion, FGuid, FPackageId, FSHAHash, ReadExt, Readable};
@@ -61,7 +61,7 @@ impl Readable for FPackageFileSummary {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub(crate) struct FZenPackageSummary {
     pub(crate) has_versioning_info: u32,
     pub(crate) header_size: u32,
@@ -134,13 +134,13 @@ impl FZenPackageSummary {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, FromRepr)]
 #[repr(u32)]
 pub(crate) enum EZenPackageVersion {
     Initial,
     DataResourceTable,
     ImportedPackageNames,
-    ExtraDependencies,
+    #[default] ExtraDependencies,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -196,7 +196,7 @@ impl Writeable for FCustomVersion {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct FZenPackageVersioningInfo
 {
     pub(crate) zen_version: EZenPackageVersion,
@@ -236,7 +236,7 @@ pub(crate) struct FBulkDataMapEntry {
     pub(crate) duplicate_serial_offset: i64,
     pub(crate) serial_size: i64,
     pub(crate) flags: u32,
-    pad: u32,
+    pub(crate) pad: u32,
 }
 impl Readable for FBulkDataMapEntry {
     #[instrument(skip_all, name = "FBulkDataMapEntry")]
@@ -627,7 +627,7 @@ impl Writeable for FZenPackageImportedPackageNamesContainer {
             imported_package_names.push(name_without_number.to_string());
             imported_package_name_numbers.push(name_number);
         }
-        
+
         // TODO @trumank name batch writing
         // write_name_batch(&imported_package_names);
         bail!("Truman help");
@@ -637,7 +637,7 @@ impl Writeable for FZenPackageImportedPackageNamesContainer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct FZenPackageHeader {
     pub(crate) summary: FZenPackageSummary,
     pub(crate) versioning_info: FZenPackageVersioningInfo,
@@ -670,7 +670,7 @@ impl FZenPackageHeader {
     pub(crate) fn get_package_name<S: Read>(s: &mut S, container_header_version: EIoContainerHeaderVersion) -> Result<String> {
         let summary: FZenPackageSummary = FZenPackageSummary::deserialize(s, container_header_version)?;
         let _versioning_info: Option<FZenPackageVersioningInfo> = if summary.has_versioning_info != 0 { Some(s.de()?) } else { None };
-        let name_map: FNameMap = s.de()?;
+        let name_map: FNameMap = FNameMap::deserialize(s, EMappedNameType::Package)?;
         Ok(name_map.get(summary.name).to_string())
     }
 
@@ -680,7 +680,7 @@ impl FZenPackageHeader {
         let package_start_offset = s.stream_position()?;
         let summary: FZenPackageSummary = FZenPackageSummary::deserialize(s, header_version)?;
         let optional_versioning_info: Option<FZenPackageVersioningInfo> = if summary.has_versioning_info != 0 { Some(s.de()?) } else { None };
-        let name_map: FNameMap = s.de()?;
+        let name_map: FNameMap = FNameMap::deserialize(s, EMappedNameType::Package)?;
 
         let optional_package_version = optional_versioning_info.as_ref()
             .map(|x| { x.package_file_version })
@@ -822,7 +822,7 @@ impl FZenPackageHeader {
             s.ser(&self.versioning_info)?;
         }
 
-        s.ser(&self.name_map)?;
+        self.name_map.serialize(s)?;
 
         // Bulk data is only serialized in UE5.2+ packages
         if self.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::DataResources as i32 {

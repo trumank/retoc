@@ -13,6 +13,7 @@ use crate::{
     read_array,
     ser::*,
 };
+use crate::name_map::EMappedNameType;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ZenScriptObjects {
@@ -23,7 +24,7 @@ pub(crate) struct ZenScriptObjects {
 impl Readable for ZenScriptObjects {
     #[instrument(skip_all, name = "ZenScriptObjects")]
     fn de<S: Read>(s: &mut S) -> Result<Self> {
-        let global_name_map: FNameMap = s.de()?;
+        let global_name_map: FNameMap = FNameMap::deserialize(s, EMappedNameType::Global)?;
         let num_script_objects: u32 = s.de()?;
         let script_objects = read_array(num_script_objects as usize, s, FScriptObjectEntry::read)?;
 
