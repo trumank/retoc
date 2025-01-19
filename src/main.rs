@@ -15,10 +15,8 @@ mod version_heuristics;
 mod zen;
 mod zen_asset_conversion;
 
-use crate::legacy_asset::FMinimalName;
-use aes::cipher::KeyInit as _;
 use anyhow::{anyhow, bail, Context, Result};
-use bitflags::{bitflags, Flags};
+use bitflags::bitflags;
 use clap::Parser;
 use compression::{decompress, CompressionMethod};
 use fs_err as fs;
@@ -37,13 +35,9 @@ use std::{
     str::FromStr,
     sync::{Arc, Mutex},
 };
-use strum::{AsRefStr, EnumString, FromRepr, VariantNames as _};
+use strum::{AsRefStr, FromRepr};
 use tracing::instrument;
 use version::EngineVersion;
-
-fn parse_ue5_object_version(string: &str) -> Result<EUnrealEngineObjectUE5Version> {
-    EUnrealEngineObjectUE5Version::from_repr(string.parse()?).context("invalid UE5 Object Version")
-}
 
 #[derive(Parser, Debug)]
 struct ActionManifest {
@@ -187,14 +181,6 @@ fn main() -> Result<()> {
 }
 
 fn action_manifest(args: ActionManifest, config: Arc<Config>) -> Result<()> {
-    //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Serum/Serum/Content/Paks/pakchunk0-Windows.utoc";
-    //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Nuclear Nightmare/NuclearNightmare/Content/Paks/NuclearNightmare-Windows.utoc";
-    //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/The Isle/TheIsle/Content/Paks/pakchunk0-WindowsClient.utoc";
-    //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Satisfactory/FactoryGame/Content/Paks/FactoryGame-Windows.utoc";
-    //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/Satisfactory/FactoryGame/Content/Paks/global.utoc";
-    //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/VisionsofManaDemo/VisionsofMana/Content/Paks/pakchunk0-WindowsNoEditor.utoc";
-    //let path_utoc = "/home/truman/.local/share/Steam/steamapps/common/AbioticFactor/AbioticFactor/Content/Paks/pakchunk0-Windows.utoc";
-
     let toc: Toc = BufReader::new(fs::File::open(&args.utoc)?).de_ctx(config)?;
     let ucas = &args.utoc.with_extension("ucas");
 
@@ -1319,13 +1305,8 @@ struct FIoChunkId {
 }
 impl std::fmt::Debug for FIoChunkId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        //write!(f, "FIoChunkId(")?;
-        //for b in self.id {
-        //    write!(f, "{:02X}", b)?;
-        //}
-        //write!(f, ")")
         f.debug_struct("FIoChunkId")
-            .field("chunk_id", &hex::encode(self.get_chunk_id()))
+            .field("chunk_id", &hex::encode(self.id))
             .field("chunk_type", &self.get_chunk_type())
             .finish()
     }
@@ -1378,9 +1359,6 @@ impl FIoChunkId {
     }
     fn get_chunk_type(&self) -> EIoChunkType {
         EIoChunkType::from_repr(self.id[11]).unwrap()
-    }
-    fn get_chunk_id(&self) -> [u8; 11] {
-        self.id[0..11].try_into().unwrap()
     }
 }
 #[derive(Debug, Default, Clone, Copy)]
@@ -1752,7 +1730,7 @@ enum EIoChunkType {
 use crate::asset_conversion::FZenPackageContext;
 use crate::container_header::EIoContainerHeaderVersion;
 use crate::shader_library::rebuild_shader_library_from_io_store;
-use crate::zen::{EUnrealEngineObjectUE5Version, FPackageFileVersion};
+use crate::zen::FPackageFileVersion;
 use directory_index::*;
 use zen::get_package_name;
 
