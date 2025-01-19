@@ -10,6 +10,7 @@ use fs_err as fs;
 
 use crate::{
     container_header::{EIoContainerHeaderVersion, FIoContainerHeader, StoreEntry},
+    file_pool::FilePool,
     ser::*,
     Config, EIoChunkType, EIoStoreTocVersion, FIoChunkId, FPackageId, Toc,
 };
@@ -49,7 +50,7 @@ fn sort_container_name(full_name: &str) -> (bool, u32, &str) {
     (full_name == "global", chunk_version, base_name)
 }
 
-pub trait IoStoreTrait {
+pub trait IoStoreTrait: Send + Sync {
     fn container_name(&self) -> &str;
     fn container_file_version(&self) -> Option<EIoStoreTocVersion>;
     fn container_header_version(&self) -> Option<EIoContainerHeaderVersion>;
@@ -211,7 +212,7 @@ pub struct IoStoreContainer {
     name: String,
     path: PathBuf,
     toc: Toc,
-    cas: Arc<Mutex<BufReader<fs::File>>>,
+    cas: FilePool,
 
     container_header: Option<FIoContainerHeader>,
 }
@@ -219,7 +220,7 @@ impl IoStoreContainer {
     pub fn open<P: AsRef<Path>>(toc_path: P, config: Arc<Config>) -> Result<Self> {
         let path = toc_path.as_ref().to_path_buf();
         let toc: Toc = BufReader::new(fs::File::open(&path)?).de_ctx(config)?;
-        let cas = BufReader::new(fs::File::open(toc_path.as_ref().with_extension("ucas"))?);
+        let cas = FilePool::new(path.with_extension("ucas"), rayon::max_num_threads())?;
 
         let mut container = Self {
             name: path
@@ -229,7 +230,7 @@ impl IoStoreContainer {
                 .into(),
             path,
             toc,
-            cas: Arc::new(Mutex::new(cas)),
+            cas,
 
             container_header: None,
         };
@@ -289,7 +290,8 @@ impl IoStoreTrait for IoStoreContainer {
         let index = *self.toc.chunk_id_map.get(&chunk_id).with_context(|| {
             format!("container {:?} does not contain {:?}", self.name, chunk_id)
         })?;
-        self.toc.read(&mut *self.cas.lock().unwrap(), index)
+        let mut file_lock = self.cas.acquire()?;
+        self.toc.read(&mut file_lock.file(), index)
     }
     fn has_chunk_id(&self, chunk_id: FIoChunkId) -> bool {
         self.toc.chunk_id_map.contains_key(&chunk_id)

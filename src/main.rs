@@ -2,9 +2,11 @@ mod asset_conversion;
 mod compact_binary;
 mod compression;
 mod container_header;
+mod file_pool;
 mod iostore;
 mod iostore_writer;
 mod legacy_asset;
+mod logging;
 mod manifest;
 mod name_map;
 mod script_objects;
@@ -15,19 +17,21 @@ mod version_heuristics;
 mod zen;
 mod zen_asset_conversion;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use bitflags::bitflags;
 use clap::Parser;
 use compression::{decompress, CompressionMethod};
 use fs_err as fs;
 use iostore::IoStoreTrait;
 use iostore_writer::IoStoreWriter;
+use logging::Log;
+use logging::*;
 use rayon::prelude::*;
 use ser::*;
 use serde::{Deserialize, Serialize, Serializer};
 use std::fmt::{Debug, Display, Formatter};
 use std::io::BufWriter;
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
     collections::HashMap,
     io::{BufReader, Cursor, Read, Seek, SeekFrom, Write},
@@ -97,14 +101,17 @@ struct ActionExtractLegacy {
     output: PathBuf,
 
     /// Skip extraction of assets
-    #[arg(short, long)]
+    #[arg(long)]
     no_assets: bool,
     /// Skip extraction of shader libraries
-    #[arg(short, long)]
+    #[arg(long)]
     no_shaders: bool,
     /// Skip compression of extracted shader libraries
     #[arg(long)]
     no_compres_shaders: bool,
+    /// Do not output any file (dry run). Useful for testing conversion
+    #[arg(short, long)]
+    dry_run: bool,
 
     /// Engine version override
     #[arg(long)]
@@ -488,14 +495,19 @@ fn action_pack_raw(args: ActionPackRaw, _config: Arc<Config>) -> Result<()> {
     Ok(())
 }
 
-trait FileWriterTrait {
-    fn write_file(&mut self, path: String, allow_compress: bool, data: Vec<u8>) -> Result<()>;
+trait FileWriterTrait: Send + Sync {
+    fn write_file(&self, path: String, allow_compress: bool, data: Vec<u8>) -> Result<()>;
 }
 struct FSFileWriter {
     dir: PathBuf,
 }
+impl FSFileWriter {
+    fn new<P: Into<PathBuf>>(dir: P) -> Self {
+        Self { dir: dir.into() }
+    }
+}
 impl FileWriterTrait for FSFileWriter {
-    fn write_file(&mut self, path: String, _allow_compress: bool, data: Vec<u8>) -> Result<()> {
+    fn write_file(&self, path: String, _allow_compress: bool, data: Vec<u8>) -> Result<()> {
         let path = self.dir.join(path);
         let dir = path.parent().unwrap();
         fs::create_dir_all(dir)?;
@@ -506,13 +518,22 @@ struct PakFileWriter<'a> {
     inner: &'a mut repak::ParallelPakWriter,
 }
 impl FileWriterTrait for PakFileWriter<'_> {
-    fn write_file(&mut self, path: String, allow_compress: bool, data: Vec<u8>) -> Result<()> {
+    fn write_file(&self, path: String, allow_compress: bool, data: Vec<u8>) -> Result<()> {
         Ok(self.inner.write_file(path, allow_compress, data)?)
+    }
+}
+struct NullFileWriter;
+impl FileWriterTrait for NullFileWriter {
+    fn write_file(&self, _path: String, _allow_compress: bool, _data: Vec<u8>) -> Result<()> {
+        Ok(())
     }
 }
 
 fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Result<()> {
-    if args.output.extension() == Some(std::ffi::OsStr::new("pak")) {
+    let log = Log::new(args.verbose, args.debug);
+    if args.dry_run {
+        action_extract_legacy_inner(args, config, &NullFileWriter, &log)?;
+    } else if args.output.extension() == Some(std::ffi::OsStr::new("pak")) {
         let mut file = BufWriter::new(fs::File::create(&args.output)?);
         let mut pak = repak::PakBuilder::new()
             .compression([repak::Compression::LZ4])
@@ -524,17 +545,15 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
             );
 
         pak.parallel(|writer| -> Result<()> {
-            let mut file_writer = PakFileWriter { inner: writer };
-            action_extract_legacy_inner(args, config, &mut file_writer)?;
+            let file_writer = PakFileWriter { inner: writer };
+            action_extract_legacy_inner(args, config, &file_writer, &log)?;
             Ok(())
         })?;
 
         pak.write_index()?;
     } else {
-        let mut file_writer = FSFileWriter {
-            dir: args.output.clone(),
-        };
-        action_extract_legacy_inner(args, config, &mut file_writer)?;
+        let file_writer = FSFileWriter::new(&args.output);
+        action_extract_legacy_inner(args, config, &file_writer, &log)?;
     }
 
     Ok(())
@@ -543,26 +562,25 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
 fn action_extract_legacy_inner(
     args: ActionExtractLegacy,
     config: Arc<Config>,
-    file_writer: &mut dyn FileWriterTrait,
+    file_writer: &dyn FileWriterTrait,
+    log: &Log,
 ) -> Result<()> {
     let iostore = iostore::open(&args.utoc, config.clone())?;
     if !args.no_assets {
-        action_extract_legacy_assets(&args, file_writer, &*iostore)?;
+        action_extract_legacy_assets(&args, file_writer, &*iostore, log)?;
     }
-    if !args.no_compres_shaders {
-        action_extract_legacy_shaders(&args, file_writer, &*iostore)?;
+    if !args.no_shaders {
+        action_extract_legacy_shaders(&args, file_writer, &*iostore, log)?;
     }
     Ok(())
 }
 
 fn action_extract_legacy_assets(
     args: &ActionExtractLegacy,
-    file_writer: &mut dyn FileWriterTrait,
+    file_writer: &dyn FileWriterTrait,
     iostore: &dyn IoStoreTrait,
+    log: &Log,
 ) -> Result<()> {
-    let verbose = args.verbose;
-    let debug = args.debug;
-
     let mut packages_to_extract = vec![];
     for package_info in iostore.packages() {
         let chunk_id =
@@ -589,57 +607,63 @@ fn action_extract_legacy_assets(
     let package_file_version: Option<FPackageFileVersion> = args
         .version
         .map(|v| FPackageFileVersion::create_ue5(EngineVersion::object_ue5_version(v)));
-    let mut package_context =
-        FZenPackageContext::create(iostore, package_file_version, true, verbose, debug);
+    let package_context = FZenPackageContext::create(iostore, package_file_version, log);
 
-    let mut count = 0;
-    let start_time = Instant::now();
-    let total_packages = packages_to_extract.len();
-    let mut current_packages: usize = 0;
-    let mut last_report_time = Instant::now();
-    let report_interval = Duration::from_secs(10);
-    for (package_info, package_path) in packages_to_extract {
-        // Minimal progress reporting on large batches of packages
-        let current_time = Instant::now();
-        if current_time.duration_since(last_report_time) >= report_interval {
-            last_report_time = current_time;
-            let time_elapsed = current_time.duration_since(start_time);
-            println!(
-                "Packages converted: {}/{}. Time elapsed: {}s",
-                current_packages,
-                total_packages,
-                time_elapsed.as_secs()
+    let count = packages_to_extract.len();
+    let failed_count = AtomicUsize::new(0);
+    let progress_style = indicatif::ProgressStyle::with_template(
+        "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {wide_msg}",
+    )
+    .unwrap()
+    .progress_chars("##-");
+    let progress = Some(indicatif::ProgressBar::new(count as u64).with_style(progress_style));
+    log.set_progress(progress.as_ref());
+    let prog_ref = progress.as_ref();
+
+    packages_to_extract
+        .par_iter()
+        .try_for_each(|(package_info, package_path)| -> Result<()> {
+            verbose!(log, "{package_path}");
+
+            // TODO make configurable
+            let path = package_path
+                .strip_prefix("../../../")
+                .with_context(|| format!("failed to strip mount prefix from {package_path:?}"))?;
+
+            prog_ref.inspect(|p| p.set_message(path.to_string()));
+
+            let res = asset_conversion::build_legacy(
+                &package_context,
+                package_info.id(),
+                &UEPath::new(&path),
+                file_writer,
             );
-        }
-        current_packages += 1;
+            if let Err(err) = res {
+                log!(log, "{err}");
+                failed_count.fetch_add(1, Ordering::SeqCst);
+            }
+            prog_ref.inspect(|p| p.inc(1));
+            Ok(())
+        })?;
+    prog_ref.inspect(|p| p.finish_with_message(""));
+    log.set_progress(None);
 
-        if args.verbose {
-            println!("{package_path}");
-        }
-
-        // TODO make configurable
-        let path = package_path
-            .strip_prefix("../../../")
-            .with_context(|| format!("failed to strip mount prefix from {package_path:?}"))?;
-
-        asset_conversion::build_legacy(
-            &mut package_context,
-            package_info.id(),
-            &UEPath::new(&path),
-            file_writer,
-        )?;
-        count += 1;
-    }
-
-    println!("Extracted {} legacy assets to {:?}", count, args.output);
+    let failed_count = failed_count.load(Ordering::SeqCst);
+    log!(
+        log,
+        "Extracted {} ({failed_count} failed) legacy assets to {:?}",
+        count - failed_count,
+        args.output
+    );
 
     Ok(())
 }
 
 fn action_extract_legacy_shaders(
     args: &ActionExtractLegacy,
-    file_writer: &mut dyn FileWriterTrait,
+    file_writer: &dyn FileWriterTrait,
     iostore: &dyn IoStoreTrait,
+    log: &Log,
 ) -> Result<()> {
     let compress_shaders = !args.no_compres_shaders;
     let mut libraries_extracted = 0;
@@ -659,9 +683,7 @@ fn action_extract_legacy_shaders(
                 continue;
             }
         }
-        if args.verbose {
-            println!("Extracting Shader Library: {shader_library_path}");
-        }
+        verbose!(log, "Extracting Shader Library: {shader_library_path}");
         // TODO make configurable
         let path = shader_library_path
             .strip_prefix("../../../")
@@ -672,16 +694,18 @@ fn action_extract_legacy_shaders(
         let shader_library_buffer = rebuild_shader_library_from_io_store(
             chunk_info.container(),
             chunk_info.id(),
-            true,
+            log,
             compress_shaders,
         )?;
         file_writer.write_file(path.to_string(), false, shader_library_buffer)?;
         libraries_extracted += 1;
     }
 
-    println!(
+    log!(
+        log,
         "Extracted {} shader code libraries to {:?}",
-        libraries_extracted, args.output
+        libraries_extracted,
+        args.output
     );
 
     Ok(())

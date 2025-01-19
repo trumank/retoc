@@ -1,94 +1,130 @@
 use crate::iostore::IoStoreTrait;
 use crate::legacy_asset::{FLegacyPackageFileSummary, FLegacyPackageHeader, FLegacyPackageVersioningInfo, FObjectDataResource, FObjectExport, FObjectImport, FPackageNameMap};
+use crate::logging::Log;
 use crate::name_map::FMappedName;
 use crate::script_objects::{FPackageObjectIndex, FPackageObjectIndexType, FScriptObjectEntry, ZenScriptObjects};
 use crate::ser::{ReadExt, WriteExt};
 use crate::zen::{EExportCommandType, EExportFilterFlags, EObjectFlags, FExportMapEntry, FExternalDependencyArc, FPackageFileVersion, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo};
 use crate::{EIoChunkType, FGuid, FIoChunkId, FPackageId, FileWriterTrait, UEPath};
+use crate::logging::*;
 use anyhow::{anyhow, bail};
+use key_mutex::KeyMutex;
 use std::cmp::max;
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Seek, SeekFrom, Write};
-use std::path::Path;
-use std::rc::Rc;
+use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 // Cache that stores the packages that were retrieved for the purpose of dependency resolution, to avoid loading and parsing them multiple times
 pub(crate) struct FZenPackageContext<'a> {
     store_access: &'a dyn IoStoreTrait,
-    script_objects_loaded: bool,
-    script_objects: Option<ZenScriptObjects>,
-    script_objects_resolved_as_classes: HashSet<FPackageObjectIndex>,
-    package_headers_cache: HashMap<FPackageId, Rc<FZenPackageHeader>>,
-    packages_failed_load: HashSet<FPackageId>,
     fallback_package_file_version: Option<FPackageFileVersion>,
-    allow_stdout: bool,
-    verbose_stdout: bool,
-    very_verbose_stdout: bool,
+    log: &'a Log,
+
+    inner_state: Arc<RwLock<FZenPackageContextMutableState>>,
+    script_objects: Arc<RwLock<Option<FZenPackageContextScriptObjects>>>,
+    package_lookup_locks: KeyMutex<FPackageId, ()>,
+}
+#[derive(Default)]
+struct FZenPackageContextMutableState {
+    package_headers_cache: HashMap<FPackageId, Arc<FZenPackageHeader>>,
+    packages_failed_load: HashSet<FPackageId>,
     has_logged_detected_package_version: bool,
 }
+struct FZenPackageContextScriptObjects {
+    script_objects: ZenScriptObjects,
+    script_objects_resolved_as_classes: HashSet<FPackageObjectIndex>,
+}
 impl<'a> FZenPackageContext<'a> {
-    pub(crate) fn create(store_access: &'a dyn IoStoreTrait, fallback_package_file_version: Option<FPackageFileVersion>, allow_stdout: bool, verbose: bool, debug: bool) -> Self {
+    pub(crate) fn create(store_access: &'a dyn IoStoreTrait, fallback_package_file_version: Option<FPackageFileVersion>, log: &'a Log) -> Self {
         Self {
             store_access,
-            script_objects_loaded: false,
-            script_objects: None,
-            script_objects_resolved_as_classes: HashSet::new(),
-            package_headers_cache: HashMap::new(),
-            packages_failed_load: HashSet::new(),
             fallback_package_file_version,
-            allow_stdout,
-            verbose_stdout: verbose,
-            very_verbose_stdout: debug,
-            has_logged_detected_package_version: false,
+            log,
+
+            script_objects: Default::default(),
+            inner_state: Default::default(),
+            package_lookup_locks: KeyMutex::new(),
         }
     }
-    fn load_script_objects(&mut self) -> anyhow::Result<()> {
-        // Only attempt to load script objects once
-        if !self.script_objects_loaded {
-            self.script_objects_loaded = true;
+    fn get_script_objects(&self) -> anyhow::Result<RwLockReadGuard<Option<FZenPackageContextScriptObjects>>> {
+        let read_lock = self.script_objects.read().unwrap();
+        if read_lock.is_some() {
+            Ok(read_lock)
+        } else {
+            // data has not been popluated to grab a write guard for us to populate
+            drop(read_lock);
+            let mut write_lock = self.script_objects.write().unwrap();
+            if write_lock.is_some() {
+                // data has been populated so someone else got to it first. downgrade to a read lock and return
+                drop(write_lock);
+                return Ok(self.script_objects.read().unwrap());
+            }
 
             let script_objects_id = FIoChunkId::create(0, 0, EIoChunkType::ScriptObjects);
             let script_objects_data = self.store_access.read(script_objects_id)?;
             let script_objects: ZenScriptObjects = Cursor::new(script_objects_data).de()?;
+            let mut script_objects_resolved_as_classes = HashSet::new();
 
             // Do a quick check over all script objects to track which ones are being pointed to by the CDOs. These are 100% UClasses
             for script_object in &script_objects.script_objects {
                 if script_object.cdo_class_index.kind() != FPackageObjectIndexType::Null {
-                    self.script_objects_resolved_as_classes.insert(script_object.cdo_class_index);
+                    script_objects_resolved_as_classes.insert(script_object.cdo_class_index);
                 }
             }
-            self.script_objects = Some(script_objects);
+            *write_lock = Some(FZenPackageContextScriptObjects {
+                script_objects,
+                script_objects_resolved_as_classes,
+            });
+            // convert to read lock and return
+            drop(write_lock);
+            Ok(self.script_objects.read().unwrap())
         }
-        // Make sure the loading has succeeded, otherwise we cannot parse any packages
-        else if self.script_objects.is_none() {
-            bail!("Failed to load script objects from the archive");
-        }
-        Ok({})
     }
     fn find_script_object(&self, script_object_index: FPackageObjectIndex) -> anyhow::Result<FScriptObjectEntry> {
         if script_object_index.kind() != FPackageObjectIndexType::ScriptImport {
             bail!("Package Object index that is not a ScriptImport passed to resolve_script_import: {}", script_object_index);
         }
-        let script_objects: &ZenScriptObjects = self.script_objects.as_ref().ok_or_else(|| { anyhow!("Failed to read script objects") })?;
+        let script_objects_lock = self.get_script_objects().unwrap();
+        let script_objects: &ZenScriptObjects = &script_objects_lock.as_ref().unwrap().script_objects;
         let script_object_entry = script_objects.script_object_lookup.get(&script_object_index).ok_or_else(|| { anyhow!("Failed to find script object with ID {}", script_object_index) })?;
         Ok(script_object_entry.clone())
     }
     fn resolve_script_object_name(&self, script_object_name: FMappedName) -> anyhow::Result<String> {
-        let script_objects: &ZenScriptObjects = self.script_objects.as_ref().ok_or_else(|| { anyhow!("Failed to read script objects") })?;
+        let script_objects_lock = self.get_script_objects().unwrap();
+        let script_objects: &ZenScriptObjects = &script_objects_lock.as_ref().unwrap().script_objects;
         Ok(script_objects.global_name_map.get(script_object_name).to_string())
     }
     fn is_script_object_class(&self, script_object_index: FPackageObjectIndex) -> bool {
-        self.script_objects_resolved_as_classes.contains(&script_object_index)
+        let script_objects_lock = self.get_script_objects().unwrap();
+        let script_objects_resolved_as_classes = &script_objects_lock.as_ref().unwrap().script_objects_resolved_as_classes;
+        script_objects_resolved_as_classes.contains(&script_object_index)
     }
-    fn lookup(&mut self, package_id: FPackageId) -> anyhow::Result<Rc<FZenPackageHeader>> {
+    /// perform lookup but do not actually load package if does not exist
+    fn try_lookup(&self, package_id: FPackageId) -> anyhow::Result<Option<Arc<FZenPackageHeader>>> {
+        let read_lock = self.inner_state.read().unwrap();
 
         // If we already have a package in the cache, return it
-        if let Some(existing_package) = self.package_headers_cache.get(&package_id) {
-            return Ok(existing_package.clone());
+        if let Some(existing_package) = read_lock.package_headers_cache.get(&package_id) {
+            return Ok(Some(existing_package.clone()));
         }
         // If we have previously attempted to load a package and failed, return that
-        if self.packages_failed_load.contains(&package_id) {
+        if read_lock.packages_failed_load.contains(&package_id) {
             return Err(anyhow!("Package has failed loading previously"));
+        }
+
+        Ok(None)
+    }
+    fn lookup(&self, package_id: FPackageId) -> anyhow::Result<Arc<FZenPackageHeader>> {
+        if let Some(package) = self.try_lookup(package_id)? {
+            return Ok(package)
+        }
+
+        // package does not exist in cache so grab a lookup lock before starting lookup process
+        let _package_lookup_lock = self.package_lookup_locks.lock(package_id).unwrap();
+
+        // check package still hasn't been loaded since locking
+        if let Some(package) = self.try_lookup(package_id)? {
+            return Ok(package)
         }
 
         // Optional package segments cannot be imported from other packages, and optional segments are also not supported outside of editor. So ChunkIndex is always 0
@@ -98,11 +134,13 @@ impl<'a> FZenPackageContext<'a> {
 
         // Mark the package as failed load if it's chunk failed to load
         if let Err(read_error) = package_data {
-            self.packages_failed_load.insert(package_id);
+            let mut write_lock = self.inner_state.write().unwrap();
+            write_lock.packages_failed_load.insert(package_id);
             return Err(read_error)
         }
         if package_store_entry_ref.is_none() {
-            self.packages_failed_load.insert(package_id);
+            let mut write_lock = self.inner_state.write().unwrap();
+            write_lock.packages_failed_load.insert(package_id);
             return Err(anyhow!("Failed to find Package Store Entry for Package Id {}", package_id));
         }
 
@@ -114,13 +152,15 @@ impl<'a> FZenPackageContext<'a> {
 
         // Mark the package as failed if we failed to parse the header
         if let Err(header_error) = zen_package_header {
-            self.packages_failed_load.insert(package_id);
+            let mut write_lock = self.inner_state.write().unwrap();
+            write_lock.packages_failed_load.insert(package_id);
             return Err(header_error);
         }
 
         // Move the package header into a shared pointer and store it into the map
-        let shared_package_header: Rc<FZenPackageHeader> = Rc::new(zen_package_header?);
-        self.package_headers_cache.insert(package_id, shared_package_header.clone());
+        let shared_package_header: Arc<FZenPackageHeader> = Arc::new(zen_package_header?);
+        let mut write_lock = self.inner_state.write().unwrap();
+        write_lock.package_headers_cache.insert(package_id, shared_package_header.clone());
         Ok(shared_package_header)
     }
     fn read_full_package_data(&self, package_id: FPackageId) -> anyhow::Result<Vec<u8>> {
@@ -201,7 +241,7 @@ fn resolve_script_import(package_cache: &FZenPackageContext, import: FPackageObj
         outer: Some(Box::new(resolved_outer_import)), object_name,
     })
 }
-fn resolve_package_import(package_cache: &mut FZenPackageContext, package_header: &FZenPackageHeader, import: FPackageObjectIndex) -> anyhow::Result<ResolvedZenImport> {
+fn resolve_package_import(package_cache: &FZenPackageContext, package_header: &FZenPackageHeader, import: FPackageObjectIndex) -> anyhow::Result<ResolvedZenImport> {
 
     let package_import = import.package_import().ok_or_else(|| { anyhow!("Failed to resolve import {} as package import", import) })?;
 
@@ -237,7 +277,7 @@ fn resolve_package_import(package_cache: &mut FZenPackageContext, package_header
 
     resolve_package_export_internal(package_cache, resolved_import_package.as_ref(), imported_export)
 }
-fn resolve_package_export(package_cache: &mut FZenPackageContext, package_header: &FZenPackageHeader, export: FPackageObjectIndex) -> anyhow::Result<ResolvedZenImport> {
+fn resolve_package_export(package_cache: &FZenPackageContext, package_header: &FZenPackageHeader, export: FPackageObjectIndex) -> anyhow::Result<ResolvedZenImport> {
 
     // Resolve the import object index
     if export.kind() != FPackageObjectIndexType::Export {
@@ -248,7 +288,7 @@ fn resolve_package_export(package_cache: &mut FZenPackageContext, package_header
 
     resolve_package_export_internal(package_cache, package_header, resolved_export)
 }
-fn resolve_package_export_internal(package_cache: &mut FZenPackageContext, package_header: &FZenPackageHeader, export: &FExportMapEntry) -> anyhow::Result<ResolvedZenImport> {
+fn resolve_package_export_internal(package_cache: &FZenPackageContext, package_header: &FZenPackageHeader, export: &FExportMapEntry) -> anyhow::Result<ResolvedZenImport> {
     // Resolve export name from the name map
     let export_name = package_header.name_map.get(export.object_name).to_string();
     // Resolve the class of the export. We are only interested in the class object name and package
@@ -277,7 +317,7 @@ fn resolve_builder_package_as_import(package_header: &FZenPackageHeader) -> anyh
         outer: None,
     })
 }
-fn resolve_generic_zen_import_import(package_cache: &mut FZenPackageContext, package_header: &FZenPackageHeader, import: FPackageObjectIndex, resolve_null_as_this_package: bool) -> anyhow::Result<ResolvedZenImport> {
+fn resolve_generic_zen_import_import(package_cache: &FZenPackageContext, package_header: &FZenPackageHeader, import: FPackageObjectIndex, resolve_null_as_this_package: bool) -> anyhow::Result<ResolvedZenImport> {
     match import.kind()
     {
         FPackageObjectIndexType::ScriptImport => resolve_script_import(package_cache, import),
@@ -290,9 +330,9 @@ fn resolve_generic_zen_import_import(package_cache: &mut FZenPackageContext, pac
 }
 
 struct LegacyAssetBuilder<'a, 'b> {
-    package_context: &'a mut FZenPackageContext<'b>,
+    package_context: &'a FZenPackageContext<'b>,
     package_id: FPackageId,
-    zen_package: Rc<FZenPackageHeader>,
+    zen_package: Arc<FZenPackageHeader>,
     legacy_package: FLegacyPackageHeader,
     resolved_import_lookup: HashMap<ResolvedZenImport, FPackageIndex>,
     zen_import_lookup: HashMap<FPackageObjectIndex, FPackageIndex>,
@@ -303,9 +343,9 @@ struct LegacyAssetBuilder<'a, 'b> {
 }
 
 // Lifetime: create_asset_builder -> begin_build_summary -> copy_package_sections -> build_import_map -> build_export_map -> resolve_export_dependencies -> finalize_asset -> write_asset
-fn create_asset_builder<'a, 'b>(package_context: &'a mut FZenPackageContext<'b>, package_id: FPackageId) -> anyhow::Result<LegacyAssetBuilder<'a, 'b>> {
-    let zen_package: Rc<FZenPackageHeader> = package_context.lookup(package_id)?;
-    package_context.load_script_objects()?;
+fn create_asset_builder<'a, 'b>(package_context: &'a FZenPackageContext<'b>, package_id: FPackageId) -> anyhow::Result<LegacyAssetBuilder<'a, 'b>> {
+    let zen_package: Arc<FZenPackageHeader> = package_context.lookup(package_id)?;
+    drop(package_context.get_script_objects()?);
     Ok(LegacyAssetBuilder{
         package_context,
         package_id,
@@ -328,10 +368,14 @@ fn begin_build_summary(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
     let zen_versions: FZenPackageVersioningInfo = builder.zen_package.versioning_info.clone();
 
     // If the zen package is unversioned, fallback package version is not provided, we have not logged it before
-    if builder.zen_package.is_unversioned && builder.package_context.fallback_package_file_version.is_none() && !builder.package_context.has_logged_detected_package_version && builder.package_context.allow_stdout {
-        builder.package_context.has_logged_detected_package_version = true;
-        println!("Detected package version: FPackageFileVersion(UE4: {}, UE5: {}), EZenPackageVersion: {}",
-                 zen_versions.package_file_version.file_version_ue4, zen_versions.package_file_version.file_version_ue5, zen_versions.zen_version as u32);
+    if builder.zen_package.is_unversioned && builder.package_context.fallback_package_file_version.is_none() && builder.package_context.log.allow_stdout() {
+        // using inner state lock to flag whether we have logged something once xd
+        let mut state_lock = builder.package_context.inner_state.write().unwrap();
+        if !state_lock.has_logged_detected_package_version {
+            state_lock.has_logged_detected_package_version = true;
+            log!(builder.package_context.log, "Detected package version: FPackageFileVersion(UE4: {}, UE5: {}), EZenPackageVersion: {}",
+                     zen_versions.package_file_version.file_version_ue4, zen_versions.package_file_version.file_version_ue5, zen_versions.zen_version as u32);
+        }
     }
 
     legacy_package_summary.versioning_info = FLegacyPackageVersioningInfo{
@@ -800,7 +844,7 @@ fn finalize_asset(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
 }
 
 // Builds an asset from zen container, returns a builder that can be used to write the payload to the file or read it directly
-pub(crate) fn build_asset_from_zen<'a, 'b>(package_context: &'a mut FZenPackageContext<'b>, package_id: FPackageId) -> anyhow::Result<LegacyAssetBuilder<'a, 'b>> {
+pub(crate) fn build_asset_from_zen<'a, 'b>(package_context: &'a FZenPackageContext<'b>, package_id: FPackageId) -> anyhow::Result<LegacyAssetBuilder<'a, 'b>> {
 
     let mut asset_builder = create_asset_builder(package_context, package_id)?;
     begin_build_summary(&mut asset_builder)?;
@@ -884,8 +928,7 @@ pub(crate) fn serialize_asset(builder: &LegacyAssetBuilder) -> anyhow::Result<FS
     // Write the asset file first
     let mut asset_file_buffer: Vec<u8> = Vec::new();
     let mut asset_cursor = Cursor::new(&mut asset_file_buffer);
-    let dump_package_summary = builder.package_context.allow_stdout && builder.package_context.very_verbose_stdout;
-    FLegacyPackageHeader::serialize(&builder.legacy_package, &mut asset_cursor, dump_package_summary)?;
+    FLegacyPackageHeader::serialize(&builder.legacy_package, &mut asset_cursor, builder.package_context.log)?;
 
     // Copy the raw export data from the chunk into the exports file
     let raw_exports_data = builder.package_context.read_full_package_data(builder.package_id)?;
@@ -910,14 +953,11 @@ pub(crate) fn serialize_asset(builder: &LegacyAssetBuilder) -> anyhow::Result<FS
 }
 
 // Writes asset to the file. Additionally writes to the uexp file next to it
-pub(crate) fn write_asset(builder: &LegacyAssetBuilder, out_asset_path: &UEPath, file_writer: &mut dyn FileWriterTrait) -> anyhow::Result<()> {
+pub(crate) fn write_asset(builder: &LegacyAssetBuilder, out_asset_path: &UEPath, file_writer: &dyn FileWriterTrait) -> anyhow::Result<()> {
 
     // Dump zen package and legacy package for debugging
-    let dump_packages = builder.package_context.allow_stdout && builder.package_context.very_verbose_stdout;
-    if dump_packages {
-        dbg!(builder.zen_package.clone());
-        dbg!(builder.legacy_package.clone());
-    }
+    debug!(builder.package_context.log, "{:#?}", builder.zen_package);
+    debug!(builder.package_context.log, "{:#?}", builder.legacy_package);
     // Serialize the asset
     let serialized_asset = serialize_asset(builder)?;
 
@@ -946,10 +986,10 @@ pub(crate) fn write_asset(builder: &LegacyAssetBuilder, out_asset_path: &UEPath,
 }
 
 pub(crate) fn build_legacy(
-    package_context: &mut FZenPackageContext,
+    package_context: &FZenPackageContext,
     package_id: FPackageId,
     out_path: &UEPath,
-    file_writer: &mut dyn FileWriterTrait,
+    file_writer: &dyn FileWriterTrait,
 ) -> anyhow::Result<()> {
 
     // Build the asset from zen
