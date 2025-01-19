@@ -4,7 +4,7 @@ use anyhow::{anyhow, bail, Result};
 use strum::FromRepr;
 use tracing::instrument;
 
-use crate::name_map::{read_name_batch, EMappedNameType};
+use crate::name_map::{read_name_batch, write_name_batch, EMappedNameType};
 use crate::script_objects::FPackageObjectIndex;
 use crate::ser::{WriteExt, Writeable};
 use crate::{align_u64, align_usize, break_down_name_string, name_map::{FMappedName, FNameMap}, EIoStoreTocVersion, FGuid, FPackageId, FSHAHash, ReadExt, Readable};
@@ -628,9 +628,7 @@ impl Writeable for FZenPackageImportedPackageNamesContainer {
             imported_package_name_numbers.push(name_number);
         }
 
-        // TODO @trumank name batch writing
-        // write_name_batch(&imported_package_names);
-        bail!("Truman help");
+        write_name_batch(s, &imported_package_names)?;
 
         s.ser(&imported_package_name_numbers)?;
         Ok({})
