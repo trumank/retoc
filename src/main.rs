@@ -13,6 +13,7 @@ mod shader_library;
 mod version;
 mod version_heuristics;
 mod zen;
+mod zen_asset_conversion;
 
 use aes::cipher::KeyInit as _;
 use anyhow::{anyhow, bail, Context, Result};
