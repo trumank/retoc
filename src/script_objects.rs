@@ -85,6 +85,7 @@ impl FPackageObjectIndex {
     pub(crate) fn invalid() -> FPackageObjectIndex {
         FPackageObjectIndex{type_and_id: FPackageObjectIndex::INVALID_ID }
     }
+    pub(crate) fn null() -> FPackageObjectIndex { Self::invalid() }
     pub(crate) fn new(kind: FPackageObjectIndexType, value: u64) -> FPackageObjectIndex
     {
         FPackageObjectIndex{type_and_id: ((kind as u64) << FPackageObjectIndex::TYPE_SHIFT) | value}
@@ -105,6 +106,10 @@ impl FPackageObjectIndex {
         })
     }
     pub(crate) fn is_null(self) -> bool { self.kind() == FPackageObjectIndexType::Null }
+    pub(crate) fn generate_import_hash_from_object_path(_object_path: &str) -> u64 {
+        // TODO @trumank
+        todo!("Truman send help")
+    }
 }
 impl Readable for FPackageObjectIndex {
     #[instrument(skip_all, name = "FPackageObjectIndex")]
