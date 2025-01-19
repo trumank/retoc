@@ -96,12 +96,15 @@ struct ActionExtractLegacy {
     #[arg(index = 2)]
     output: PathBuf,
 
-    /// Whenever shader libraries should be extracted as well
-    #[arg(short, long, default_value = "true")]
-    shader_libraries: bool,
-    /// Whenever extracted shader libraries should be compressed
-    #[arg(long, default_value = "true")]
-    compress_shaders: bool,
+    /// Skip extraction of assets
+    #[arg(short, long)]
+    no_assets: bool,
+    /// Skip extraction of shader libraries
+    #[arg(short, long)]
+    no_shaders: bool,
+    /// Skip compression of extracted shader libraries
+    #[arg(long)]
+    no_compres_shaders: bool,
 
     /// Engine version override
     #[arg(long)]
@@ -542,127 +545,144 @@ fn action_extract_legacy_inner(
     config: Arc<Config>,
     file_writer: &mut dyn FileWriterTrait,
 ) -> Result<()> {
-    let iostore = iostore::open(args.utoc, config)?;
+    let iostore = iostore::open(&args.utoc, config.clone())?;
+    if !args.no_assets {
+        action_extract_legacy_assets(&args, file_writer, &*iostore)?;
+    }
+    if !args.no_compres_shaders {
+        action_extract_legacy_shaders(&args, file_writer, &*iostore)?;
+    }
+    Ok(())
+}
 
-    let output = args.output;
+fn action_extract_legacy_assets(
+    args: &ActionExtractLegacy,
+    file_writer: &mut dyn FileWriterTrait,
+    iostore: &dyn IoStoreTrait,
+) -> Result<()> {
     let verbose = args.verbose;
     let debug = args.debug;
+
+    let mut packages_to_extract = vec![];
+    for package_info in iostore.packages() {
+        let chunk_id =
+            FIoChunkId::from_package_id(package_info.id(), 0, EIoChunkType::ExportBundleData);
+        let package_path = package_info
+            .container()
+            .chunk_path(chunk_id)
+            .with_context(|| {
+                format!(
+                    "{:?} has no path name entry. Cannot extract",
+                    package_info.id()
+                )
+            })?;
+
+        if let Some(filter) = &args.filter {
+            if !package_path.contains(filter) {
+                continue;
+            }
+        }
+
+        packages_to_extract.push((package_info, package_path));
+    }
+
     let package_file_version: Option<FPackageFileVersion> = args
         .version
         .map(|v| FPackageFileVersion::create_ue5(EngineVersion::object_ue5_version(v)));
     let mut package_context =
-        FZenPackageContext::create(iostore.as_ref(), package_file_version, true, verbose, debug);
+        FZenPackageContext::create(iostore, package_file_version, true, verbose, debug);
 
     let mut count = 0;
     let start_time = Instant::now();
-    let total_packages = iostore.packages().count();
+    let total_packages = packages_to_extract.len();
     let mut current_packages: usize = 0;
     let mut last_report_time = Instant::now();
     let report_interval = Duration::from_secs(10);
-    iostore
-        .packages()
-        .try_for_each(|package_info| -> Result<()> {
-            // Minimal progress reporting on large batches of packages
-            // TODO @trumank: Only active without filter for now, since it gives incorrect result with the filter
-            let current_time = Instant::now();
-            if args.filter.is_none()
-                && current_time.duration_since(last_report_time) >= report_interval
-            {
-                last_report_time = current_time;
-                let time_elapsed = current_time.duration_since(start_time);
-                println!(
-                    "Packages converted: {}/{}. Time elapsed: {}s",
-                    current_packages,
-                    total_packages,
-                    time_elapsed.as_secs()
-                );
-            }
-            current_packages += 1;
-
-            let chunk_id =
-                FIoChunkId::from_package_id(package_info.id(), 0, EIoChunkType::ExportBundleData);
-            if let Some(package_path) = package_info.container().chunk_path(chunk_id) {
-                if let Some(filter) = &args.filter {
-                    if !package_path.contains(filter) {
-                        return Ok(());
-                    }
-                }
-                if args.verbose {
-                    println!("{package_path}");
-                }
-
-                // TODO make configurable
-                let path = package_path.strip_prefix("../../../").with_context(|| {
-                    format!("failed to strip mount prefix from {package_path:?}")
-                })?;
-
-                asset_conversion::build_legacy(
-                    &mut package_context,
-                    package_info.id(),
-                    &UEPath::new(&path),
-                    file_writer,
-                )?;
-                count += 1;
-            }
-            Ok(())
-        })?;
-
-    println!(
-        "unpacked {} legacy assets to {}",
-        count,
-        output.to_string_lossy()
-    );
-
-    if args.shader_libraries {
-        let compress_shaders = args.compress_shaders;
-        let mut libraries_extracted: i32 = 0;
-        iostore
-            .chunks()
-            .filter(|x| x.id().get_chunk_type() == EIoChunkType::ShaderCodeLibrary)
-            .try_for_each(|chunk_info| -> Result<()> {
-                let shader_library_path = chunk_info
-                    .container()
-                    .chunk_path(chunk_info.id())
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "Failed to retrieve pathname for shader library chunk {:?}",
-                            chunk_info.id()
-                        )
-                    })?;
-
-                if let Some(filter) = &args.filter {
-                    if !shader_library_path.contains(filter) {
-                        return Ok({});
-                    }
-                }
-                if args.verbose {
-                    println!("Extracting Shader Library: {shader_library_path}");
-                }
-                // TODO make configurable
-                let path = shader_library_path
-                    .strip_prefix("../../../")
-                    .with_context(|| {
-                        format!("failed to strip mount prefix from {shader_library_path:?}")
-                    })?;
-
-                let shader_library_buffer = rebuild_shader_library_from_io_store(
-                    chunk_info.container(),
-                    chunk_info.id(),
-                    true,
-                    compress_shaders,
-                )?;
-                file_writer.write_file(path.to_string(), false, shader_library_buffer)?;
-                Ok({})
-            })?;
-
-        if libraries_extracted > 0 {
+    for (package_info, package_path) in packages_to_extract {
+        // Minimal progress reporting on large batches of packages
+        let current_time = Instant::now();
+        if current_time.duration_since(last_report_time) >= report_interval {
+            last_report_time = current_time;
+            let time_elapsed = current_time.duration_since(start_time);
             println!(
-                "extracted {} shader code libraries to {}",
-                libraries_extracted,
-                output.to_string_lossy()
+                "Packages converted: {}/{}. Time elapsed: {}s",
+                current_packages,
+                total_packages,
+                time_elapsed.as_secs()
             );
         }
+        current_packages += 1;
+
+        if args.verbose {
+            println!("{package_path}");
+        }
+
+        // TODO make configurable
+        let path = package_path
+            .strip_prefix("../../../")
+            .with_context(|| format!("failed to strip mount prefix from {package_path:?}"))?;
+
+        asset_conversion::build_legacy(
+            &mut package_context,
+            package_info.id(),
+            &UEPath::new(&path),
+            file_writer,
+        )?;
+        count += 1;
     }
+
+    println!("Extracted {} legacy assets to {:?}", count, args.output);
+
+    Ok(())
+}
+
+fn action_extract_legacy_shaders(
+    args: &ActionExtractLegacy,
+    file_writer: &mut dyn FileWriterTrait,
+    iostore: &dyn IoStoreTrait,
+) -> Result<()> {
+    let compress_shaders = !args.no_compres_shaders;
+    let mut libraries_extracted = 0;
+    for chunk_info in iostore
+        .chunks()
+        .filter(|x| x.id().get_chunk_type() == EIoChunkType::ShaderCodeLibrary)
+    {
+        let shader_library_path = chunk_info.path().with_context(|| {
+            format!(
+                "Failed to retrieve pathname for shader library chunk {:?}",
+                chunk_info.id()
+            )
+        })?;
+
+        if let Some(filter) = &args.filter {
+            if !shader_library_path.contains(filter) {
+                continue;
+            }
+        }
+        if args.verbose {
+            println!("Extracting Shader Library: {shader_library_path}");
+        }
+        // TODO make configurable
+        let path = shader_library_path
+            .strip_prefix("../../../")
+            .with_context(|| {
+                format!("failed to strip mount prefix from {shader_library_path:?}")
+            })?;
+
+        let shader_library_buffer = rebuild_shader_library_from_io_store(
+            chunk_info.container(),
+            chunk_info.id(),
+            true,
+            compress_shaders,
+        )?;
+        file_writer.write_file(path.to_string(), false, shader_library_buffer)?;
+        libraries_extracted += 1;
+    }
+
+    println!(
+        "Extracted {} shader code libraries to {:?}",
+        libraries_extracted, args.output
+    );
 
     Ok(())
 }
