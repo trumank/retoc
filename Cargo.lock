@@ -811,6 +811,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7a70ba024b9dc04c27ea2f0c0548feb474ec5c54bba33a7f72f873a39d07b24"
 
 [[package]]
+name = "lz4_flex"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75761162ae2b0e580d7e7c390558127e5f01b4194debd6221fd8c207fc80e3f5"
+dependencies = [
+ "twox-hash",
+]
+
+[[package]]
 name = "memchr"
 version = "2.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -869,7 +878,7 @@ checksum = "1261fe7e33c73b354eab43b1273a57c8f967d0391e80353e51f764ac02cf6775"
 [[package]]
 name = "oodle_loader"
 version = "0.2.2"
-source = "git+https://github.com/trumank/repak.git#9090a6984d8681271be4ffbc1c204a52f5575780"
+source = "git+https://github.com/trumank/repak.git#3b78c00527f00941c654ec35da5bb953c1a4d829"
 dependencies = [
  "hex",
  "libloading",
@@ -960,12 +969,13 @@ dependencies = [
 [[package]]
 name = "repak"
 version = "0.2.2"
-source = "git+https://github.com/trumank/repak.git#9090a6984d8681271be4ffbc1c204a52f5575780"
+source = "git+https://github.com/trumank/repak.git#3b78c00527f00941c654ec35da5bb953c1a4d829"
 dependencies = [
  "aes",
  "byteorder",
  "flate2",
  "hex",
+ "lz4_flex",
  "oodle_loader",
  "pariter",
  "sha1",
@@ -1165,6 +1175,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 
 [[package]]
+name = "static_assertions"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
 name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1346,6 +1362,16 @@ dependencies = [
  "thread_local",
  "tracing-core",
  "tracing-log",
+]
+
+[[package]]
+name = "twox-hash"
+version = "1.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
+dependencies = [
+ "cfg-if",
+ "static_assertions",
 ]
 
 [[package]]
