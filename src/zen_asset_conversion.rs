@@ -1,4 +1,3 @@
-use std::ascii::AsciiExt;
 use std::collections::HashMap;
 use anyhow::bail;
 use crate::container_header::EIoContainerHeaderVersion;
@@ -8,6 +7,16 @@ use crate::name_map::{EMappedNameType, FNameMap};
 use crate::script_objects::{FPackageImportReference, FPackageObjectIndex, FPackageObjectIndexType};
 use crate::version_heuristics::heuristic_zen_version_from_package_file_version;
 use crate::zen::{EZenPackageVersion, FBulkDataMapEntry, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo};
+
+/// NOTE: assumes leading slash is already stripped
+fn get_public_export_hash(package_relative_export_path: &str) -> u64 {
+    cityhasher::hash(
+        &package_relative_export_path
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<u8>>()
+    )
+}
 
 struct ZenPackageBuilder {
     legacy_package: FLegacyPackageHeader,
