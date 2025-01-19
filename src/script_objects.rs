@@ -106,9 +106,23 @@ impl FPackageObjectIndex {
         })
     }
     pub(crate) fn is_null(self) -> bool { self.kind() == FPackageObjectIndexType::Null }
-    pub(crate) fn generate_import_hash_from_object_path(_object_path: &str) -> u64 {
-        // TODO @trumank
-        todo!("Truman send help")
+
+    pub(crate) fn generate_import_hash_from_object_path(object_path: &str) -> u64 {
+        let lower_slash_path = object_path
+            .chars()
+            .map(|c| match c {
+                ':' | '.' => '/',
+                c => c.to_ascii_lowercase(),
+            })
+            .collect::<String>();
+        let mut hash: u64 = cityhasher::hash(
+            &lower_slash_path
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<u8>>(),
+        );
+        hash &= !(3 << 62);
+        hash
     }
 }
 impl Readable for FPackageObjectIndex {
