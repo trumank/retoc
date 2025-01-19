@@ -599,56 +599,74 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
         }
     };
 
+    // Process intra-export bundle dependencies. The sequence in which elements are laid out in the export bundle determines their dependencies relative to each other
+    // This introduces some additional dependencies to specific objects and forces the linker to load them exactly in the bundle order,
+    // but this is how they are supposed to be loaded by Zen Loader anyway
+    for bundle_header_index in 0..builder.zen_package.export_bundle_headers.len() {
+
+        let bundle_header = builder.zen_package.export_bundle_headers[bundle_header_index].clone();
+        for i in 1..bundle_header.entry_count {
+
+            let from_bundle_entry_index = bundle_header.first_entry_index + i - 1;
+            let from_bundle_entry = builder.zen_package.export_bundle_entries[from_bundle_entry_index as usize].clone();
+
+            let to_bundle_entry_index = bundle_header.first_entry_index + i;
+            let to_bundle_entry = builder.zen_package.export_bundle_entries[to_bundle_entry_index as usize].clone();
+
+            let from_index = FPackageIndex::create_export(from_bundle_entry.local_export_index);
+            let from_command_type = from_bundle_entry.command_type;
+
+            let to_export_index = to_bundle_entry.local_export_index as usize;
+            let to_command_type = to_bundle_entry.command_type;
+
+            add_export_dependency(from_index, to_export_index, from_command_type, to_command_type);
+        }
+    }
+
     // Process internal dependencies (export bundle to export bundle, e.g. export to export)
+    // We link first element of the "to" bundle to the last element of the "from" bundle
     for internal_arc in builder.zen_package.internal_dependency_arcs.clone() {
 
         let from_export_bundle = builder.zen_package.export_bundle_headers[internal_arc.from_export_bundle_index as usize].clone();
         let to_export_bundle = builder.zen_package.export_bundle_headers[internal_arc.to_export_bundle_index as usize].clone();
 
-        for i in 0..from_export_bundle.entry_count {
+        let from_export_bundle_last_element_index = from_export_bundle.first_entry_index + from_export_bundle.entry_count - 1;
+        let from_export_bundle_last_element = builder.zen_package.export_bundle_entries[from_export_bundle_last_element_index as usize].clone();
 
-            let from_bundle_entry_index = from_export_bundle.first_entry_index + i;
-            let from_bundle_entry = builder.zen_package.export_bundle_entries[from_bundle_entry_index as usize].clone();
+        let to_export_bundle_first_element_index = to_export_bundle.first_entry_index;
+        let to_export_bundle_first_element = builder.zen_package.export_bundle_entries[to_export_bundle_first_element_index as usize].clone();
 
-            let from_export_index = from_bundle_entry.local_export_index;
-            let from_dependency_type = from_bundle_entry.command_type;
+        let from_export_index = FPackageIndex::create_export(from_export_bundle_last_element.local_export_index);
+        let from_command_type = from_export_bundle_last_element.command_type;
 
-            for j in 0..to_export_bundle.entry_count {
+        let to_export_index = to_export_bundle_first_element.local_export_index as usize;
+        let to_command_type = to_export_bundle_first_element.command_type;
 
-                let to_bundle_entry_index = to_export_bundle.first_entry_index + j;
-                let to_bundle_entry = builder.zen_package.export_bundle_entries[to_bundle_entry_index as usize].clone();
-
-                let to_export_index = to_bundle_entry.local_export_index as usize;
-                let to_dependency_type = to_bundle_entry.command_type;
-
-                add_export_dependency(FPackageIndex::create_export(from_export_index), to_export_index, from_dependency_type, to_dependency_type);
-            }
-        }
+        add_export_dependency(from_export_index, to_export_index, from_command_type, to_command_type);
     }
 
     // Process external dependencies (import to export bundle, e.g. import to export)
+    // We link all the external arcs to the first element of the "to" export bundle. This is not technically correct, but since we enforce the bundle dependency initialization order, this works
     let all_external_arcs: Vec<FExternalDependencyArc> = builder.zen_package.imported_package_dependencies.iter().flat_map(|x| { x.dependency_arcs.clone() }).collect();
     for external_arc in all_external_arcs {
 
         let to_export_bundle = builder.zen_package.export_bundle_headers[external_arc.to_export_bundle_index as usize].clone();
+        let to_export_bundle_first_element_index = to_export_bundle.first_entry_index;
+        let to_export_bundle_first_element = builder.zen_package.export_bundle_entries[to_export_bundle_first_element_index as usize].clone();
+
+        let to_export_index = to_export_bundle_first_element.local_export_index as usize;
+        let to_command_type = to_export_bundle_first_element.command_type;
+
         let from_original_import_index = external_arc.from_import_index as usize;
-        let from_dependency_type = external_arc.from_command_type;
+        let from_command_type = external_arc.from_command_type;
 
         // Same logic here as in resolve_export_dependencies_internal_dependency_bundles - the import indices that are written into the zen asset are not the same indices that are used
         // during the intermediate steps of asset building when rehydrating import map, so we need to map the original index to the temporary import index,
         // and then all preload dependencies will get remapped back to the correct original indices when the asset is finalized
-        let from_import_index = builder.original_import_order.get(&from_original_import_index).unwrap().clone() as u32;
+        let from_import_index_raw = builder.original_import_order.get(&from_original_import_index).unwrap().clone() as u32;
+        let from_import_index = FPackageIndex::create_import(from_import_index_raw);
 
-        for i in 0..to_export_bundle.entry_count {
-
-            let to_bundle_entry_index = to_export_bundle.first_entry_index + i;
-            let to_bundle_entry = builder.zen_package.export_bundle_entries[to_bundle_entry_index as usize].clone();
-
-            let to_export_index = to_bundle_entry.local_export_index as usize;
-            let to_dependency_type = to_bundle_entry.command_type;
-
-            add_export_dependency(FPackageIndex::create_import(from_import_index), to_export_index, from_dependency_type, to_dependency_type);
-        }
+        add_export_dependency(from_import_index, to_export_index, from_command_type, to_command_type);
     }
 }
 
