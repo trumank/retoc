@@ -4,7 +4,7 @@ use crate::name_map::FMappedName;
 use crate::script_objects::{FPackageObjectIndex, FPackageObjectIndexType, FScriptObjectEntry, ZenScriptObjects};
 use crate::ser::{ReadExt, WriteExt};
 use crate::zen::{EExportCommandType, EExportFilterFlags, EObjectFlags, FExportMapEntry, FExternalDependencyArc, FPackageFileVersion, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo};
-use crate::{EIoChunkType, FGuid, FIoChunkId, FPackageId};
+use crate::{EIoChunkType, FGuid, FIoChunkId, FPackageId, FileWriterTrait, UEPath};
 use anyhow::{anyhow, bail};
 use std::cmp::max;
 use std::collections::{HashMap, HashSet};
@@ -892,7 +892,7 @@ pub(crate) fn serialize_asset(builder: &LegacyAssetBuilder) -> anyhow::Result<FS
 }
 
 // Writes asset to the file. Additionally writes to the uexp file next to it
-pub(crate) fn write_asset<P: AsRef<Path>>(builder: &LegacyAssetBuilder, out_asset_path: P) -> anyhow::Result<()> {
+pub(crate) fn write_asset(builder: &LegacyAssetBuilder, out_asset_path: &UEPath, file_writer: &mut dyn FileWriterTrait) -> anyhow::Result<()> {
 
     // Dump zen package and legacy package for debugging
     let dump_packages = builder.package_context.allow_stdout && builder.package_context.very_verbose_stdout;
@@ -904,38 +904,39 @@ pub(crate) fn write_asset<P: AsRef<Path>>(builder: &LegacyAssetBuilder, out_asse
     let serialized_asset = serialize_asset(builder)?;
 
     // Write the asset file
-    std::fs::write(out_asset_path.as_ref(), &serialized_asset.asset_file_buffer)?;
+    file_writer.write_file(out_asset_path.to_string(), serialized_asset.asset_file_buffer)?;
     // Write the exports file
-    let export_file_path = out_asset_path.as_ref().with_extension("uexp");
-    std::fs::write(export_file_path, &serialized_asset.exports_file_buffer)?;
+    let export_file_path = out_asset_path.with_extension("uexp");
+    file_writer.write_file(export_file_path.to_string(), serialized_asset.exports_file_buffer)?;
 
     // Write the bulk data file
-    if let Some(bulk_data_buffer) = &serialized_asset.bulk_data_buffer {
-        let bulk_data_file_path = out_asset_path.as_ref().with_extension("ubulk");
-        std::fs::write(bulk_data_file_path, bulk_data_buffer)?;
+    if let Some(bulk_data_buffer) = serialized_asset.bulk_data_buffer {
+        let bulk_data_file_path = out_asset_path.with_extension("ubulk");
+        file_writer.write_file(bulk_data_file_path.to_string(), bulk_data_buffer)?;
     }
     // Write the optional bulk data file
-    if let Some(optional_bulk_data_buffer) = &serialized_asset.optional_bulk_data_buffer {
-        let optional_bulk_data_file_path = out_asset_path.as_ref().with_extension("uptnl");
-        std::fs::write(optional_bulk_data_file_path, optional_bulk_data_buffer)?;
+    if let Some(optional_bulk_data_buffer) = serialized_asset.optional_bulk_data_buffer {
+        let optional_bulk_data_file_path = out_asset_path.with_extension("uptnl");
+        file_writer.write_file(optional_bulk_data_file_path.to_string(), optional_bulk_data_buffer)?;
     }
     // Write the memory mapped bulk data file
-    if let Some(memory_mapped_bulk_data_buffer) = &serialized_asset.memory_mapped_bulk_data_buffer {
-        let memory_mapped_bulk_data_file_path = out_asset_path.as_ref().with_extension("m.ubulk");
-        std::fs::write(memory_mapped_bulk_data_file_path, memory_mapped_bulk_data_buffer)?;
+    if let Some(memory_mapped_bulk_data_buffer) = serialized_asset.memory_mapped_bulk_data_buffer {
+        let memory_mapped_bulk_data_file_path = out_asset_path.with_extension("m.ubulk");
+        file_writer.write_file(memory_mapped_bulk_data_file_path.to_string(), memory_mapped_bulk_data_buffer)?;
     }
     Ok({})
 }
 
-pub(crate) fn build_legacy<P: AsRef<Path>>(
+pub(crate) fn build_legacy(
     package_context: &mut FZenPackageContext,
     package_id: FPackageId,
-    out_path: P
+    out_path: &UEPath,
+    file_writer: &mut dyn FileWriterTrait,
 ) -> anyhow::Result<()> {
 
     // Build the asset from zen
     let asset_builder = build_asset_from_zen(package_context, package_id)?;
     // Write the asset to the file
-    write_asset(&asset_builder, out_path)?;
+    write_asset(&asset_builder, out_path, file_writer)?;
     Ok(())
 }

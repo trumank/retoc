@@ -15,6 +15,7 @@ mod version_heuristics;
 mod zen;
 mod zen_asset_conversion;
 
+use crate::legacy_asset::FMinimalName;
 use aes::cipher::KeyInit as _;
 use anyhow::{anyhow, bail, Context, Result};
 use bitflags::{bitflags, Flags};
@@ -39,7 +40,6 @@ use std::{
 use strum::{AsRefStr, EnumString, FromRepr, VariantNames as _};
 use tracing::instrument;
 use version::EngineVersion;
-use crate::legacy_asset::FMinimalName;
 
 fn parse_ue5_object_version(string: &str) -> Result<EUnrealEngineObjectUE5Version> {
     EUnrealEngineObjectUE5Version::from_repr(string.parse()?).context("invalid UE5 Object Version")
@@ -499,7 +499,63 @@ fn action_pack_raw(args: ActionPackRaw, _config: Arc<Config>) -> Result<()> {
     Ok(())
 }
 
+trait FileWriterTrait {
+    fn write_file(&mut self, path: String, data: Vec<u8>) -> Result<()>;
+}
+struct FSFileWriter {
+    dir: PathBuf,
+}
+impl FileWriterTrait for FSFileWriter {
+    fn write_file(&mut self, path: String, data: Vec<u8>) -> Result<()> {
+        let path = self.dir.join(path);
+        let dir = path.parent().unwrap();
+        fs::create_dir_all(dir)?;
+        Ok(fs::write(path, &data)?)
+    }
+}
+struct PakFileWriter<'a> {
+    inner: &'a mut repak::ParallelPakWriter,
+}
+impl FileWriterTrait for PakFileWriter<'_> {
+    fn write_file(&mut self, path: String, data: Vec<u8>) -> Result<()> {
+        Ok(self.inner.write_file(path, data)?)
+    }
+}
+
 fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Result<()> {
+    if args.output.extension() == Some(std::ffi::OsStr::new("pak")) {
+        let mut file = BufWriter::new(fs::File::create(&args.output)?);
+        let mut pak = repak::PakBuilder::new()
+            .compression([repak::Compression::Zstd])
+            .writer(
+                &mut file,
+                repak::Version::V11, // TODO V11 is compatible with most IO store versions but will need to be changed for <= 4.26
+                "../../../".to_string(),
+                None,
+            );
+
+        pak.parallel(|writer| -> Result<()> {
+            let mut file_writer = PakFileWriter { inner: writer };
+            action_extract_legacy_inner(args, config, &mut file_writer)?;
+            Ok(())
+        })?;
+
+        pak.write_index()?;
+    } else {
+        let mut file_writer = FSFileWriter {
+            dir: args.output.clone(),
+        };
+        action_extract_legacy_inner(args, config, &mut file_writer)?;
+    }
+
+    Ok(())
+}
+
+fn action_extract_legacy_inner(
+    args: ActionExtractLegacy,
+    config: Arc<Config>,
+    file_writer: &mut dyn FileWriterTrait,
+) -> Result<()> {
     let iostore = iostore::open(args.utoc, config)?;
 
     let output = args.output;
@@ -554,10 +610,12 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
                     format!("failed to strip mount prefix from {package_path:?}")
                 })?;
 
-                let path = output.join(path);
-                let dir = path.parent().unwrap();
-                fs::create_dir_all(dir)?;
-                asset_conversion::build_legacy(&mut package_context, package_info.id(), path)?;
+                asset_conversion::build_legacy(
+                    &mut package_context,
+                    package_info.id(),
+                    &UEPath::new(&path),
+                    file_writer,
+                )?;
                 count += 1;
             }
             Ok(())
@@ -574,11 +632,17 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
         let mut libraries_extracted: i32 = 0;
         iostore
             .chunks()
-            .filter(|x| { x.id().get_chunk_type() == EIoChunkType::ShaderCodeLibrary })
+            .filter(|x| x.id().get_chunk_type() == EIoChunkType::ShaderCodeLibrary)
             .try_for_each(|chunk_info| -> Result<()> {
-
-                let shader_library_path = chunk_info.container().chunk_path(chunk_info.id())
-                    .ok_or_else(|| { anyhow!("Failed to retrieve pathname for shader library chunk {:?}", chunk_info.id()) })?;
+                let shader_library_path = chunk_info
+                    .container()
+                    .chunk_path(chunk_info.id())
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "Failed to retrieve pathname for shader library chunk {:?}",
+                            chunk_info.id()
+                        )
+                    })?;
 
                 if let Some(filter) = &args.filter {
                     if !shader_library_path.contains(filter) {
@@ -589,16 +653,19 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
                     println!("Extracting Shader Library: {shader_library_path}");
                 }
                 // TODO make configurable
-                let path = shader_library_path.strip_prefix("../../../").with_context(|| {
-                    format!("failed to strip mount prefix from {shader_library_path:?}")
-                })?;
+                let path = shader_library_path
+                    .strip_prefix("../../../")
+                    .with_context(|| {
+                        format!("failed to strip mount prefix from {shader_library_path:?}")
+                    })?;
 
-                let path = output.join(path);
-                let dir = path.parent().unwrap();
-                fs::create_dir_all(dir)?;
-
-                let shader_library_buffer = rebuild_shader_library_from_io_store(chunk_info.container(), chunk_info.id(), true, compress_shaders)?;
-                fs::write(path, &shader_library_buffer)?;
+                let shader_library_buffer = rebuild_shader_library_from_io_store(
+                    chunk_info.container(),
+                    chunk_info.id(),
+                    true,
+                    compress_shaders,
+                )?;
+                file_writer.write_file(path.to_string(), shader_library_buffer)?;
                 Ok({})
             })?;
 
@@ -1684,10 +1751,10 @@ enum EIoChunkType {
 
 use crate::asset_conversion::FZenPackageContext;
 use crate::container_header::EIoContainerHeaderVersion;
+use crate::shader_library::rebuild_shader_library_from_io_store;
 use crate::zen::{EUnrealEngineObjectUE5Version, FPackageFileVersion};
 use directory_index::*;
 use zen::get_package_name;
-use crate::shader_library::rebuild_shader_library_from_io_store;
 
 mod directory_index {
     use super::*;
