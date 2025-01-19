@@ -904,25 +904,25 @@ pub(crate) fn write_asset(builder: &LegacyAssetBuilder, out_asset_path: &UEPath,
     let serialized_asset = serialize_asset(builder)?;
 
     // Write the asset file
-    file_writer.write_file(out_asset_path.to_string(), serialized_asset.asset_file_buffer)?;
+    file_writer.write_file(out_asset_path.to_string(), true, serialized_asset.asset_file_buffer)?;
     // Write the exports file
     let export_file_path = out_asset_path.with_extension("uexp");
-    file_writer.write_file(export_file_path.to_string(), serialized_asset.exports_file_buffer)?;
+    file_writer.write_file(export_file_path.to_string(), true, serialized_asset.exports_file_buffer)?;
 
     // Write the bulk data file
     if let Some(bulk_data_buffer) = serialized_asset.bulk_data_buffer {
         let bulk_data_file_path = out_asset_path.with_extension("ubulk");
-        file_writer.write_file(bulk_data_file_path.to_string(), bulk_data_buffer)?;
+        file_writer.write_file(bulk_data_file_path.to_string(), true, bulk_data_buffer)?;
     }
     // Write the optional bulk data file
     if let Some(optional_bulk_data_buffer) = serialized_asset.optional_bulk_data_buffer {
         let optional_bulk_data_file_path = out_asset_path.with_extension("uptnl");
-        file_writer.write_file(optional_bulk_data_file_path.to_string(), optional_bulk_data_buffer)?;
+        file_writer.write_file(optional_bulk_data_file_path.to_string(), true, optional_bulk_data_buffer)?;
     }
     // Write the memory mapped bulk data file
     if let Some(memory_mapped_bulk_data_buffer) = serialized_asset.memory_mapped_bulk_data_buffer {
         let memory_mapped_bulk_data_file_path = out_asset_path.with_extension("m.ubulk");
-        file_writer.write_file(memory_mapped_bulk_data_file_path.to_string(), memory_mapped_bulk_data_buffer)?;
+        file_writer.write_file(memory_mapped_bulk_data_file_path.to_string(), false, memory_mapped_bulk_data_buffer)?;
     }
     Ok({})
 }

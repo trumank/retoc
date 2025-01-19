@@ -500,13 +500,13 @@ fn action_pack_raw(args: ActionPackRaw, _config: Arc<Config>) -> Result<()> {
 }
 
 trait FileWriterTrait {
-    fn write_file(&mut self, path: String, data: Vec<u8>) -> Result<()>;
+    fn write_file(&mut self, path: String, allow_compress: bool, data: Vec<u8>) -> Result<()>;
 }
 struct FSFileWriter {
     dir: PathBuf,
 }
 impl FileWriterTrait for FSFileWriter {
-    fn write_file(&mut self, path: String, data: Vec<u8>) -> Result<()> {
+    fn write_file(&mut self, path: String, _allow_compress: bool, data: Vec<u8>) -> Result<()> {
         let path = self.dir.join(path);
         let dir = path.parent().unwrap();
         fs::create_dir_all(dir)?;
@@ -517,8 +517,8 @@ struct PakFileWriter<'a> {
     inner: &'a mut repak::ParallelPakWriter,
 }
 impl FileWriterTrait for PakFileWriter<'_> {
-    fn write_file(&mut self, path: String, data: Vec<u8>) -> Result<()> {
-        Ok(self.inner.write_file(path, data)?)
+    fn write_file(&mut self, path: String, allow_compress: bool, data: Vec<u8>) -> Result<()> {
+        Ok(self.inner.write_file(path, allow_compress, data)?)
     }
 }
 
@@ -526,7 +526,7 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
     if args.output.extension() == Some(std::ffi::OsStr::new("pak")) {
         let mut file = BufWriter::new(fs::File::create(&args.output)?);
         let mut pak = repak::PakBuilder::new()
-            .compression([repak::Compression::Zstd])
+            .compression([repak::Compression::LZ4])
             .writer(
                 &mut file,
                 repak::Version::V11, // TODO V11 is compatible with most IO store versions but will need to be changed for <= 4.26
@@ -665,7 +665,7 @@ fn action_extract_legacy_inner(
                     true,
                     compress_shaders,
                 )?;
-                file_writer.write_file(path.to_string(), shader_library_buffer)?;
+                file_writer.write_file(path.to_string(), false, shader_library_buffer)?;
                 Ok({})
             })?;
 
