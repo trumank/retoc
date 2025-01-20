@@ -1,13 +1,15 @@
+use std::cmp::max;
 use crate::container_header::{EIoContainerHeaderVersion, StoreEntry};
-use crate::legacy_asset::{FLegacyPackageHeader, FSerializedAssetBundle};
+use crate::legacy_asset::{EPackageFlags, FLegacyPackageFileSummary, FLegacyPackageHeader, FSerializedAssetBundle};
 use crate::name_map::{EMappedNameType, FNameMap};
 use crate::script_objects::{FPackageImportReference, FPackageObjectIndex, FPackageObjectIndexType};
 use crate::version_heuristics::heuristic_zen_version_from_package_file_version;
-use crate::zen::{EExportCommandType, EExportFilterFlags, EObjectFlags, EZenPackageVersion, FBulkDataMapEntry, FDependencyBundleEntry, FDependencyBundleHeader, FExportBundleEntry, FExportBundleHeader, FExportMapEntry, FExternalDependencyArc, FImportedPackageDependency, FInternalDependencyArc, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo};
+use crate::zen::{EExportCommandType, EExportFilterFlags, EObjectFlags, EZenPackageVersion, FBulkDataMapEntry, FDependencyBundleEntry, FDependencyBundleHeader, FExportBundleEntry, FExportBundleHeader, FExportMapEntry, FExternalDependencyArc, FImportedPackageDependency, FInternalDependencyArc, FPackageFileVersion, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo};
 use crate::{EIoChunkType, FIoChunkId, FPackageId};
 use anyhow::bail;
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Write};
+use byteorder::ReadBytesExt;
 use topo_sort::{SortResults, TopoSort};
 use crate::iostore_writer::IoStoreWriter;
 
@@ -30,6 +32,7 @@ struct ZenPackageBuilder {
     export_hash_lookup: HashMap<u64, u32>,
 }
 
+// Flow is create_asset_builder -> setup_zen_package_summary -> build_zen_import_map -> build_zen_export_map -> build_zen_preload_dependencies -> serialize_zen_asset
 fn create_asset_builder(package: FLegacyPackageHeader, container_header_version: EIoContainerHeaderVersion) -> ZenPackageBuilder {
     ZenPackageBuilder{
         package_id: FPackageId::from_name(&package.summary.package_name),
@@ -41,7 +44,7 @@ fn create_asset_builder(package: FLegacyPackageHeader, container_header_version:
     }
 }
 
-fn setup_package_summary(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
+fn setup_zen_package_summary(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
 
     let is_unversioned = builder.legacy_package.summary.versioning_info.is_unversioned;
 
@@ -65,6 +68,15 @@ fn setup_package_summary(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> 
     let name_map_size = builder.legacy_package.summary.names_referenced_from_export_data_count as usize;
     let name_map_slice = builder.legacy_package.name_map.copy_raw_names()[0..name_map_size].to_vec();
     builder.zen_package.name_map = FNameMap::create_from_names(EMappedNameType::Package, name_map_slice);
+
+    // Make sure not to attempt to put uncooked packages into zen
+    if (builder.legacy_package.summary.package_flags & (EPackageFlags::Cooked as u32)) == 0 {
+        bail!("Detected absent PKG_Cooked flag in legacy package summary. Uncooked assets cannot be converted to Zen. Are you sure the asset has been Cooked?");
+    }
+    // Make sure we do not have any soft object paths serialized in the header. These cannot be represented in zen packages and should never be written when cooking
+    if builder.legacy_package.summary.soft_object_paths.count > 0 {
+        bail!("Detected soft object paths serialized as a part of the package header. Such paths cannot be represented in Zen packages and should never be written for cooked packages. Are you sure the package is cooked?");
+    }
 
     // Set package name on the zen package from the legacy package header
     builder.zen_package.summary.name = builder.zen_package.name_map.store(&builder.legacy_package.summary.package_name);
@@ -313,8 +325,6 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, sorted_d
 
         // Account for this export in the current export offset if this export is Serialize command
         if export_command_type == EExportCommandType::Serialize {
-            // Also adjust the cooked serial size to point at the current location of the export. Note that Unreal Pak actually does not do that fix-up, and leaves them pointing to their original positions
-            builder.zen_package.export_map[export_index].cooked_serial_offset = current_export_offset;
             current_export_offset += builder.zen_package.export_map[export_index].cooked_serial_size;
         }
 
@@ -572,10 +582,67 @@ fn build_zen_preload_dependencies(builder: &mut ZenPackageBuilder) -> anyhow::Re
     };
 
     // Use legacy path for versions before NoExportInfo, and a new one for versions after
-    if builder.container_header_version < EIoContainerHeaderVersion::NoExportInfo {
-        build_zen_dependency_bundles_legacy(builder, &sorted_node_list, &export_dependencies);
-    } else {
+    if builder.container_header_version >= EIoContainerHeaderVersion::NoExportInfo {
         build_zen_dependency_bundle_new(builder, &sorted_node_list, &export_dependencies);
+    } else {
+        build_zen_dependency_bundles_legacy(builder, &sorted_node_list, &export_dependencies);
+    }
+    Ok({})
+}
+
+fn write_exports_in_bundle_order<S: Write>(writer: &mut S, builder: &ZenPackageBuilder, exports_buffer: &Vec<u8>) -> anyhow::Result<()> {
+
+    let total_header_size = builder.legacy_package.summary.total_header_size as u64;
+    let mut current_export_offset: u64 = 0;
+    let mut largest_exports_buffer_export_end_offset: usize = 0;
+
+    for export_bundle_header_index in 0..builder.zen_package.export_bundle_headers.len() {
+
+        let export_bundle_header = builder.zen_package.export_bundle_headers[export_bundle_header_index].clone();
+
+        // Make sure bundle data is actually being placed at the correct offset
+        if export_bundle_header.serial_offset != current_export_offset {
+            bail!("Export bundle {} serial offset does not match it's actual placement. Expected bundle data to be placed at {}, but it's placed at {}",
+            export_bundle_header_index, export_bundle_header.serial_offset, current_export_offset);
+        }
+
+        for i in 0..export_bundle_header.entry_count {
+
+            let export_bundle_entry_index = export_bundle_header.first_entry_index + i;
+            let export_bundle_entry = builder.zen_package.export_bundle_entries[export_bundle_entry_index as usize].clone();
+
+            // Only Serialize command actually means the export data placement
+            if export_bundle_entry.command_type == EExportCommandType::Serialize {
+
+                let export_index = export_bundle_entry.local_export_index as usize;
+
+                // Export serial offset here is actually relative to the legacy package header size, so we need to subtract it to get the real position in the exports buffer
+                let export_serial_offset = (builder.legacy_package.exports[export_index].serial_offset as u64 - total_header_size) as usize;
+                let export_serial_size = builder.legacy_package.exports[export_index].serial_size as usize;
+                let export_end_serial_offset = export_serial_offset + export_serial_size;
+
+                // Serialize the export at this position and increment the current position
+                largest_exports_buffer_export_end_offset = max(largest_exports_buffer_export_end_offset, export_end_serial_offset);
+                writer.write(&exports_buffer[export_serial_offset..export_end_serial_offset])?;
+                current_export_offset += export_serial_size as u64;
+            }
+        }
+    }
+
+    // There can be extra data after the export blobs in the export buffer that we should try to preserve
+    // Note that normally there is also a package end magic there, that we want explicitly NOT to preserve because zen assets before 5.2 do not include end magic
+    let extra_data_start_offset = largest_exports_buffer_export_end_offset;
+    let mut extra_data_length = exports_buffer.len() - largest_exports_buffer_export_end_offset;
+
+    // Check if last 4 bytes are package file magic, and if they are, do not consider them as extra data
+    let package_end_tag_start_offset = exports_buffer.len() - size_of::<u32>();
+    if extra_data_length >= size_of::<u32>() && Cursor::new(&exports_buffer[package_end_tag_start_offset..]).read_u32()? == FLegacyPackageFileSummary::PACKAGE_FILE_TAG {
+        extra_data_length -= size_of::<u32>();
+    }
+    // If we have any actual extra data, write it to the zen asset
+    if extra_data_length > 0 {
+        let extra_data_end_offset = extra_data_start_offset + extra_data_length;
+        writer.write(&exports_buffer[extra_data_start_offset..extra_data_end_offset])?;
     }
     Ok({})
 }
@@ -596,7 +663,13 @@ fn serialize_zen_asset(writer: &mut IoStoreWriter, builder: &ZenPackageBuilder, 
 
     // Write package header (and exports)
     let package_chunk_id = FIoChunkId::from_package_id(builder.package_id, 0, EIoChunkType::ExportBundleData);
-    writer.write_package_chunk(package_chunk_id, None, &result_package_buffer, &result_store_entry)?;
+
+    // Write export buffer without any changes if we are following cooked offsets, otherwise we need to write them in export bundle order instead
+    if builder.container_header_version >= EIoContainerHeaderVersion::NoExportInfo {
+        writer.write_package_chunk(package_chunk_id, None, &result_package_buffer, &result_store_entry)?;
+    } else {
+        write_exports_in_bundle_order(&mut result_package_writer, builder, &legacy_asset_bundle.exports_file_buffer)?;
+    }
 
     // Write bulk data chunk if it is present
     if let Some(bulk_data_buffer) = &legacy_asset_bundle.bulk_data_buffer {
@@ -614,4 +687,24 @@ fn serialize_zen_asset(writer: &mut IoStoreWriter, builder: &ZenPackageBuilder, 
         writer.write_chunk(memory_mapped_bulk_data_chunk_id, None, memory_mapped_bulk_data_buffer)?;
     }
     Ok(builder.package_id)
+}
+
+// Builds zen asset and writes it into the container using the provided serialized legacy asset and package version
+pub(crate) fn build_zen_asset(writer: &mut IoStoreWriter, legacy_asset: &FSerializedAssetBundle, package_version_fallback: Option<FPackageFileVersion>) -> anyhow::Result<FPackageId> {
+
+    // Read legacy package header
+    let mut asset_header_reader = Cursor::new(&legacy_asset.asset_file_buffer);
+    let legacy_package_header = FLegacyPackageHeader::deserialize(&mut asset_header_reader, package_version_fallback)?;
+
+    // Construct zen asset from the package header
+    let mut builder = create_asset_builder(legacy_package_header, writer.container_header_version());
+
+    // Build zen asset data
+    setup_zen_package_summary(&mut builder)?;
+    build_zen_import_map(&mut builder)?;
+    build_zen_export_map(&mut builder)?;
+    build_zen_preload_dependencies(&mut builder)?;
+
+    // Serialize the resulting asset into the container writer
+    serialize_zen_asset(writer, &builder, legacy_asset)
 }

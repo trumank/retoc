@@ -200,7 +200,7 @@ pub(crate) struct FLegacyPackageFileSummary
     pub(crate) package_flags: u32,
     pub(crate) names: FCountOffsetPair,
     // never written for cooked packages
-    soft_object_paths: FCountOffsetPair,
+    pub(crate) soft_object_paths: FCountOffsetPair,
     pub(crate) exports: FCountOffsetPair,
     pub(crate) imports: FCountOffsetPair,
     // empty placeholder for cooked packages

@@ -10,7 +10,7 @@ use crate::{
 };
 use anyhow::{bail, Context, Result};
 use fs_err as fs;
-use crate::container_header::StoreEntry;
+use crate::container_header::{EIoContainerHeaderVersion, StoreEntry};
 
 pub(crate) struct IoStoreWriter {
     toc_path: PathBuf,
@@ -104,6 +104,10 @@ impl IoStoreWriter {
     pub(crate) fn write_package_chunk(&mut self, chunk_id: FIoChunkId, path: Option<&str>, data: &[u8], store_entry: &StoreEntry) -> Result<()> {
         bail!("Also need to write store entry");
         self.write_chunk(chunk_id, path, data)
+    }
+    pub(crate) fn container_header_version(&self) -> EIoContainerHeaderVersion {
+        // TODO @trumank implement
+        todo!("Truman send help")
     }
     pub(crate) fn finalize(mut self) -> Result<()> {
         self.toc_stream.ser(&self.toc)?;
