@@ -78,18 +78,29 @@ pub(crate) struct FPackageImportReference {
 
 impl FPackageObjectIndex {
     const INDEX_BITS: u64 = 62;
-    const INDEX_MASK: u64 = (1 << FPackageObjectIndex::INDEX_BITS) - 1;
-    const TYPE_SHIFT: u64 = FPackageObjectIndex::INDEX_BITS;
+    const INDEX_MASK: u64 = (1 << Self::INDEX_BITS) - 1;
+    const TYPE_SHIFT: u64 = Self::INDEX_BITS;
     const INVALID_ID: u64 = !0;
 
-    pub(crate) fn invalid() -> FPackageObjectIndex {
-        FPackageObjectIndex{type_and_id: FPackageObjectIndex::INVALID_ID }
-    }
-    pub(crate) fn null() -> FPackageObjectIndex { Self::invalid() }
-    pub(crate) fn new(kind: FPackageObjectIndexType, value: u64) -> FPackageObjectIndex
+    pub(crate) fn create(kind: FPackageObjectIndexType, value: u64) -> Self
     {
-        FPackageObjectIndex{type_and_id: ((kind as u64) << FPackageObjectIndex::TYPE_SHIFT) | value}
+        Self{type_and_id: ((kind as u64) << Self::TYPE_SHIFT) | value}
     }
+    pub(crate) fn create_null() -> Self {
+        Self::create(FPackageObjectIndexType::Null, Self::INVALID_ID)
+    }
+    pub(crate) fn create_export(export_index: u32) -> Self {
+        Self::create(FPackageObjectIndexType::Export, export_index as u64)
+    }
+    pub(crate) fn create_script_import(object_path: &str) -> Self {
+        let import_hash = Self::generate_import_hash_from_object_path(object_path);
+        Self::create(FPackageObjectIndexType::ScriptImport, import_hash)
+    }
+    pub(crate) fn create_package_import(import_ref: FPackageImportReference) -> Self {
+        let import_value = import_ref.imported_public_export_hash_index as u64 | ((import_ref.imported_package_index as u64) << 32);
+        Self::create(FPackageObjectIndexType::PackageImport, import_value)
+    }
+    pub(crate) fn raw_index(self) -> u64 { self.type_and_id & Self::INDEX_MASK }
     pub(crate) fn kind(self) -> FPackageObjectIndexType {
         FPackageObjectIndexType::from_repr((self.type_and_id >> Self::TYPE_SHIFT) as usize).unwrap()
     }
@@ -107,7 +118,7 @@ impl FPackageObjectIndex {
     }
     pub(crate) fn is_null(self) -> bool { self.kind() == FPackageObjectIndexType::Null }
 
-    pub(crate) fn generate_import_hash_from_object_path(object_path: &str) -> u64 {
+    fn generate_import_hash_from_object_path(object_path: &str) -> u64 {
         let lower_slash_path = object_path
             .chars()
             .map(|c| match c {

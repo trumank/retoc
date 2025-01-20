@@ -944,3 +944,11 @@ impl FLegacyPackageHeader {
         Ok({})
     }
 }
+
+pub(crate) struct FSerializedAssetBundle {
+    pub(crate) asset_file_buffer: Vec<u8>, // uasset
+    pub(crate) exports_file_buffer: Vec<u8>, // uexp
+    pub(crate) bulk_data_buffer: Option<Vec<u8>>, // .ubulk
+    pub(crate) optional_bulk_data_buffer: Option<Vec<u8>>, // .uptnl
+    pub(crate) memory_mapped_bulk_data_buffer: Option<Vec<u8>>, // .m.ubulk
+}

@@ -296,7 +296,7 @@ pub(crate) struct FExportMapEntry {
     pub(crate) object_flags: u32,
     // Contrary to the popular belief and the name of this field, this is not in fact bitflags - this is just a single enum value
     pub(crate) filter_flags: EExportFilterFlags,
-    padding: [u8; 3],
+    pub(crate) padding: [u8; 3],
 }
 impl Readable for FExportMapEntry {
     #[instrument(skip_all, name = "FExportMapEntry")]
@@ -335,7 +335,7 @@ impl Writeable for FExportMapEntry {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, FromRepr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromRepr)]
 #[repr(u32)]
 pub(crate) enum EExportCommandType {
     Create,
@@ -368,8 +368,7 @@ impl Writeable for FExportBundleEntry {
 
 #[derive(Debug, Copy, Clone, Default)]
 #[repr(C)] // Needed to determine the number of bundle headers
-pub(crate) struct FDependencyBundleHeader
-{
+pub(crate) struct FDependencyBundleHeader {
     pub(crate) first_entry_index: i32,
     // Note that this is defined as uint32 EntryCount[ExportCommandType_Count][ExportCommandType_Count], but this is a really awkward definition to work with,
     // so here it is defined as 4 individual properties: [Create][Create], [Create][Serialize], [Serialize][Create] and [Serialize][Serialize]
@@ -461,7 +460,7 @@ impl Writeable for FDependencyBundleEntry {
 }
 
 // Actual UE type name not known, type layout from AsyncLoading2.cpp SetupSerializedArcs on 5.2.2
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, Hash, PartialEq, Eq)]
 pub(crate) struct FInternalDependencyArc {
     pub(crate) from_export_bundle_index: i32,
     pub(crate) to_export_bundle_index: i32,
@@ -485,7 +484,7 @@ impl Writeable for FInternalDependencyArc {
 }
 
 // Actual UE type name not known, type layout from AsyncLoading2.cpp SetupSerializedArcs on 5.2.2
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub(crate) struct FExternalDependencyArc {
     pub(crate) from_import_index: i32,
     pub(crate) from_command_type: EExportCommandType,
