@@ -1,6 +1,7 @@
 use crate::compression::{compress, decompress, CompressionMethod};
 use crate::container_header::EIoContainerHeaderVersion;
 use crate::iostore::IoStoreTrait;
+use crate::logging::*;
 use crate::ser::{ReadExt, Readable, WriteExt, Writeable};
 use crate::{EIoStoreTocVersion, FIoChunkId, FSHAHash};
 use anyhow::{anyhow, bail};
@@ -508,7 +509,7 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive, compress_
 }
 
 // Returns the file contents of the built shader library on success
-pub(crate) fn rebuild_shader_library_from_io_store(store_access: &dyn IoStoreTrait, library_chunk_id: FIoChunkId, allow_stdout: bool, compress_shaders: bool) -> anyhow::Result<Vec<u8>> {
+pub(crate) fn rebuild_shader_library_from_io_store(store_access: &dyn IoStoreTrait, library_chunk_id: FIoChunkId, log: &Log, compress_shaders: bool) -> anyhow::Result<Vec<u8>> {
 
     // Read IoStore shader library
     let io_store_shader_library = IoStoreShaderCodeArchive::read(store_access, library_chunk_id)?;
@@ -605,9 +606,9 @@ pub(crate) fn rebuild_shader_library_from_io_store(store_access: &dyn IoStoreTra
     result_library_writer.write(&shader_code.shader_code_buffer)?;
 
     // Print shader library statistics to stdout if allowed
-    if allow_stdout {
+    if log.allow_stdout() {
         let compression_ratio = f64::round((io_store_shader_library.total_shader_code_size as f64 / shader_code.shader_code_buffer.len() as f64) * 100.0f64) as i64;
-        println!("Shader Library {} statistics: Shared Shaders: {}; Unique Shaders: {}; Detached Shaders: {}; Shader Maps: {}, Uncompressed Size: {}MB, Compressed Size: {}MB, Compression Ratio: {}%",
+        log!(log, "Shader Library {} statistics: Shared Shaders: {}; Unique Shaders: {}; Detached Shaders: {}; Shader Maps: {}, Uncompressed Size: {}MB, Compressed Size: {}MB, Compression Ratio: {}%",
             library_name.clone(), shader_code.total_shared_shaders, shader_code.total_unique_shaders, shader_code.total_detached_shaders, shader_library.shader_map_entries.len(),
              io_store_shader_library.total_shader_code_size / 1024 / 1024, shader_code.shader_code_buffer.len() / 1024 / 1024, compression_ratio,
         );

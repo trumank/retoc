@@ -1,5 +1,6 @@
 use crate::zen::{EUnrealEngineObjectUE4Version, EUnrealEngineObjectUE5Version, FCustomVersion, FPackageFileVersion, FPackageIndex};
 use crate::{break_down_name_string, iostore::IoStoreTrait, ser::*, FGuid};
+use crate::logging::*;
 use anyhow::{anyhow, bail, Result};
 use std::borrow::Cow;
 use std::cmp::max;
@@ -836,7 +837,7 @@ impl FLegacyPackageHeader {
         }
         Ok(FLegacyPackageHeader{summary: package_summary, name_map, imports, exports, preload_dependencies, data_resources})
     }
-    pub(crate) fn serialize<S: Write + Seek>(&self, s: &mut S, dump_package_summary: bool) -> Result<()> {
+    pub(crate) fn serialize<S: Write + Seek>(&self, s: &mut S, log: &Log) -> Result<()> {
 
         let package_summary_offset: u64 = s.stream_position()?;
         let mut package_summary: FLegacyPackageFileSummary = self.summary.clone();
@@ -935,9 +936,7 @@ impl FLegacyPackageHeader {
         FLegacyPackageFileSummary::serialize(&package_summary, s)?;
 
         // Dump fully patched up package summary if needed
-        if dump_package_summary {
-            dbg!(package_summary.clone());
-        }
+        debug!(log, "{:#?}", package_summary);
 
         // Seek back to the position after the header
         s.seek(SeekFrom::Start(position_after_writing_header))?;
