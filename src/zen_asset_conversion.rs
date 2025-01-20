@@ -262,7 +262,7 @@ fn build_zen_export_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
     Ok({})
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Default, Eq, Hash)]
 struct ZenDependencyGraphNode {
     package_index: FPackageIndex,
     command_type: EExportCommandType,
@@ -330,7 +330,7 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, sorted_d
     let mut external_dependency_arcs: HashSet<FExternalDependencyArc> = HashSet::new();
 
     // Function to create export dependency arcs to the export's export bundle from another export's export bundle, or from an entry in the import map
-    let create_dependency_arc_from_node = |to_export_bundle_index: i32, dependency_node: &ZenDependencyGraphNode, mut_builder: &mut ZenPackageBuilder| {
+    let mut create_dependency_arc_from_node = |to_export_bundle_index: i32, dependency_node: &ZenDependencyGraphNode, mut_builder: &mut ZenPackageBuilder| {
 
         // This is an export-to-export dependency
         if dependency_node.package_index.is_export() {
@@ -386,10 +386,10 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, sorted_d
         let export_create_bundle_index = export_to_bundle_map.get(&export_create_node).unwrap().clone();
         let export_serialize_bundle_index = export_to_bundle_map.get(&export_serialize_node).unwrap().clone();
 
-        for export_create_dependency in export_dependencies.get(&export_create_node).iter().flatten() {
+        for export_create_dependency in export_dependencies.get(&export_create_node).unwrap_or(&Vec::new()) {
             create_dependency_arc_from_node(export_create_bundle_index as i32, export_create_dependency, builder);
         }
-        for export_serialize_dependency in export_dependencies.get(&export_serialize_node).iter().flatten() {
+        for export_serialize_dependency in export_dependencies.get(&export_serialize_node).unwrap_or(&Vec::new()) {
             create_dependency_arc_from_node(export_serialize_bundle_index as i32, export_serialize_dependency, builder);
         }
     }
@@ -421,7 +421,7 @@ fn build_zen_dependency_bundle_new(builder: &mut ZenPackageBuilder, sorted_deps:
     let collect_export_dependencies = |to_dependency_node: &ZenDependencyGraphNode, from_command_type: EExportCommandType, immut_builder: &ZenPackageBuilder| -> Vec<FDependencyBundleEntry> {
         let mut result_dependencies: Vec<FDependencyBundleEntry> = Vec::new();
 
-        for from_dependency_node in export_dependencies.get(&to_dependency_node).unwrap_or_default() {
+        for from_dependency_node in export_dependencies.get(&to_dependency_node).unwrap_or(&Vec::new()) {
 
             // Skip nodes that do not have the matching command type
             if from_dependency_node.command_type != from_command_type {

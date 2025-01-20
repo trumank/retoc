@@ -1,5 +1,5 @@
 use crate::iostore::IoStoreTrait;
-use crate::legacy_asset::{FLegacyPackageFileSummary, FLegacyPackageHeader, FLegacyPackageVersioningInfo, FObjectDataResource, FObjectExport, FObjectImport, FPackageNameMap};
+use crate::legacy_asset::{FLegacyPackageFileSummary, FLegacyPackageHeader, FLegacyPackageVersioningInfo, FObjectDataResource, FObjectExport, FObjectImport, FPackageNameMap, FSerializedAssetBundle};
 use crate::logging::Log;
 use crate::name_map::FMappedName;
 use crate::script_objects::{FPackageObjectIndex, FPackageObjectIndexType, FScriptObjectEntry, ZenScriptObjects};
@@ -913,14 +913,6 @@ fn rebuild_asset_export_data_internal(builder: &LegacyAssetBuilder, raw_exports_
     exports_data_writer.ser(&package_file_magic)?;
 
     Ok(result_exports_data)
-}
-
-pub(crate) struct FSerializedAssetBundle {
-    pub(crate) asset_file_buffer: Vec<u8>, // uasset
-    pub(crate) exports_file_buffer: Vec<u8>, // uexp
-    pub(crate) bulk_data_buffer: Option<Vec<u8>>, // .ubulk
-    pub(crate) optional_bulk_data_buffer: Option<Vec<u8>>, // .uptnl
-    pub(crate) memory_mapped_bulk_data_buffer: Option<Vec<u8>>, // .m.ubulk
 }
 
 // Serializes an asset into in-memory buffer. Returns each region of the associated asset as a separate buffer

@@ -335,10 +335,10 @@ impl Writeable for FExportMapEntry {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, FromRepr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, FromRepr)]
 #[repr(u32)]
 pub(crate) enum EExportCommandType {
-    Create,
+    #[default] Create,
     Serialize
 }
 #[derive(Debug, Copy, Clone)]
