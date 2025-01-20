@@ -32,3 +32,4 @@ sha1 = "0.10.6"
 strum = { version = "0.26.3", features = ["derive"] }
 tracing = "0.1.41"
 typed-path = "0.10.0"
+topo_sort = "0.4.0"
