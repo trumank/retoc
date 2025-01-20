@@ -51,7 +51,7 @@ impl<'a> FZenPackageContext<'a> {
         if read_lock.is_some() {
             Ok(read_lock)
         } else {
-            // data has not been popluated to grab a write guard for us to populate
+            // data has not been popluated so grab a write guard for us to populate
             drop(read_lock);
             let mut write_lock = self.script_objects.write().unwrap();
             if write_lock.is_some() {
