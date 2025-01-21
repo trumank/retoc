@@ -9,7 +9,7 @@ use crate::{EIoChunkType, FIoChunkId, FPackageId};
 use anyhow::bail;
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Write};
-use byteorder::ReadBytesExt;
+use byteorder::{ReadBytesExt, LE};
 use topo_sort::{SortResults, TopoSort};
 use crate::iostore_writer::IoStoreWriter;
 
@@ -636,7 +636,7 @@ fn write_exports_in_bundle_order<S: Write>(writer: &mut S, builder: &ZenPackageB
 
     // Check if last 4 bytes are package file magic, and if they are, do not consider them as extra data
     let package_end_tag_start_offset = exports_buffer.len() - size_of::<u32>();
-    if extra_data_length >= size_of::<u32>() && Cursor::new(&exports_buffer[package_end_tag_start_offset..]).read_u32()? == FLegacyPackageFileSummary::PACKAGE_FILE_TAG {
+    if extra_data_length >= size_of::<u32>() && Cursor::new(&exports_buffer[package_end_tag_start_offset..]).read_u32::<LE>()? == FLegacyPackageFileSummary::PACKAGE_FILE_TAG {
         extra_data_length -= size_of::<u32>();
     }
     // If we have any actual extra data, write it to the zen asset
