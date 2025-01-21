@@ -514,12 +514,9 @@ impl FileWriterTrait for FSFileWriter {
         Ok(fs::write(path, &data)?)
     }
 }
-struct PakFileWriter<'a> {
-    inner: &'a mut repak::ParallelPakWriter,
-}
-impl FileWriterTrait for PakFileWriter<'_> {
+impl FileWriterTrait for repak::ParallelPakWriter<'_> {
     fn write_file(&self, path: String, allow_compress: bool, data: Vec<u8>) -> Result<()> {
-        Ok(self.inner.write_file(path, allow_compress, data)?)
+        Ok(self.write_file(path, allow_compress, data)?)
     }
 }
 struct NullFileWriter;
@@ -545,8 +542,7 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
             );
 
         pak.parallel(|writer| -> Result<()> {
-            let file_writer = PakFileWriter { inner: writer };
-            action_extract_legacy_inner(args, config, &file_writer, &log)?;
+            action_extract_legacy_inner(args, config, &writer, &log)?;
             Ok(())
         })?;
 
