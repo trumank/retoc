@@ -514,9 +514,15 @@ impl FileWriterTrait for FSFileWriter {
         Ok(fs::write(path, &data)?)
     }
 }
-impl FileWriterTrait for repak::ParallelPakWriter<'_> {
+struct ParallelPakWriter {
+    entry_builder: repak::EntryBuilder,
+    tx: std::sync::mpsc::SyncSender<(String, repak::PartialEntry<Vec<u8>>)>,
+}
+impl FileWriterTrait for ParallelPakWriter {
     fn write_file(&self, path: String, allow_compress: bool, data: Vec<u8>) -> Result<()> {
-        Ok(self.write_file(path, allow_compress, data)?)
+        let entry = self.entry_builder.build_entry(allow_compress, data)?;
+        self.tx.send((path, entry))?;
+        Ok(())
     }
 }
 struct NullFileWriter;
@@ -533,7 +539,7 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
     } else if args.output.extension() == Some(std::ffi::OsStr::new("pak")) {
         let mut file = BufWriter::new(fs::File::create(&args.output)?);
         let mut pak = repak::PakBuilder::new()
-            .compression([repak::Compression::LZ4])
+            .compression([repak::Compression::Oodle])
             .writer(
                 &mut file,
                 repak::Version::V11, // TODO V11 is compatible with most IO store versions but will need to be changed for <= 4.26
@@ -541,10 +547,27 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
                 None,
             );
 
-        pak.parallel(|writer| -> Result<()> {
-            action_extract_legacy_inner(args, config, &writer, &log)?;
+        // some stack space to store action result
+        let mut result = None;
+        let result_ref = &mut result;
+        rayon::in_place_scope(|scope| -> Result<()> {
+            let (tx, rx) = std::sync::mpsc::sync_channel(0);
+
+            let writer = ParallelPakWriter {
+                entry_builder: pak.entry_builder(),
+                tx,
+            };
+
+            scope.spawn(move |_| {
+                *result_ref = Some(action_extract_legacy_inner(args, config, &writer, &log));
+            });
+
+            for (path, entry) in rx {
+                pak.write_entry(path, entry)?;
+            }
             Ok(())
         })?;
+        result.unwrap()?; // unwrap action result and return error if occured
 
         pak.write_index()?;
     } else {
