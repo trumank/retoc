@@ -1429,7 +1429,7 @@ impl FIoChunkId {
         EIoChunkType::from_repr(self.id[11]).unwrap()
     }
 }
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 struct FIoContainerId(u64);
 impl FIoContainerId {
     fn from_name(name: &str) -> Self {

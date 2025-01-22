@@ -15,7 +15,7 @@ use crate::{
     FIoContainerId, FPackageId, FSHAHash, ReadExt,
 };
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct FIoContainerHeader {
     pub(crate) version: EIoContainerHeaderVersion,
     pub(crate) container_id: FIoContainerId,
@@ -74,17 +74,20 @@ impl Readable for FIoContainerHeader {
 }
 impl Writeable for FIoContainerHeader {
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
-        todo!();
-
         s.ser(&Self::MAGIC)?;
         s.ser(&self.version)?;
         s.ser(&self.container_id)?;
-        //s.ser(&self.store_entries)?;
+        s.ser(&self.package_ids)?;
+        self.store_entries.serialize(s, self.version)?;
         s.ser(&self.optional_segment_package_ids)?;
         s.ser(&self.optional_segment_store_entries)?;
-        //s.ser(&self.redirect_name_map)?;
+        self.redirect_name_map.serialize(s)?;
         s.ser(&self.localized_packages)?;
         s.ser(&self.package_redirects)?;
+
+        if self.version >= EIoContainerHeaderVersion::SoftPackageReferences {
+            todo!("soft package references")
+        }
 
         Ok(())
     }
@@ -124,7 +127,7 @@ impl Writeable for EIoContainerHeaderVersion {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct FIoContainerHeaderLocalizedPackage {
     source_package_id: FPackageId,
     source_package_name: FMappedName,
@@ -146,7 +149,7 @@ impl Writeable for FIoContainerHeaderLocalizedPackage {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct FIoContainerHeaderPackageRedirect {
     source_package_id: FPackageId,
     target_package_id: FPackageId,
@@ -400,18 +403,12 @@ mod test {
         dbg!(&header.store_entries.entries);
 
         let mut out_cur = Cursor::new(vec![]);
-        header
-            .store_entries
-            .serialize(&mut out_cur, header.version)?;
+        out_cur.ser(&header)?;
         out_cur.set_position(0);
 
-        let store_entries = StoreEntries::deserialize(
-            &mut out_cur,
-            header.version,
-            header.store_entries.entries.len(),
-        )?;
+        let header2: FIoContainerHeader = out_cur.de()?;
 
-        assert_eq!(header.store_entries, store_entries);
+        assert_eq!(header, header2);
 
         Ok(())
     }

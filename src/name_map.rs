@@ -84,7 +84,7 @@ pub(crate) fn write_name_batch<S: Write>(s: &mut S, names: &[String]) -> Result<
     Ok(())
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct FNameMap {
     kind: EMappedNameType,
     names: Vec<String>,
@@ -160,7 +160,7 @@ pub(crate) enum EMappedNameType {
     Container = 1,
     Global = 2,
 }
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(crate) struct FMappedName {
     index_and_type: u32,
     pub(crate) number: u32,
