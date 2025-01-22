@@ -1425,6 +1425,9 @@ impl FIoChunkId {
     fn from_package_id(package_id: FPackageId, chunk_index: u16, chunk_type: EIoChunkType) -> Self {
         Self::create(package_id.0, chunk_index, chunk_type)
     }
+    fn get_chunk_id(&self) -> u64 {
+        u64::from_le_bytes(self.id[0..8].try_into().unwrap())
+    }
     fn get_chunk_type(&self) -> EIoChunkType {
         EIoChunkType::from_repr(self.id[11]).unwrap()
     }

@@ -4,26 +4,29 @@ use std::{
 };
 
 use crate::{
-    ser::*, CompressionMethod, EIoStoreTocVersion, FIoChunkHash, FIoChunkId, FIoContainerId,
-    FIoOffsetAndLength, FIoStoreTocCompressedBlockEntry, FIoStoreTocEntryMeta,
-    FIoStoreTocEntryMetaFlags, Toc,
+    container_header::{EIoContainerHeaderVersion, FIoContainerHeader, StoreEntry},
+    EIoChunkType, FPackageId,
 };
-use anyhow::{bail, Context, Result};
+use crate::{
+    ser::*, EIoStoreTocVersion, FIoChunkHash, FIoChunkId, FIoContainerId, FIoOffsetAndLength,
+    FIoStoreTocCompressedBlockEntry, FIoStoreTocEntryMeta, FIoStoreTocEntryMetaFlags, Toc,
+};
+use anyhow::{Context, Result};
 use fs_err as fs;
-use crate::container_header::{EIoContainerHeaderVersion, StoreEntry};
 
 pub(crate) struct IoStoreWriter {
     toc_path: PathBuf,
     toc_stream: BufWriter<fs::File>,
     cas_stream: BufWriter<fs::File>,
     toc: Toc,
+    container_header: Option<FIoContainerHeader>,
 }
 
 impl IoStoreWriter {
     pub(crate) fn new<P: AsRef<Path>>(
         toc_path: P,
         toc_version: EIoStoreTocVersion,
-        container_header_version: EIoContainerHeaderVersion,
+        container_header_version: Option<EIoContainerHeaderVersion>,
         mount_point: String,
     ) -> Result<Self> {
         let toc_path = toc_path.as_ref().to_path_buf();
@@ -38,11 +41,15 @@ impl IoStoreWriter {
         toc.directory_index.mount_point = mount_point;
         toc.partition_size = u64::MAX;
 
+        let container_header =
+            container_header_version.map(|v| FIoContainerHeader::new(v, toc.container_id));
+
         Ok(Self {
             toc_path,
             toc_stream,
             cas_stream,
             toc,
+            container_header,
         })
     }
     pub(crate) fn write_chunk(
@@ -101,16 +108,34 @@ impl IoStoreWriter {
         Ok(())
     }
 
-    // TODO @trumank: Use StoreEntry provided
-    pub(crate) fn write_package_chunk(&mut self, chunk_id: FIoChunkId, path: Option<&str>, data: &[u8], store_entry: &StoreEntry) -> Result<()> {
-        bail!("Also need to write store entry");
+    pub(crate) fn write_package_chunk(
+        &mut self,
+        chunk_id: FIoChunkId,
+        path: Option<&str>,
+        data: &[u8],
+        store_entry: &StoreEntry,
+    ) -> Result<()> {
+        let container_header = self
+            .container_header
+            .as_mut()
+            .expect("FIoContainerHeader is required to write package chunks");
+        container_header.add_package(FPackageId(chunk_id.get_chunk_id()), store_entry.clone());
         self.write_chunk(chunk_id, path, data)
     }
     pub(crate) fn container_header_version(&self) -> EIoContainerHeaderVersion {
-        // TODO @trumank implement
-        todo!("Truman send help")
+        self.container_header.as_ref().unwrap().version
     }
     pub(crate) fn finalize(mut self) -> Result<()> {
+        if let Some(container_header) = &self.container_header {
+            let mut chunk_buffer = vec![];
+            container_header.ser(&mut chunk_buffer)?;
+            let chunk_id = FIoChunkId::create(
+                container_header.container_id.0,
+                0,
+                EIoChunkType::ContainerHeader,
+            );
+            self.write_chunk(chunk_id, None, &chunk_buffer)?;
+        }
         self.toc_stream.ser(&self.toc)?;
         Ok(())
     }
@@ -126,7 +151,7 @@ mod test {
         let mut writer = IoStoreWriter::new(
             "new.utoc",
             EIoStoreTocVersion::PerfectHashWithOverflow,
-            EIoContainerHeaderVersion::OptionalSegmentPackages,
+            Some(EIoContainerHeaderVersion::OptionalSegmentPackages),
             "../../..".to_string(),
         )?;
 
@@ -135,7 +160,7 @@ mod test {
             FIoChunkId {
                 id: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5],
             },
-            Some("asdf/asdf/dasf/script_objects.bin"),
+            Some("../../../asdf/asdf/dasf/script_objects.bin"),
             &data,
         )?;
         writer.finalize()?;

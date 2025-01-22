@@ -95,6 +95,26 @@ impl Writeable for FIoContainerHeader {
 impl FIoContainerHeader {
     const MAGIC: u32 = 0x496f436e;
 
+    pub(crate) fn new(version: EIoContainerHeaderVersion, container_id: FIoContainerId) -> Self {
+        Self {
+            version,
+            container_id,
+            package_ids: vec![],
+            store_entries: StoreEntries::default(),
+            optional_segment_package_ids: vec![],
+            optional_segment_store_entries: vec![],
+            redirect_name_map: FNameMap::default(),
+            localized_packages: vec![],
+            package_redirects: vec![],
+            package_entry_map: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn add_package(&mut self, package_id: FPackageId, store_entry: StoreEntry) {
+        self.package_ids.push(package_id);
+        self.store_entries.entries.push(store_entry);
+    }
+
     pub(crate) fn get_store_entry(&self, package_id: FPackageId) -> Option<StoreEntry> {
         // TODO handle redirects?
         let index = *self.package_entry_map.get(&package_id)?;
@@ -181,7 +201,7 @@ pub(crate) struct StoreEntry {
     pub(crate) shader_map_hashes: Vec<FSHAHash>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 struct StoreEntries {
     entries: Vec<StoreEntry>,
 }
