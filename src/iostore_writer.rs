@@ -22,7 +22,8 @@ pub(crate) struct IoStoreWriter {
 impl IoStoreWriter {
     pub(crate) fn new<P: AsRef<Path>>(
         toc_path: P,
-        version: EIoStoreTocVersion,
+        toc_version: EIoStoreTocVersion,
+        container_header_version: EIoContainerHeaderVersion,
         mount_point: String,
     ) -> Result<Self> {
         let toc_path = toc_path.as_ref().to_path_buf();
@@ -32,7 +33,7 @@ impl IoStoreWriter {
 
         let mut toc = Toc::new();
         toc.compression_block_size = 0x10000;
-        toc.version = version;
+        toc.version = toc_version;
         toc.container_id = FIoContainerId::from_name(&name);
         toc.directory_index.mount_point = mount_point;
         toc.partition_size = u64::MAX;
@@ -125,6 +126,7 @@ mod test {
         let mut writer = IoStoreWriter::new(
             "new.utoc",
             EIoStoreTocVersion::PerfectHashWithOverflow,
+            EIoContainerHeaderVersion::OptionalSegmentPackages,
             "../../..".to_string(),
         )?;
 

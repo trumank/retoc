@@ -8,12 +8,12 @@ use anyhow::{bail, Context as _, Result};
 use strum::FromRepr;
 use tracing::instrument;
 
+use crate::name_map::EMappedNameType;
 use crate::{
     name_map::{FMappedName, FNameMap},
     ser::*,
     FIoContainerId, FPackageId, FSHAHash, ReadExt,
 };
-use crate::name_map::EMappedNameType;
 
 #[derive(Debug)]
 pub(crate) struct FIoContainerHeader {
@@ -41,7 +41,7 @@ impl Readable for FIoContainerHeader {
 
         let container_id = s.de()?;
         let package_ids: Vec<_> = s.de()?;
-        let store_entries = s.de_ctx((version, package_ids.len()))?;
+        let store_entries = StoreEntries::deserialize(s, version, package_ids.len())?;
         let optional_segment_package_ids = s.de()?;
         let optional_segment_store_entries = s.de()?;
         let redirect_name_map = FNameMap::deserialize(s, EMappedNameType::Container)?;
@@ -49,7 +49,7 @@ impl Readable for FIoContainerHeader {
         let package_redirects = s.de()?;
 
         if version >= EIoContainerHeaderVersion::SoftPackageReferences {
-            todo!()
+            todo!("soft package references")
         }
 
         let package_entry_map = package_ids
@@ -85,7 +85,6 @@ impl Writeable for FIoContainerHeader {
         //s.ser(&self.redirect_name_map)?;
         s.ser(&self.localized_packages)?;
         s.ser(&self.package_redirects)?;
-
 
         Ok(())
     }
@@ -172,44 +171,26 @@ impl Writeable for FIoContainerHeaderPackageRedirect {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct StoreEntry {
-    pub(crate) export_count: i32,
-    pub(crate) export_bundle_count: i32,
+    pub(crate) export_counts: PackageExportCounts,
     pub(crate) imported_packages: Vec<FPackageId>,
     pub(crate) shader_map_hashes: Vec<FSHAHash>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct StoreEntries {
-    entries: Vec<FFilePackageStoreEntry>,
-    imported_packages: HashMap<u32, Vec<FPackageId>>,
-    shader_map_hashes: HashMap<u32, Vec<FSHAHash>>,
+    entries: Vec<StoreEntry>,
 }
 impl StoreEntries {
     fn get(&self, index: u32) -> StoreEntry {
-        let entry = &self.entries[index as usize];
-        StoreEntry {
-            export_count: entry.export_count,
-            export_bundle_count: entry.export_bundle_count,
-            imported_packages: self
-                .imported_packages
-                .get(&index)
-                .cloned()
-                .unwrap_or_default(),
-            shader_map_hashes: self
-                .shader_map_hashes
-                .get(&index)
-                .cloned()
-                .unwrap_or_default(),
-        }
+        self.entries[index as usize].clone()
     }
-}
-impl ReadableCtx<(EIoContainerHeaderVersion, usize)> for StoreEntries {
     #[instrument(skip_all, name = "StoreEntries")]
-    fn de<S: Read>(
+    fn deserialize<S: Read>(
         s: &mut S,
-        (version, package_count): (EIoContainerHeaderVersion, usize),
+        version: EIoContainerHeaderVersion,
+        package_count: usize,
     ) -> Result<Self> {
         let buffer: Vec<u8> = s.de()?;
         let mut cur = Cursor::new(buffer);
@@ -220,45 +201,102 @@ impl ReadableCtx<(EIoContainerHeaderVersion, usize)> for StoreEntries {
             (8, 24)
         };
 
-        let mut imported_packages = HashMap::new();
-        let mut shader_map_hashes = HashMap::new();
+        let entries = read_array(package_count, &mut cur, |s| {
+            FFilePackageStoreEntry::deserialize(s, version)
+        })?;
 
-        let entries: Vec<FFilePackageStoreEntry> =
-            read_array(package_count, &mut cur, |s| s.de_ctx(version))?;
-        for (i, entry) in entries.iter().enumerate() {
-            let offset = i * entry_size; // sizeof(FFilePackageStoreEntry)
+        let entries = entries
+            .into_iter()
+            .enumerate()
+            .map(|(i, entry)| -> Result<StoreEntry> {
+                let offset = i * entry_size; // sizeof(FFilePackageStoreEntry)
 
-            let num = entry.imported_packages.array_num as usize;
-            if num != 0 {
-                let offset = offset
-                    + member_offset
-                    + entry.imported_packages.offset_to_data_from_this as usize
-                    + 0; // offset_of(FFilePackageStoreEntry::imported_packages)
-                cur.seek(SeekFrom::Start(offset as u64))?;
-                let array: Vec<_> = cur.de_ctx(num)?;
-                imported_packages.insert(i as u32, array);
+                let num = entry.imported_packages.array_num as usize;
+                let imported_packages = if num != 0 {
+                    let offset = offset
+                        + member_offset
+                        + entry.imported_packages.offset_to_data_from_this as usize
+                        + 0; // offset_of(FFilePackageStoreEntry::imported_packages)
+                    cur.seek(SeekFrom::Start(offset as u64))?;
+                    cur.de_ctx(num)?
+                } else {
+                    vec![]
+                };
+
+                let num = entry.shader_map_hashes.array_num as usize;
+                let shader_map_hashes = if num != 0 {
+                    let offset = offset
+                        + member_offset
+                        + entry.shader_map_hashes.offset_to_data_from_this as usize
+                        + 8; // offset_of(FFilePackageStoreEntry::shader_map_hashes)
+                    cur.seek(SeekFrom::Start(offset as u64))?;
+                    cur.de_ctx(num)?
+                } else {
+                    vec![]
+                };
+                Ok(StoreEntry {
+                    export_counts: entry.export_counts,
+                    imported_packages,
+                    shader_map_hashes,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Self { entries })
+    }
+    #[instrument(skip_all, name = "StoreEntries")]
+    fn serialize<S: Write>(&self, s: &mut S, version: EIoContainerHeaderVersion) -> Result<()> {
+        let mut buffer: Vec<u8> = vec![];
+        let mut cur = Cursor::new(&mut buffer);
+
+        let (member_offset, entry_size) = if version >= EIoContainerHeaderVersion::NoExportInfo {
+            (0, 16)
+        } else {
+            (8, 24)
+        };
+
+        // calculate end of entries to start writing arrays
+        let mut array_offset = self.entries.len() * entry_size;
+
+        for entry in &self.entries {
+            let mut ser_entry = FFilePackageStoreEntry {
+                export_counts: entry.export_counts.clone(),
+                ..Default::default()
+            };
+
+            // save entry to calculate offsets and restore later
+            let entry_offset = cur.position() as usize;
+
+            // start writing arrays
+            cur.set_position(array_offset as u64);
+
+            if !entry.imported_packages.is_empty() {
+                let offset = cur.position() as usize - entry_offset - member_offset - 0;
+                ser_entry.imported_packages.offset_to_data_from_this = offset as u32;
+                ser_entry.imported_packages.array_num = entry.imported_packages.len() as u32;
+                cur.ser_no_length(&entry.imported_packages)?;
+            }
+            if !entry.shader_map_hashes.is_empty() {
+                let offset = cur.position() as usize - entry_offset - member_offset - 8;
+                ser_entry.shader_map_hashes.offset_to_data_from_this = offset as u32;
+                ser_entry.shader_map_hashes.array_num = entry.shader_map_hashes.len() as u32;
+                cur.ser_no_length(&entry.shader_map_hashes)?;
             }
 
-            let num = entry.shader_map_hashes.array_num as usize;
-            if num != 0 {
-                let offset = offset
-                    + member_offset
-                    + entry.shader_map_hashes.offset_to_data_from_this as usize
-                    + 8; // offset_of(FFilePackageStoreEntry::shader_map_hashes)
-                cur.seek(SeekFrom::Start(offset as u64))?;
-                let array: Vec<_> = cur.de_ctx(num)?;
-                shader_map_hashes.insert(i as u32, array);
-            }
+            // advance array_offset
+            array_offset = cur.position() as usize;
+
+            // reset cursor and write entry
+            cur.set_position(entry_offset as u64);
+            ser_entry.serialize(&mut cur, version)?;
         }
-        Ok(Self {
-            entries,
-            imported_packages,
-            shader_map_hashes,
-        })
+
+        s.ser::<Vec<u8>>(&buffer)?;
+        Ok(())
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 #[repr(C)]
 struct TFilePackageStoreEntryCArrayView<T> {
     array_num: u32,
@@ -274,36 +312,75 @@ impl<T> Readable for TFilePackageStoreEntryCArrayView<T> {
         })
     }
 }
+impl<T> Writeable for TFilePackageStoreEntryCArrayView<T> {
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.array_num)?;
+        s.ser(&self.offset_to_data_from_this)?;
+        Ok(())
+    }
+}
 
-#[derive(Debug)]
-#[repr(C)] // Needed to determine the number of package store entries
+#[derive(Debug, Default)]
 struct FFilePackageStoreEntry {
     // version < EIoContainerHeaderVersion::NoExportInfo
-    export_count: i32,
-    export_bundle_count: i32,
+    export_counts: PackageExportCounts,
 
     imported_packages: TFilePackageStoreEntryCArrayView<FPackageId>,
     shader_map_hashes: TFilePackageStoreEntryCArrayView<FSHAHash>,
 }
-impl ReadableCtx<EIoContainerHeaderVersion> for FFilePackageStoreEntry {
-    #[instrument(skip_all, name = "FFilePackageStoreEntry ")]
-    fn de<S: Read>(s: &mut S, version: EIoContainerHeaderVersion) -> Result<Self> {
+impl FFilePackageStoreEntry {
+    #[instrument(skip_all, name = "FFilePackageStoreEntry")]
+    fn deserialize<S: Read>(s: &mut S, version: EIoContainerHeaderVersion) -> Result<Self> {
         if version == EIoContainerHeaderVersion::Initial {
             todo!()
         } else {
-            let mut export_count = 0;
-            let mut export_bundle_count = 0;
-            if version < EIoContainerHeaderVersion::NoExportInfo {
-                export_count = s.de()?;
-                export_bundle_count = s.de()?;
-            }
+            let export_counts = if version < EIoContainerHeaderVersion::NoExportInfo {
+                s.de()?
+            } else {
+                Default::default()
+            };
             Ok(Self {
-                export_count,
-                export_bundle_count,
+                export_counts,
                 imported_packages: s.de()?,
                 shader_map_hashes: s.de()?,
             })
         }
+    }
+    #[instrument(skip_all, name = "FFilePackageStoreEntry")]
+    fn serialize<S: Write>(&self, s: &mut S, version: EIoContainerHeaderVersion) -> Result<()> {
+        if version == EIoContainerHeaderVersion::Initial {
+            todo!()
+        } else {
+            if version < EIoContainerHeaderVersion::NoExportInfo {
+                s.ser(&self.export_counts)?;
+            }
+            s.ser(&self.imported_packages)?;
+            s.ser(&self.shader_map_hashes)?;
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq)]
+pub(crate) struct PackageExportCounts {
+    pub(crate) export_count: i32,
+    pub(crate) export_bundle_count: i32,
+}
+impl Readable for PackageExportCounts {
+    #[instrument(skip_all, name = "PackageExportCounts")]
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        Ok(Self {
+            export_count: s.de()?,
+            export_bundle_count: s.de()?,
+        })
+    }
+}
+impl Writeable for PackageExportCounts {
+    #[instrument(skip_all, name = "PackageExportCounts")]
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.export_count)?;
+        s.ser(&self.export_bundle_count)?;
+        Ok(())
     }
 }
 
@@ -320,7 +397,21 @@ mod test {
 
         let header: FIoContainerHeader =
             ser_hex::TraceStream::new("out/container_header.trace.json", stream).de()?;
-        dbg!(header.store_entries.shader_map_hashes);
+        dbg!(&header.store_entries.entries);
+
+        let mut out_cur = Cursor::new(vec![]);
+        header
+            .store_entries
+            .serialize(&mut out_cur, header.version)?;
+        out_cur.set_position(0);
+
+        let store_entries = StoreEntries::deserialize(
+            &mut out_cur,
+            header.version,
+            header.store_entries.entries.len(),
+        )?;
+
+        assert_eq!(header.store_entries, store_entries);
 
         Ok(())
     }

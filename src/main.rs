@@ -480,7 +480,12 @@ fn action_pack_raw(args: ActionPackRaw, _config: Arc<Config>) -> Result<()> {
         args.input.join("manifest.json"),
     )?))?;
 
-    let mut writer = IoStoreWriter::new(args.utoc, manifest.version, manifest.mount_point)?;
+    let mut writer = IoStoreWriter::new(
+        args.utoc,
+        manifest.version,
+        todo!("container header version"),
+        manifest.mount_point,
+    )?;
     for entry in args.input.join("chunks").read_dir()? {
         let entry = entry?;
         let chunk_id = FIoChunkId::from_str(entry.file_name().to_string_lossy().as_ref())?;
@@ -1318,7 +1323,7 @@ impl Toc {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct FPackageId(u64);
 impl Readable for FPackageId {
     fn de<S: Read>(s: &mut S) -> Result<Self> {
@@ -1624,7 +1629,7 @@ impl Writeable for FGuid {
         Ok({})
     }
 }
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, PartialEq)]
 struct FSHAHash {
     data: [u8; 20],
 }

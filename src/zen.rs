@@ -766,7 +766,7 @@ impl FZenPackageHeader {
             let graph_data_start_offset = package_start_offset + summary.graph_data_offset as u64;
             s.seek(SeekFrom::Start(graph_data_start_offset))?;
 
-            let export_bundles_count = store_entry.export_bundle_count as usize;
+            let export_bundles_count = store_entry.export_counts.export_bundle_count as usize;
             export_bundle_headers = s.de_ctx(export_bundles_count)?;
 
             internal_dependency_arcs = s.de()?;
@@ -909,13 +909,13 @@ impl FZenPackageHeader {
         } else {
 
             // Write export count for packages with graph data
-            store_entry.export_count = self.export_map.len() as i32;
+            store_entry.export_counts.export_count = self.export_map.len() as i32;
 
             // Graph data starts directly after export bundle entries
             package_summary.graph_data_offset = (s.stream_position()? - package_summary_offset) as i32;
 
             // Write export bundle count into the package store entry, and then write export bundle header for each of them
-            store_entry.export_bundle_count = self.export_bundle_headers.len() as i32;
+            store_entry.export_counts.export_bundle_count = self.export_bundle_headers.len() as i32;
             for export_bundle_header in &self.export_bundle_headers {
                 s.ser(export_bundle_header)?;
             }
