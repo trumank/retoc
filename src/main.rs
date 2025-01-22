@@ -24,6 +24,7 @@ use compression::{decompress, CompressionMethod};
 use fs_err as fs;
 use iostore::IoStoreTrait;
 use iostore_writer::IoStoreWriter;
+use legacy_asset::FSerializedAssetBundle;
 use logging::Log;
 use logging::*;
 use rayon::prelude::*;
@@ -31,6 +32,7 @@ use ser::*;
 use serde::{Deserialize, Serialize, Serializer};
 use std::fmt::{Debug, Display, Formatter};
 use std::io::BufWriter;
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
     collections::HashMap,
@@ -125,6 +127,23 @@ struct ActionExtractLegacy {
 }
 
 #[derive(Parser, Debug)]
+struct ActionPackZen {
+    /// Input directory
+    #[arg(index = 1)]
+    input: PathBuf,
+    /// Output .utoc
+    #[arg(index = 2)]
+    output: PathBuf,
+
+    #[arg(short, long)]
+    filter: Option<String>,
+
+    /// Engine version
+    #[arg(long)]
+    version: EngineVersion,
+}
+
+#[derive(Parser, Debug)]
 struct ActionGet {
     #[arg(index = 1)]
     utoc: PathBuf,
@@ -152,6 +171,9 @@ enum Action {
 
     /// Extracts legacy assets from .utoc
     ExtractLegacy(ActionExtractLegacy),
+    /// Pack legacy assets into iostore container
+    PackZen(ActionPackZen),
+
     /// Get chunk by index and write to stdout
     Get(ActionGet),
 }
@@ -186,6 +208,8 @@ fn main() -> Result<()> {
         Action::PackRaw(action) => action_pack_raw(action, config),
 
         Action::ExtractLegacy(action) => action_extract_legacy(action, config),
+        Action::PackZen(action) => action_pack_zen(action, config),
+
         Action::Get(action) => action_get(action, config),
     }
 }
@@ -732,6 +756,82 @@ fn action_extract_legacy_shaders(
         args.output
     );
 
+    Ok(())
+}
+
+fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
+    fn visit_dirs(dir: &Path, cb: &mut dyn FnMut(&fs::DirEntry)) -> std::io::Result<()> {
+        if dir.is_dir() {
+            for entry in fs::read_dir(dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_dir() {
+                    visit_dirs(&path, cb)?;
+                } else {
+                    cb(&entry);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    let mut writer = IoStoreWriter::new(
+        args.output,
+        args.version.toc_version(),
+        Some(args.version.container_header_version()),
+        "../../..".to_string(),
+    )?;
+
+    let mut paths = vec![];
+
+    let check_path = |path: &Path| {
+        !args.filter
+            .as_ref()
+            .is_some_and(|f| !path.to_string_lossy().contains(f))
+    };
+
+    visit_dirs(&args.input, &mut |file| {
+        let path = file.path();
+        let is_asset = [
+            Some(std::ffi::OsStr::new("uasset")),
+            Some(std::ffi::OsStr::new("umap")),
+        ]
+        .contains(&path.extension());
+        if is_asset && check_path(&path) {
+            paths.push(file.path());
+        }
+    })?;
+
+    for path in paths {
+        println!("converting {path:?}");
+        let relative_path = path.strip_prefix(&args.input).unwrap();
+
+        fn read_optional(path: &Path) -> Result<Option<Vec<u8>>, std::io::Error> {
+            match fs::read(path) {
+                Ok(data) => Ok(Some(data)),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(err) => Err(err),
+            }
+        }
+
+        let bundle = FSerializedAssetBundle {
+            asset_file_buffer: fs::read(&path)?,
+            exports_file_buffer: fs::read(path.with_extension("uexp"))?,
+            bulk_data_buffer: read_optional(&path.with_extension("ubulk"))?,
+            optional_bulk_data_buffer: read_optional(&path.with_extension("uptnl"))?,
+            memory_mapped_bulk_data_buffer: read_optional(&path.with_extension("m.ubulk"))?,
+        };
+
+        zen_asset_conversion::build_zen_asset(
+            &mut writer,
+            &bundle,
+            Some(FPackageFileVersion::create_ue5(
+                args.version.object_ue5_version(),
+            )),
+        )?;
+    }
+
+    writer.finalize()?;
     Ok(())
 }
 
