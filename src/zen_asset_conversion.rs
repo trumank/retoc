@@ -647,7 +647,7 @@ fn write_exports_in_bundle_order<S: Write>(writer: &mut S, builder: &ZenPackageB
     Ok({})
 }
 
-fn serialize_zen_asset(writer: &mut IoStoreWriter, builder: &ZenPackageBuilder, legacy_asset_bundle: &FSerializedAssetBundle) -> anyhow::Result<FPackageId> {
+fn serialize_zen_asset(writer: &mut IoStoreWriter, builder: &ZenPackageBuilder, legacy_asset_bundle: &FSerializedAssetBundle, path: &str) -> anyhow::Result<FPackageId> {
 
     let mut result_store_entry: StoreEntry = StoreEntry::default();
     let mut result_package_buffer: Vec<u8> = Vec::new();
@@ -659,14 +659,12 @@ fn serialize_zen_asset(writer: &mut IoStoreWriter, builder: &ZenPackageBuilder, 
     // Serialize package exports either directly (if not using legacy export bundles) or remap them using the offsets from the export bundles
     result_package_writer.write(&legacy_asset_bundle.exports_file_buffer)?;
 
-    // TODO: write file paths for all of the chunks written down
-
     // Write package header (and exports)
     let package_chunk_id = FIoChunkId::from_package_id(builder.package_id, 0, EIoChunkType::ExportBundleData);
 
     // Write export buffer without any changes if we are following cooked offsets, otherwise we need to write them in export bundle order instead
     if builder.container_header_version >= EIoContainerHeaderVersion::NoExportInfo {
-        writer.write_package_chunk(package_chunk_id, None, &result_package_buffer, &result_store_entry)?;
+        writer.write_package_chunk(package_chunk_id, Some(path), &result_package_buffer, &result_store_entry)?;
     } else {
         write_exports_in_bundle_order(&mut result_package_writer, builder, &legacy_asset_bundle.exports_file_buffer)?;
     }
@@ -690,7 +688,7 @@ fn serialize_zen_asset(writer: &mut IoStoreWriter, builder: &ZenPackageBuilder, 
 }
 
 // Builds zen asset and writes it into the container using the provided serialized legacy asset and package version
-pub(crate) fn build_zen_asset(writer: &mut IoStoreWriter, legacy_asset: &FSerializedAssetBundle, package_version_fallback: Option<FPackageFileVersion>) -> anyhow::Result<FPackageId> {
+pub(crate) fn build_zen_asset(writer: &mut IoStoreWriter, legacy_asset: &FSerializedAssetBundle, path: &str, package_version_fallback: Option<FPackageFileVersion>) -> anyhow::Result<FPackageId> {
 
     // Read legacy package header
     let mut asset_header_reader = Cursor::new(&legacy_asset.asset_file_buffer);
@@ -706,5 +704,5 @@ pub(crate) fn build_zen_asset(writer: &mut IoStoreWriter, legacy_asset: &FSerial
     build_zen_preload_dependencies(&mut builder)?;
 
     // Serialize the resulting asset into the container writer
-    serialize_zen_asset(writer, &builder, legacy_asset)
+    serialize_zen_asset(writer, &builder, legacy_asset, path)
 }

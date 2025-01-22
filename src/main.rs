@@ -775,11 +775,13 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
         Ok(())
     }
 
+    let mount_point = "../../../";
+
     let mut writer = IoStoreWriter::new(
         args.output,
         args.version.toc_version(),
         Some(args.version.container_header_version()),
-        "../../..".to_string(),
+        mount_point.to_string()
     )?;
 
     let mut paths = vec![];
@@ -825,6 +827,7 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
         zen_asset_conversion::build_zen_asset(
             &mut writer,
             &bundle,
+            &Path::new(mount_point).join(relative_path).to_string_lossy(),
             Some(FPackageFileVersion::create_ue5(
                 args.version.object_ue5_version(),
             )),
