@@ -148,7 +148,7 @@ impl<'a> FZenPackageContext<'a> {
         let container_version = self.store_access.container_file_version().ok_or_else(|| { anyhow!("Failed to retrieve container TOC version") })?;
         let container_header_version = self.store_access.container_header_version().ok_or_else(|| { anyhow!("Failed to retrieve container header version") })?;
 
-        let zen_package_header = FZenPackageHeader::deserialize(&mut zen_package_buffer, package_store_entry_ref.unwrap(), container_version, container_header_version, self.fallback_package_file_version);
+        let zen_package_header = FZenPackageHeader::deserialize(&mut zen_package_buffer, package_store_entry_ref, container_version, container_header_version, self.fallback_package_file_version);
 
         // Mark the package as failed if we failed to parse the header
         if let Err(header_error) = zen_package_header {

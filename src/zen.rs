@@ -672,7 +672,7 @@ impl FZenPackageHeader {
     }
 
     #[instrument(skip_all, name = "FZenPackageHeader")]
-    pub(crate) fn deserialize<S: Read + Seek>(s: &mut S, store_entry: StoreEntry, container_version: EIoStoreTocVersion, header_version: EIoContainerHeaderVersion, package_version_override: Option<FPackageFileVersion>) -> Result<Self> {
+    pub(crate) fn deserialize<S: Read + Seek>(s: &mut S, optional_store_entry: Option<StoreEntry>, container_version: EIoStoreTocVersion, header_version: EIoContainerHeaderVersion, package_version_override: Option<FPackageFileVersion>) -> Result<Self> {
 
         let package_start_offset = s.stream_position()?;
         let summary: FZenPackageSummary = FZenPackageSummary::deserialize(s, header_version)?;
@@ -765,6 +765,8 @@ impl FZenPackageHeader {
 
             let graph_data_start_offset = package_start_offset + summary.graph_data_offset as u64;
             s.seek(SeekFrom::Start(graph_data_start_offset))?;
+            let store_entry = optional_store_entry.as_ref()
+                .ok_or_else(|| { anyhow!("Zen package versions before ImportedPackageNames cannot be parsed without their associated package store entry") })?;
 
             let export_bundles_count = store_entry.export_counts.export_bundle_count as usize;
             export_bundle_headers = s.de_ctx(export_bundles_count)?;
@@ -783,6 +785,22 @@ impl FZenPackageHeader {
             imported_package_names = s.de()?;
         }
 
+        let mut imported_packages: Vec<FPackageId> = Vec::new();
+        let mut shader_map_hashes: Vec<FSHAHash> = Vec::new();
+
+        // Derive information from the store entry directly if it is available
+        if let Some(store_entry) = optional_store_entry {
+            imported_packages = store_entry.imported_packages;
+            shader_map_hashes = store_entry.shader_map_hashes;
+        }
+        // If we have imported package names, we can derive imported_packages from it. Shader map hashes are empty in that case
+        else if summary.imported_package_names_offset > 0 {
+            imported_packages = imported_package_names.imported_package_names.iter().map(|x| { FPackageId::from_name(x) }).collect();
+        // Package store entry is required to parse this package otherwise
+        } else {
+            bail!("Zen package versions before ImportedPackageNames cannot be parsed without their associated package store entry");
+        }
+
         Ok(Self{
             summary,
             versioning_info,
@@ -796,8 +814,8 @@ impl FZenPackageHeader {
             dependency_bundle_headers,
             dependency_bundle_entries,
             imported_package_names: imported_package_names.imported_package_names,
-            imported_packages: store_entry.imported_packages,
-            shader_map_hashes: store_entry.shader_map_hashes,
+            imported_packages,
+            shader_map_hashes,
             is_unversioned,
             internal_dependency_arcs,
             imported_package_dependencies,
@@ -955,7 +973,7 @@ mod test {
         )?);
 
         let header = ser_hex::read("out/zen_asset_parsing.trace.json", &mut stream, |x| {
-            FZenPackageHeader::deserialize(x, StoreEntry::default(), EIoStoreTocVersion::OnDemandMetaData, EIoContainerHeaderVersion::NoExportInfo, None)
+            FZenPackageHeader::deserialize(x, None, EIoStoreTocVersion::OnDemandMetaData, EIoContainerHeaderVersion::NoExportInfo, None)
         })?;
         let package_name = header.package_name();
 
