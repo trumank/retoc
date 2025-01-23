@@ -778,7 +778,7 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
     let mount_point = "../../../";
 
     let mut writer = IoStoreWriter::new(
-        args.output,
+        &args.output,
         args.version.toc_version(),
         Some(args.version.container_header_version()),
         mount_point.to_string(),
@@ -836,6 +836,19 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
     }
 
     writer.finalize()?;
+
+    // creat empty pak file (necessary for game to detect and load container)
+    repak::PakBuilder::new()
+        .writer(
+            &mut BufWriter::new(fs::File::create(
+                Path::new(&args.output).with_extension("pak"),
+            )?),
+            repak::Version::V11,
+            mount_point.to_string(),
+            None,
+        )
+        .write_index()?;
+
     Ok(())
 }
 
