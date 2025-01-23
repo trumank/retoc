@@ -440,8 +440,8 @@ fn build_zen_dependency_bundle_new(builder: &mut ZenPackageBuilder, sorted_deps:
 
         for from_dependency_node in export_dependencies.get(&to_dependency_node).unwrap_or(&Vec::new()) {
 
-            // Skip nodes that do not have the matching command type
-            if from_dependency_node.command_type != from_command_type {
+            // Skip nodes that do not have the matching command type, and nodes to ourselves (e.g. serialize depends on create)
+            if from_dependency_node.command_type == from_command_type && from_dependency_node.package_index != to_dependency_node.package_index {
 
                 // If this is an export, add the dependency bundle entry at all times
                 if from_dependency_node.package_index.is_export() {
@@ -778,6 +778,8 @@ mod test {
         assert_eq!(original_zen_asset_package.imported_public_export_hashes.clone(), converted_zen_asset_package.imported_public_export_hashes.clone());
         assert_eq!(original_zen_asset_package.import_map.clone(), converted_zen_asset_package.import_map.clone());
         assert_eq!(original_zen_asset_package.export_map.clone(), converted_zen_asset_package.export_map.clone());
+        assert_eq!(original_zen_asset_package.dependency_bundle_headers.clone(), converted_zen_asset_package.dependency_bundle_headers.clone());
+        assert_eq!(original_zen_asset_package.dependency_bundle_entries.clone(), converted_zen_asset_package.dependency_bundle_entries.clone());
 
         // Make sure export blob is identical after the header size. Offsets in export map are relative to the end of the header so if they are correct and this data is correct exports are correct
         assert_eq!(original_zen_asset[(original_zen_asset_package.summary.header_size as usize)..].to_vec(), asset_exports_buffer.clone(), "Uexp file and the original zen asset exports do not match");
