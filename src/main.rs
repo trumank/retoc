@@ -781,13 +781,14 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
         args.output,
         args.version.toc_version(),
         Some(args.version.container_header_version()),
-        mount_point.to_string()
+        mount_point.to_string(),
     )?;
 
     let mut paths = vec![];
 
     let check_path = |path: &Path| {
-        !args.filter
+        !args
+            .filter
             .as_ref()
             .is_some_and(|f| !path.to_string_lossy().contains(f))
     };
@@ -827,7 +828,7 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
         zen_asset_conversion::build_write_zen_asset(
             &mut writer,
             &bundle,
-
+            &Path::new(mount_point).join(relative_path).to_string_lossy(),
             Some(FPackageFileVersion::create_ue5(
                 args.version.object_ue5_version(),
             )),
