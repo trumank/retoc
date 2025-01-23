@@ -647,29 +647,34 @@ fn write_exports_in_bundle_order<S: Write>(writer: &mut S, builder: &ZenPackageB
     Ok({})
 }
 
-fn serialize_zen_asset(writer: &mut IoStoreWriter, builder: &ZenPackageBuilder, legacy_asset_bundle: &FSerializedAssetBundle) -> anyhow::Result<FPackageId> {
+fn serialize_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: &FSerializedAssetBundle) -> anyhow::Result<(StoreEntry, Vec<u8>)> {
 
-    let mut result_store_entry: StoreEntry = StoreEntry::default();
     let mut result_package_buffer: Vec<u8> = Vec::new();
     let mut result_package_writer = Cursor::new(&mut result_package_buffer);
+    let mut result_store_entry: StoreEntry = StoreEntry::default();
 
     // Serialize package header
     FZenPackageHeader::serialize(&builder.zen_package, &mut result_package_writer, &mut result_store_entry, builder.container_header_version)?;
 
-    // Serialize package exports either directly (if not using legacy export bundles) or remap them using the offsets from the export bundles
-    result_package_writer.write(&legacy_asset_bundle.exports_file_buffer)?;
+    if builder.container_header_version >= EIoContainerHeaderVersion::NoExportInfo {
+        // Write export buffer without any changes if we are following cooked offsets
+        result_package_writer.write(&legacy_asset_bundle.exports_file_buffer)?;
+    } else {
+        // Write export buffer in bundle order otherwise, moving exports around to follow bundle serialization order
+        write_exports_in_bundle_order(&mut result_package_writer, builder, &legacy_asset_bundle.exports_file_buffer)?;
+    }
+    Ok((result_store_entry, result_package_buffer))
+}
+
+fn write_zen_asset(writer: &mut IoStoreWriter, builder: &ZenPackageBuilder, legacy_asset_bundle: &FSerializedAssetBundle) -> anyhow::Result<FPackageId> {
+
+    let (result_store_entry, result_package_buffer) = serialize_zen_asset(builder, legacy_asset_bundle)?;
 
     // TODO: write file paths for all of the chunks written down
 
-    // Write package header (and exports)
+    // Write package chunk into zen
     let package_chunk_id = FIoChunkId::from_package_id(builder.package_id, 0, EIoChunkType::ExportBundleData);
-
-    // Write export buffer without any changes if we are following cooked offsets, otherwise we need to write them in export bundle order instead
-    if builder.container_header_version >= EIoContainerHeaderVersion::NoExportInfo {
-        writer.write_package_chunk(package_chunk_id, None, &result_package_buffer, &result_store_entry)?;
-    } else {
-        write_exports_in_bundle_order(&mut result_package_writer, builder, &legacy_asset_bundle.exports_file_buffer)?;
-    }
+    writer.write_package_chunk(package_chunk_id, None, &result_package_buffer, &result_store_entry)?;
 
     // Write bulk data chunk if it is present
     if let Some(bulk_data_buffer) = &legacy_asset_bundle.bulk_data_buffer {
@@ -689,15 +694,14 @@ fn serialize_zen_asset(writer: &mut IoStoreWriter, builder: &ZenPackageBuilder, 
     Ok(builder.package_id)
 }
 
-// Builds zen asset and writes it into the container using the provided serialized legacy asset and package version
-pub(crate) fn build_zen_asset(writer: &mut IoStoreWriter, legacy_asset: &FSerializedAssetBundle, package_version_fallback: Option<FPackageFileVersion>) -> anyhow::Result<FPackageId> {
+fn build_zen_asset_internal(legacy_asset: &FSerializedAssetBundle, container_header_version: EIoContainerHeaderVersion, package_version_fallback: Option<FPackageFileVersion>) -> anyhow::Result<ZenPackageBuilder> {
 
     // Read legacy package header
     let mut asset_header_reader = Cursor::new(&legacy_asset.asset_file_buffer);
     let legacy_package_header = FLegacyPackageHeader::deserialize(&mut asset_header_reader, package_version_fallback)?;
 
     // Construct zen asset from the package header
-    let mut builder = create_asset_builder(legacy_package_header, writer.container_header_version());
+    let mut builder = create_asset_builder(legacy_package_header, container_header_version);
 
     // Build zen asset data
     setup_zen_package_summary(&mut builder)?;
@@ -705,6 +709,52 @@ pub(crate) fn build_zen_asset(writer: &mut IoStoreWriter, legacy_asset: &FSerial
     build_zen_export_map(&mut builder)?;
     build_zen_preload_dependencies(&mut builder)?;
 
-    // Serialize the resulting asset into the container writer
-    serialize_zen_asset(writer, &builder, legacy_asset)
+    Ok(builder)
 }
+
+// Builds zen asset and returns the resulting package ID, chunk data buffer, and it's store entry. Zen package conversion does not modify bulk data in any way.
+pub(crate) fn build_serialize_zen_asset(legacy_asset: &FSerializedAssetBundle, container_header_version: EIoContainerHeaderVersion, package_version_fallback: Option<FPackageFileVersion>) -> anyhow::Result<(FPackageId, StoreEntry, Vec<u8>)> {
+
+    let builder = build_zen_asset_internal(legacy_asset, container_header_version, package_version_fallback)?;
+
+    let (store_entry, package_data) = serialize_zen_asset(&builder, legacy_asset)?;
+    Ok((builder.package_id, store_entry, package_data))
+}
+
+// Builds zen asset and writes it into the container using the provided serialized legacy asset and package version
+pub(crate) fn build_write_zen_asset(writer: &mut IoStoreWriter, legacy_asset: &FSerializedAssetBundle, package_version_fallback: Option<FPackageFileVersion>) -> anyhow::Result<FPackageId> {
+
+    let builder = build_zen_asset_internal(legacy_asset, writer.container_header_version(), package_version_fallback)?;
+
+    // Serialize the resulting asset into the container writer
+    write_zen_asset(writer, &builder, legacy_asset)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use fs_err as fs;
+    use crate::zen::EUnrealEngineObjectUE5Version;
+
+    #[test]
+    fn test_zen_asset_identity_conversion() -> anyhow::Result<()> {
+
+        let asset_header_buffer = fs::read("tests/UE5.4/BP_Table_Lamp.uasset")?;
+        let asset_exports_buffer = fs::read("tests/UE5.4/BP_Table_Lamp.uexp")?;
+        let original_zen_asset = fs::read("tests/UE5.4/BP_Table_Lamp.uzenasset")?;
+
+        let serialized_asset_bundle = FSerializedAssetBundle{
+            asset_file_buffer: asset_header_buffer,
+            exports_file_buffer: asset_exports_buffer,
+            bulk_data_buffer: None, optional_bulk_data_buffer: None, memory_mapped_bulk_data_buffer: None,
+        };
+
+        // UE5.4, NoExportInfo zen header and PropertyTagCompleteTypeName package file version
+        let (_, _, converted_zen_asset) = build_serialize_zen_asset(&serialized_asset_bundle, EIoContainerHeaderVersion::NoExportInfo,
+        Some(FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::PropertyTagCompleteTypeName)))?;
+
+        assert_eq!(original_zen_asset, converted_zen_asset, "Zen asset converted from the legacy asset is not identical to the original zen asset");
+        Ok(())
+    }
+}
+

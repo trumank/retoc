@@ -944,6 +944,7 @@ impl FLegacyPackageHeader {
     }
 }
 
+#[derive(Default, Clone)]
 pub(crate) struct FSerializedAssetBundle {
     pub(crate) asset_file_buffer: Vec<u8>, // uasset
     pub(crate) exports_file_buffer: Vec<u8>, // uexp

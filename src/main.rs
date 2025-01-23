@@ -822,7 +822,7 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
             memory_mapped_bulk_data_buffer: read_optional(&path.with_extension("m.ubulk"))?,
         };
 
-        zen_asset_conversion::build_zen_asset(
+        zen_asset_conversion::build_write_zen_asset(
             &mut writer,
             &bundle,
             Some(FPackageFileVersion::create_ue5(
