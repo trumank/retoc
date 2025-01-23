@@ -821,7 +821,7 @@ impl FLegacyPackageHeader {
 
         // Data resources are absent on packages below UE 5.2
         let mut data_resources: Vec<FObjectDataResource> = Vec::new();
-        if package_summary.data_resource_offset != 0 {
+        if package_summary.data_resource_offset > 0 {
 
             let data_resource_start_offset = package_summary_offset + package_summary.data_resource_offset as u64;
             s.seek(SeekFrom::Start(data_resource_start_offset))?;

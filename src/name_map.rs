@@ -160,7 +160,7 @@ pub(crate) enum EMappedNameType {
     Container = 1,
     Global = 2,
 }
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct FMappedName {
     index_and_type: u32,
     pub(crate) number: u32,

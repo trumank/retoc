@@ -146,22 +146,29 @@ fn resolve_legacy_package_object(package: &FLegacyPackageHeader, object_index: F
     // Reserve the outer chain now
     package_object_outer_chain.reverse();
 
-    // If the innermost package index is an import, it's a package name. Otherwise, this package name is the package name
-    let package_name: String = if package_object_outer_chain[0].is_import() {
+    let mut package_name: String;
+    let mut start_object_index: usize;
+
+    if package_object_outer_chain[0].is_import() {
         let package_import_index = package_object_outer_chain[0].to_import_index() as usize;
-        package.name_map.get(package.imports[package_import_index].object_name).to_string()
+
+        // If the innermost package index is an import, it's a package name. Otherwise, this package name is the package name
+        package_name = package.name_map.get(package.imports[package_import_index].object_name).to_string();
+        start_object_index = 1;
+
     } else {
-        package.summary.package_name.clone()
+         // This is an export, package name is this package name and we should start path building at index 0
+        package_name = package.summary.package_name.clone();
+        start_object_index = 0;
     };
 
     // Build full object name now. We append all elements and use / as a path separator
-    let mut full_object_name: String = String::new();
-    for i in 0..package_object_outer_chain.len() {
+    let mut full_object_name: String = package_name.clone();
+    for i in start_object_index..package_object_outer_chain.len() {
 
-        // Append the path separator if this is not the first element
-        if i != 0 {
-            full_object_name.push('/');
-        }
+        // Append object path separator
+        full_object_name.push('/');
+
         // Append the name of the object if it's an import
         if package_object_outer_chain[i].is_import() {
             let import_index = package_object_outer_chain[i].to_import_index() as usize;
@@ -468,6 +475,8 @@ fn build_zen_dependency_bundle_new(builder: &mut ZenPackageBuilder, sorted_deps:
         // Create dependency header for this export
         let first_entry_index = builder.zen_package.dependency_bundle_entries.len() as i32;
 
+        dbg!((export_index, create_before_create_deps.clone(), serialize_before_create_deps.clone(), create_before_serialize_deps.clone(), serialize_before_serialize_deps.clone()));
+
         builder.zen_package.dependency_bundle_headers.push(FDependencyBundleHeader{
             first_entry_index,
             create_before_create_dependencies: create_before_create_deps.len() as u32,
@@ -732,8 +741,10 @@ pub(crate) fn build_write_zen_asset(writer: &mut IoStoreWriter, legacy_asset: &F
 
 #[cfg(test)]
 mod test {
+    use std::process::abort;
     use super::*;
     use fs_err as fs;
+    use crate::{EIoStoreTocVersion, FSHAHash};
     use crate::zen::EUnrealEngineObjectUE5Version;
 
     #[test]
@@ -741,7 +752,6 @@ mod test {
 
         let asset_header_buffer = fs::read("tests/UE5.4/BP_Table_Lamp.uasset")?;
         let asset_exports_buffer = fs::read("tests/UE5.4/BP_Table_Lamp.uexp")?;
-        let original_zen_asset = fs::read("tests/UE5.4/BP_Table_Lamp.uzenasset")?;
 
         let serialized_asset_bundle = FSerializedAssetBundle{
             asset_file_buffer: asset_header_buffer,
@@ -749,11 +759,27 @@ mod test {
             bulk_data_buffer: None, optional_bulk_data_buffer: None, memory_mapped_bulk_data_buffer: None,
         };
 
-        // UE5.4, NoExportInfo zen header and PropertyTagCompleteTypeName package file version
-        let (_, _, converted_zen_asset) = build_serialize_zen_asset(&serialized_asset_bundle, EIoContainerHeaderVersion::NoExportInfo,
-        Some(FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::PropertyTagCompleteTypeName)))?;
+        // UE5.4, NoExportInfo zen header, OnDemandMetaData TOC version, and PropertyTagCompleteTypeName package file version
+        let package_file_version = Some(FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::PropertyTagCompleteTypeName));
+        let container_header_version = EIoContainerHeaderVersion::NoExportInfo;
+        let container_toc_version = EIoStoreTocVersion::OnDemandMetaData;
 
-        assert_eq!(original_zen_asset, converted_zen_asset, "Zen asset converted from the legacy asset is not identical to the original zen asset");
+        let original_zen_asset = fs::read("tests/UE5.4/BP_Table_Lamp.uzenasset")?;
+        let original_zen_asset_package = FZenPackageHeader::deserialize(&mut Cursor::new(&original_zen_asset), None, container_toc_version, container_header_version, package_file_version.clone())?;
+
+        let converted_zen_asset_builder = build_zen_asset_internal(&serialized_asset_bundle, container_header_version, package_file_version.clone())?;
+        let (_, converted_zen_asset) = serialize_zen_asset(&converted_zen_asset_builder, &serialized_asset_bundle)?;
+
+        //dbg!(original_zen_asset_package.clone());
+        //dbg!(converted_zen_asset_builder.zen_package.clone());
+
+        assert_eq!(original_zen_asset_package.name_map.copy_raw_names(), converted_zen_asset_builder.zen_package.name_map.copy_raw_names());
+        assert_eq!(original_zen_asset_package.imported_packages.clone(), converted_zen_asset_builder.zen_package.imported_packages.clone());
+        assert_eq!(original_zen_asset_package.imported_package_names.clone(), converted_zen_asset_builder.zen_package.imported_package_names.clone());
+        assert_eq!(original_zen_asset_package.imported_public_export_hashes.clone(), converted_zen_asset_builder.zen_package.imported_public_export_hashes.clone());
+        assert_eq!(original_zen_asset_package.import_map.clone(), converted_zen_asset_builder.zen_package.import_map.clone());
+        assert_eq!(original_zen_asset_package.export_map.clone(), converted_zen_asset_builder.zen_package.export_map.clone());
+
         Ok(())
     }
 }

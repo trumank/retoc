@@ -263,7 +263,7 @@ impl Writeable for FBulkDataMapEntry {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, FromRepr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromRepr)]
 #[repr(u8)]
 pub(crate) enum EExportFilterFlags {
     None = 0,
@@ -282,7 +282,7 @@ pub(crate) enum EObjectFlags {
     ArchetypeObject = 0x00000020,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[repr(C)] // Needed to determine the number of export entries
 pub(crate) struct FExportMapEntry {
     pub(crate) cooked_serial_offset: u64,
@@ -341,7 +341,7 @@ pub(crate) enum EExportCommandType {
     #[default] Create,
     Serialize
 }
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(C)] // Needed to determine the number of export bundle entries
 pub(crate) struct FExportBundleEntry {
     pub(crate) local_export_index: u32,
@@ -366,7 +366,7 @@ impl Writeable for FExportBundleEntry {
     }
 }
 
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 #[repr(C)] // Needed to determine the number of bundle headers
 pub(crate) struct FDependencyBundleHeader {
     pub(crate) first_entry_index: i32,
@@ -438,7 +438,7 @@ impl Writeable for FPackageIndex {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(C)] // Needed to determine the number of bundle entries
 pub(crate) struct FDependencyBundleEntry {
     pub(crate) local_import_or_export_index: FPackageIndex,
@@ -634,7 +634,7 @@ impl Writeable for FZenPackageImportedPackageNamesContainer {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct FZenPackageHeader {
     pub(crate) summary: FZenPackageSummary,
     pub(crate) versioning_info: FZenPackageVersioningInfo,
