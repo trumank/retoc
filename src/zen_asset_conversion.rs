@@ -475,8 +475,6 @@ fn build_zen_dependency_bundle_new(builder: &mut ZenPackageBuilder, sorted_deps:
         // Create dependency header for this export
         let first_entry_index = builder.zen_package.dependency_bundle_entries.len() as i32;
 
-        dbg!((export_index, create_before_create_deps.clone(), serialize_before_create_deps.clone(), create_before_serialize_deps.clone(), serialize_before_serialize_deps.clone()));
-
         builder.zen_package.dependency_bundle_headers.push(FDependencyBundleHeader{
             first_entry_index,
             create_before_create_dependencies: create_before_create_deps.len() as u32,
@@ -755,7 +753,7 @@ mod test {
 
         let serialized_asset_bundle = FSerializedAssetBundle{
             asset_file_buffer: asset_header_buffer,
-            exports_file_buffer: asset_exports_buffer,
+            exports_file_buffer: asset_exports_buffer.clone(),
             bulk_data_buffer: None, optional_bulk_data_buffer: None, memory_mapped_bulk_data_buffer: None,
         };
 
@@ -766,19 +764,24 @@ mod test {
 
         let original_zen_asset = fs::read("tests/UE5.4/BP_Table_Lamp.uzenasset")?;
         let original_zen_asset_package = FZenPackageHeader::deserialize(&mut Cursor::new(&original_zen_asset), None, container_toc_version, container_header_version, package_file_version.clone())?;
-
-        let converted_zen_asset_builder = build_zen_asset_internal(&serialized_asset_bundle, container_header_version, package_file_version.clone())?;
-        let (_, converted_zen_asset) = serialize_zen_asset(&converted_zen_asset_builder, &serialized_asset_bundle)?;
+        
+        let (_, _, converted_zen_asset) = build_serialize_zen_asset(&serialized_asset_bundle, container_header_version, package_file_version.clone())?;
+        let converted_zen_asset_package = FZenPackageHeader::deserialize(&mut Cursor::new(&converted_zen_asset), None, container_toc_version, container_header_version, package_file_version.clone())?;
 
         //dbg!(original_zen_asset_package.clone());
-        //dbg!(converted_zen_asset_builder.zen_package.clone());
+        //dbg!(converted_zen_asset_package.clone());
 
-        assert_eq!(original_zen_asset_package.name_map.copy_raw_names(), converted_zen_asset_builder.zen_package.name_map.copy_raw_names());
-        assert_eq!(original_zen_asset_package.imported_packages.clone(), converted_zen_asset_builder.zen_package.imported_packages.clone());
-        assert_eq!(original_zen_asset_package.imported_package_names.clone(), converted_zen_asset_builder.zen_package.imported_package_names.clone());
-        assert_eq!(original_zen_asset_package.imported_public_export_hashes.clone(), converted_zen_asset_builder.zen_package.imported_public_export_hashes.clone());
-        assert_eq!(original_zen_asset_package.import_map.clone(), converted_zen_asset_builder.zen_package.import_map.clone());
-        assert_eq!(original_zen_asset_package.export_map.clone(), converted_zen_asset_builder.zen_package.export_map.clone());
+        // Make sure the header is equal between the original and the converted asset, minus the load order data
+        assert_eq!(original_zen_asset_package.name_map.copy_raw_names(), converted_zen_asset_package.name_map.copy_raw_names());
+        assert_eq!(original_zen_asset_package.imported_package_names.clone(), converted_zen_asset_package.imported_package_names.clone());
+        assert_eq!(original_zen_asset_package.imported_packages.clone(), converted_zen_asset_package.imported_packages.clone());
+        assert_eq!(original_zen_asset_package.imported_public_export_hashes.clone(), converted_zen_asset_package.imported_public_export_hashes.clone());
+        assert_eq!(original_zen_asset_package.import_map.clone(), converted_zen_asset_package.import_map.clone());
+        assert_eq!(original_zen_asset_package.export_map.clone(), converted_zen_asset_package.export_map.clone());
+
+        // Make sure export blob is identical after the header size. Offsets in export map are relative to the end of the header so if they are correct and this data is correct exports are correct
+        assert_eq!(original_zen_asset[(original_zen_asset_package.summary.header_size as usize)..].to_vec(), asset_exports_buffer.clone(), "Uexp file and the original zen asset exports do not match");
+        assert_eq!(original_zen_asset[(original_zen_asset_package.summary.header_size as usize)..].to_vec(), converted_zen_asset[(converted_zen_asset_package.summary.header_size as usize)..].to_vec(), "Original zen asset and converted zen asset exports do not match");
 
         Ok(())
     }

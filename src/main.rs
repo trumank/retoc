@@ -827,7 +827,7 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
         zen_asset_conversion::build_write_zen_asset(
             &mut writer,
             &bundle,
-            &Path::new(mount_point).join(relative_path).to_string_lossy(),
+
             Some(FPackageFileVersion::create_ue5(
                 args.version.object_ue5_version(),
             )),

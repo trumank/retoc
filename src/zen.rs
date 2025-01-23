@@ -628,8 +628,7 @@ impl Writeable for FZenPackageImportedPackageNamesContainer {
         }
 
         write_name_batch(s, &imported_package_names)?;
-
-        s.ser(&imported_package_name_numbers)?;
+        s.ser_no_length(&imported_package_name_numbers)?;
         Ok({})
     }
 }
@@ -884,7 +883,7 @@ impl FZenPackageHeader {
 
         // Import map starts directly after imported public hashes
         package_summary.import_map_offset = (s.stream_position()? - package_summary_offset) as i32;
-        for import_map_package_index in &self.imported_packages {
+        for import_map_package_index in &self.import_map {
             s.ser(import_map_package_index)?;
         }
 
