@@ -309,8 +309,8 @@ impl IoStoreTrait for IoStoreContainer {
         // assumes header has already been parsed
         indent_println!(
             depth,
-            "has_container_header: {}",
-            self.container_header.is_some()
+            "container_header_version: {:?}",
+            self.container_header.as_ref().map(|h| h.version)
         );
         indent_println!(
             depth,
