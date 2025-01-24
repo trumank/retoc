@@ -1271,6 +1271,7 @@ mod test {
         assert_eq!(converted_zen_shader_library.shader_indices, original_zen_shader_library.shader_indices);
         assert_eq!(converted_zen_shader_library.shader_entries, original_zen_shader_library.shader_entries);
         assert_eq!(converted_zen_shader_library.shader_map_entries, original_zen_shader_library.shader_map_entries);
+        assert_eq!(converted_zen_shader_library.shader_group_chunk_ids.len(), original_zen_shader_library.shader_group_chunk_ids.len());
         assert_eq!(converted_zen_shader_library.shader_group_entries.len(), original_zen_shader_library.shader_group_entries.len());
 
         for shader_group_index in 0..converted_zen_shader_library.shader_group_entries.len() {
