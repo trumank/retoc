@@ -1241,6 +1241,7 @@ mod test {
     #[test]
     fn test_zen_shader_library_identity_conversion() -> anyhow::Result<()> {
 
+        // Note that for legacy library only the header is included into the repository, shader code is omitted since it is irrelevant for this test and is very large
         let mut legacy_shader_library_reader = BufReader::new(fs::File::open(
             "tests/UE5.4/ShaderArchive-NuclearNightmare-PCD3D_SM6-PCD3D_SM6.ushaderbytecode",
         )?);
@@ -1270,8 +1271,14 @@ mod test {
         assert_eq!(converted_zen_shader_library.shader_indices, original_zen_shader_library.shader_indices);
         assert_eq!(converted_zen_shader_library.shader_entries, original_zen_shader_library.shader_entries);
         assert_eq!(converted_zen_shader_library.shader_map_entries, original_zen_shader_library.shader_map_entries);
+        assert_eq!(converted_zen_shader_library.shader_group_entries.len(), original_zen_shader_library.shader_group_entries.len());
 
-        //assert_eq!(converted_zen_shader_library.shader_group_entries, original_zen_shader_library.shader_group_entries);
+        for shader_group_index in 0..converted_zen_shader_library.shader_group_entries.len() {
+            assert_eq!(converted_zen_shader_library.shader_group_entries[shader_group_index].num_shaders, original_zen_shader_library.shader_group_entries[shader_group_index].num_shaders);
+            assert_eq!(converted_zen_shader_library.shader_group_entries[shader_group_index].shader_indices_offset, original_zen_shader_library.shader_group_entries[shader_group_index].shader_indices_offset);
+            assert_eq!(converted_zen_shader_library.shader_group_entries[shader_group_index].uncompressed_size, original_zen_shader_library.shader_group_entries[shader_group_index].uncompressed_size);
+            // Compressed sizes can be different because Oodle compression is not deterministic
+        }
 
         Ok({})
     }
