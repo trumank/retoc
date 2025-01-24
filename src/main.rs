@@ -827,7 +827,7 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
 
         let shader_library_buffer = fs::read(&path)?;
         let asset_metadata_filename = get_shader_asset_info_filename_from_library_filename(&path.file_name().unwrap().to_string_lossy())?;
-        let asset_metadata_path = path.join(asset_metadata_filename);
+        let asset_metadata_path = path.parent().map(|x| { x.join(asset_metadata_filename) }).unwrap_or(PathBuf::from(&asset_metadata_filename));
 
         // Read asset metadata and store it into the global map to be picked up by zen packages later
         if fs::metadata(&asset_metadata_path)?.is_file() {
