@@ -60,9 +60,7 @@ impl<'a> FZenPackageContext<'a> {
                 return Ok(self.script_objects.read().unwrap());
             }
 
-            let script_objects_id = FIoChunkId::create(0, 0, EIoChunkType::ScriptObjects);
-            let script_objects_data = self.store_access.read(script_objects_id)?;
-            let script_objects: ZenScriptObjects = Cursor::new(script_objects_data).de()?;
+            let script_objects = self.store_access.load_script_objects()?;
             let mut script_objects_resolved_as_classes = HashSet::new();
 
             // Do a quick check over all script objects to track which ones are being pointed to by the CDOs. These are 100% UClasses

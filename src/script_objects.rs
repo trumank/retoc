@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-use std::io::Seek;
 use std::io::{Read, Write};
 
 use anyhow::Result;
@@ -8,7 +7,7 @@ use serde::Serializer;
 use strum::FromRepr;
 use tracing::instrument;
 
-use crate::name_map::EMappedNameType;
+use crate::name_map::{read_name_batch_parts, EMappedNameType};
 use crate::{
     name_map::{FMappedName, FNameMap},
     read_array,
@@ -21,24 +20,34 @@ pub(crate) struct ZenScriptObjects {
     pub(crate) script_objects: Vec<FScriptObjectEntry>,
     pub(crate) script_object_lookup: HashMap<FPackageObjectIndex, FScriptObjectEntry>,
 }
-impl Readable for ZenScriptObjects {
+impl ZenScriptObjects {
     #[instrument(skip_all, name = "ZenScriptObjects")]
-    fn de<S: Read>(s: &mut S) -> Result<Self> {
+    pub(crate) fn deserialize_new<S: Read>(s: &mut S) -> Result<Self> {
         let global_name_map: FNameMap = FNameMap::deserialize(s, EMappedNameType::Global)?;
         let num_script_objects: u32 = s.de()?;
         let script_objects = read_array(num_script_objects as usize, s, FScriptObjectEntry::read)?;
-
+        Ok(Self::new(script_objects, global_name_map))
+    }
+    #[instrument(skip_all, name = "ZenScriptObjects")]
+    pub(crate) fn deserialize_old<S: Read>(s: &mut S, names: &[u8]) -> Result<Self> {
+        let global_name_map: FNameMap =
+            FNameMap::create_from_names(EMappedNameType::Global, read_name_batch_parts(names)?);
+        let num_script_objects: u32 = s.de()?;
+        let script_objects = read_array(num_script_objects as usize, s, FScriptObjectEntry::read)?;
+        Ok(Self::new(script_objects, global_name_map))
+    }
+    fn new(script_objects: Vec<FScriptObjectEntry>, global_name_map: FNameMap) -> Self {
         // Build lookup by package object index for fast access
         let mut script_object_lookup: HashMap<FPackageObjectIndex, FScriptObjectEntry> =
-            HashMap::with_capacity(num_script_objects as usize);
+            HashMap::with_capacity(script_objects.len());
         script_objects.iter().for_each(|script_object| {
             script_object_lookup.insert(script_object.global_index, *script_object);
         });
-        Ok(Self {
+        Self {
             global_name_map,
             script_objects,
             script_object_lookup,
-        })
+        }
     }
 }
 
@@ -176,11 +185,27 @@ mod test {
 
     use super::*;
     #[test]
-    fn test_read_script_objects() -> Result<()> {
+    fn test_read_script_objects_new() -> Result<()> {
         let mut stream = BufReader::new(fs::File::open("tests/UE5.3/ScriptObjects.bin")?);
 
-        let script_objects: ZenScriptObjects =
-            ser_hex::TraceStream::new("out/script_objects.trace.json", &mut stream).de()?;
+        let script_objects = ZenScriptObjects::deserialize_new(&mut stream)?;
+
+        for s in script_objects.script_objects {
+            println!("{}:", script_objects.global_name_map.get(s.object_name));
+            println!("  global_index:    {:?}", s.global_index.value());
+            println!("  outer_index:     {:?}", s.outer_index.value());
+            println!("  cdo_class_index: {:?}", s.cdo_class_index.value());
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_script_objects_old() -> Result<()> {
+        let names = fs::read("tests/UE4.27/LoaderGlobalNames_1.bin")?;
+        let mut meta = BufReader::new(fs::File::open("tests/UE4.27/LoaderInitialLoadMeta_1.bin")?);
+
+        let script_objects = ZenScriptObjects::deserialize_old(&mut meta, &names)?;
 
         for s in script_objects.script_objects {
             println!("{}:", script_objects.global_name_map.get(s.object_name));

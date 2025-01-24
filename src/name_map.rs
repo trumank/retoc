@@ -1,7 +1,7 @@
 use anyhow::Result;
 use byteorder::{WriteBytesExt, BE};
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{Cursor, Write};
 use std::{borrow::Cow, io::Read};
 use strum::{Display, FromRepr};
 use tracing::instrument;
@@ -82,6 +82,17 @@ pub(crate) fn write_name_batch<S: Write>(s: &mut S, names: &[String]) -> Result<
         }
     }
     Ok(())
+}
+
+pub(crate) fn read_name_batch_parts(names_buffer: &[u8]) -> Result<Vec<String>> {
+    let mut names = vec![];
+    let mut s = Cursor::new(names_buffer);
+    while s.position() < names_buffer.len() as u64 {
+        let l = i16::from_be_bytes(s.de()?);
+        let l = if l < 0 { i16::MIN - l } else { l };
+        names.push(read_string(l as i32, &mut s)?);
+    }
+    Ok(names)
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

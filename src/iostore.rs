@@ -1,6 +1,6 @@
 use std::{
     ffi::OsStr,
-    io::BufReader,
+    io::{BufReader, Cursor},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -12,6 +12,7 @@ use crate::{
     chunk_id::FIoChunkIdRaw,
     container_header::{EIoContainerHeaderVersion, FIoContainerHeader, StoreEntry},
     file_pool::FilePool,
+    script_objects::ZenScriptObjects,
     ser::*,
     Config, EIoChunkType, EIoStoreTocVersion, FIoChunkId, FPackageId, Toc,
 };
@@ -67,6 +68,22 @@ pub trait IoStoreTrait: Send + Sync {
     /// Get absolute path (including mount point) if it has one
     fn chunk_path(&self, chunk_id: FIoChunkId) -> Option<String>;
     fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntry>;
+
+    fn load_script_objects(&self) -> Result<ZenScriptObjects> {
+        let script_objects_id = FIoChunkId::create(0, 0, EIoChunkType::ScriptObjects);
+        if self.has_chunk_id(script_objects_id) {
+            let script_objects_data = self.read(script_objects_id)?;
+            ZenScriptObjects::deserialize_new(&mut Cursor::new(script_objects_data))
+        } else {
+            let script_objects_data = self.read(FIoChunkId::create(
+                0,
+                0,
+                EIoChunkType::LoaderInitialLoadMeta,
+            ))?;
+            let names = self.read(FIoChunkId::create(0, 0, EIoChunkType::LoaderGlobalNames))?;
+            ZenScriptObjects::deserialize_old(&mut Cursor::new(script_objects_data), &names)
+        }
+    }
 }
 
 pub struct ChunkInfo<'a> {
