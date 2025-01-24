@@ -1,8 +1,8 @@
-use std::cmp::{min, Ordering};
 use crate::chunk_id::FIoChunkIdRaw;
 use crate::compression::{compress, decompress, CompressionMethod};
 use crate::container_header::EIoContainerHeaderVersion;
 use crate::iostore::IoStoreTrait;
+use crate::iostore_writer::IoStoreWriter;
 use crate::logging::*;
 use crate::ser::{ReadExt, Readable, WriteExt, Writeable};
 use crate::zen::FZenPackageHeader;
@@ -10,15 +10,15 @@ use crate::{EIoChunkType, EIoStoreTocVersion, FIoChunkId, FSHAHash, UEPath};
 use anyhow::{anyhow, bail};
 use key_mutex::Empty;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
-use std::fmt::{format, Debug, Formatter};
-use std::io::{Cursor, Read, Seek, SeekFrom, Write};
-use sha1::{Digest, Sha1};
 use sha1::digest::{DynDigest, Update};
-use strum::{Display, FromRepr, ToString};
-use crate::iostore_writer::IoStoreWriter;
+use sha1::{Digest, Sha1};
+use std::cmp::{min, Ordering};
+use std::collections::{HashMap, HashSet};
+use std::fmt::{Debug, Formatter};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use strum::{Display, FromRepr};
 
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 struct FIoStoreShaderMapEntry
 {
     shader_indices_offset: u32,
@@ -40,7 +40,7 @@ impl Writeable for FIoStoreShaderMapEntry {
     }
 }
 
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Default, PartialEq, Eq)]
 struct FIoStoreShaderCodeEntry {
     packed: u64,
 }
@@ -86,7 +86,7 @@ impl Debug for FIoStoreShaderCodeEntry {
     }
 }
 
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 struct FIoStoreShaderGroupEntry {
     shader_indices_offset: u32,
     num_shaders: u32,
@@ -977,7 +977,7 @@ fn build_io_store_shader_code_archive_header(shader_library: &FShaderLibraryHead
 
     // We have the resulting shader group contents, we can create the IO store shader library header now
     let mut io_store_library_header = FIoStoreShaderCodeArchiveHeader{
-        shader_map_hashes: shader_library.shader_hashes.clone(),
+        shader_map_hashes: shader_library.shader_map_hashes.clone(),
         shader_hashes: shader_library.shader_hashes.clone(),
         shader_group_chunk_ids: Vec::new(),
         shader_map_entries,
@@ -1236,5 +1236,43 @@ mod test {
                 x.shader_uncompressed_offset_in_group(), uncompressed_group_size);
         });
         Ok(())
+    }
+
+    #[test]
+    fn test_zen_shader_library_identity_conversion() -> anyhow::Result<()> {
+
+        let mut legacy_shader_library_reader = BufReader::new(fs::File::open(
+            "tests/UE5.4/ShaderArchive-NuclearNightmare-PCD3D_SM6-PCD3D_SM6.ushaderbytecode",
+        )?);
+        let legacy_library_version: u32 = legacy_shader_library_reader.de()?;
+        assert_eq!(legacy_library_version, 2, "expected legacy shader library header version to be 2");
+        let legacy_shader_library = FShaderLibraryHeader::deserialize(&mut legacy_shader_library_reader)?;
+
+        let mut zen_shader_library_reader = BufReader::new(fs::File::open(
+            "tests/UE5.4/ShaderArchive-NuclearNightmare-PCD3D_SM6-PCD3D_SM6.uzenshaderbytecode",
+        )?);
+        let zen_library_version: u32 = zen_shader_library_reader.de()?;
+        assert_eq!(zen_library_version, 1, "expected zen shader library header version to be initial");
+        let original_zen_shader_library = FIoStoreShaderCodeArchiveHeader::deserialize(&mut zen_shader_library_reader, EIoStoreShaderLibraryVersion::Initial)?;
+
+        // Check the data that is completely unchanged from legacy to zen lib first
+        assert_eq!(legacy_shader_library.shader_hashes, original_zen_shader_library.shader_hashes);
+        assert_eq!(legacy_shader_library.shader_map_hashes, original_zen_shader_library.shader_map_hashes);
+        assert_eq!(legacy_shader_library.shader_indices, original_zen_shader_library.shader_indices);
+
+        // Convert the legacy shader library back into zen
+        let max_shader_group_size = 1024 * 1024;
+        let converted_zen_shader_library = build_io_store_shader_code_archive_header(&legacy_shader_library, "PCD3D_SM6", EIoStoreTocVersion::OnDemandMetaData, max_shader_group_size);
+
+        // Compare original zen shader library and converted zen shader library
+        assert_eq!(converted_zen_shader_library.shader_hashes, original_zen_shader_library.shader_hashes);
+        assert_eq!(converted_zen_shader_library.shader_map_hashes, original_zen_shader_library.shader_map_hashes);
+        assert_eq!(converted_zen_shader_library.shader_indices, original_zen_shader_library.shader_indices);
+        assert_eq!(converted_zen_shader_library.shader_entries, original_zen_shader_library.shader_entries);
+        assert_eq!(converted_zen_shader_library.shader_map_entries, original_zen_shader_library.shader_map_entries);
+
+        //assert_eq!(converted_zen_shader_library.shader_group_entries, original_zen_shader_library.shader_group_entries);
+
+        Ok({})
     }
 }
