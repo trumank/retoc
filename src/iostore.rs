@@ -70,9 +70,9 @@ pub trait IoStoreTrait: Send + Sync {
     fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntry>;
 
     fn load_script_objects(&self) -> Result<ZenScriptObjects> {
-        let script_objects_id = FIoChunkId::create(0, 0, EIoChunkType::ScriptObjects);
-        if self.has_chunk_id(script_objects_id) {
-            let script_objects_data = self.read(script_objects_id)?;
+        if self.container_file_version().unwrap() > EIoStoreTocVersion::PerfectHash {
+            let script_objects_data =
+                self.read(FIoChunkId::create(0, 0, EIoChunkType::ScriptObjects))?;
             ZenScriptObjects::deserialize_new(&mut Cursor::new(script_objects_data))
         } else {
             let script_objects_data = self.read(FIoChunkId::create(
