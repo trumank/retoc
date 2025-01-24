@@ -1,3 +1,4 @@
+use crate::chunk_id::FIoChunkIdRaw;
 use crate::compression::{compress, decompress, CompressionMethod};
 use crate::container_header::EIoContainerHeaderVersion;
 use crate::iostore::IoStoreTrait;
@@ -88,7 +89,7 @@ struct FIoStoreShaderCodeArchiveHeader {
     shader_map_hashes: Vec<FSHAHash>,
     shader_hashes: Vec<FSHAHash>,
     // Referred to as ShaderGroupIoHashes in UE
-    shader_group_chunk_ids: Vec<FIoChunkId>,
+    shader_group_chunk_ids: Vec<FIoChunkIdRaw>,
     shader_map_entries: Vec<FIoStoreShaderMapEntry>,
     shader_entries: Vec<FIoStoreShaderCodeEntry>,
     shader_group_entries: Vec<FIoStoreShaderGroupEntry>,
@@ -99,7 +100,7 @@ impl FIoStoreShaderCodeArchiveHeader {
 
         let shader_map_hashes: Vec<FSHAHash> = s.de()?;
         let shader_hashes: Vec<FSHAHash> = s.de()?;
-        let shader_group_chunk_ids: Vec<FIoChunkId> = s.de()?;
+        let shader_group_chunk_ids: Vec<FIoChunkIdRaw> = s.de()?;
         let shader_map_entries: Vec<FIoStoreShaderMapEntry> = s.de()?;
         let shader_entries: Vec<FIoStoreShaderCodeEntry> = s.de()?;
         let shader_group_entries: Vec<FIoStoreShaderGroupEntry> = s.de()?;
@@ -188,7 +189,7 @@ impl IoStoreShaderCodeArchive {
             let shader_group_entry = shader_library_header.shader_group_entries[shader_group_index].clone();
 
             // Read shader group chunk
-            let mut shader_group_data = store_access.read(shader_group_chunk_id)?;
+            let mut shader_group_data = store_access.read_raw(shader_group_chunk_id)?;
 
             // Decompress the shader group chunk if it's compressed size does not match it's uncompressed size
             if shader_group_entry.compressed_size != shader_group_entry.uncompressed_size {

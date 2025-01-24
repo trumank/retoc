@@ -5,6 +5,7 @@ use std::{
 
 use crate::{
     align_usize,
+    chunk_id::FIoChunkIdRaw,
     container_header::{EIoContainerHeaderVersion, FIoContainerHeader, StoreEntry},
     EIoChunkType, FPackageId,
 };
@@ -52,6 +53,18 @@ impl IoStoreWriter {
             toc,
             container_header,
         })
+    }
+    pub(crate) fn write_chunk_raw(
+        &mut self,
+        chunk_id_raw: FIoChunkIdRaw,
+        path: Option<&str>,
+        data: &[u8],
+    ) -> Result<()> {
+        self.write_chunk(
+            FIoChunkId::from_raw(chunk_id_raw, self.toc.version),
+            path,
+            data,
+        )
     }
     pub(crate) fn write_chunk(
         &mut self,
@@ -160,8 +173,8 @@ mod test {
         )?;
 
         let data = fs::read("script_objects.bin")?;
-        writer.write_chunk(
-            FIoChunkId {
+        writer.write_chunk_raw(
+            FIoChunkIdRaw {
                 id: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5],
             },
             Some("../../../asdf/asdf/dasf/script_objects.bin"),

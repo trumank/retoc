@@ -9,6 +9,7 @@ use anyhow::{bail, Context, Result};
 use fs_err as fs;
 
 use crate::{
+    chunk_id::FIoChunkIdRaw,
     container_header::{EIoContainerHeaderVersion, FIoContainerHeader, StoreEntry},
     file_pool::FilePool,
     ser::*,
@@ -57,7 +58,9 @@ pub trait IoStoreTrait: Send + Sync {
     fn print_info(&self, depth: usize);
 
     fn read(&self, chunk_id: FIoChunkId) -> Result<Vec<u8>>;
+    fn read_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> Result<Vec<u8>>;
     fn has_chunk_id(&self, chunk_id: FIoChunkId) -> bool;
+    fn has_chunk_id_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> bool;
     fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + '_>;
     fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + '_>;
     fn child_containers(&self) -> Box<dyn Iterator<Item = &dyn IoStoreTrait> + '_>;
@@ -186,8 +189,20 @@ impl IoStoreTrait for IoStoreBackend {
             .with_context(|| format!("{chunk_id:?} not found in any containers"))?
             .read(chunk_id)
     }
+    fn read_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> Result<Vec<u8>> {
+        self.containers
+            .iter()
+            .find(|c| c.has_chunk_id_raw(chunk_id_raw))
+            .with_context(|| format!("{chunk_id_raw:?} not found in any containers"))?
+            .read_raw(chunk_id_raw)
+    }
     fn has_chunk_id(&self, chunk_id: FIoChunkId) -> bool {
         self.containers.iter().any(|c| c.has_chunk_id(chunk_id))
+    }
+    fn has_chunk_id_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> bool {
+        self.containers
+            .iter()
+            .any(|c| c.has_chunk_id_raw(chunk_id_raw))
     }
     fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + '_> {
         Box::new(self.containers.iter().flat_map(|c| c.chunks()))
@@ -287,14 +302,26 @@ impl IoStoreTrait for IoStoreContainer {
         );
     }
     fn read(&self, chunk_id: FIoChunkId) -> Result<Vec<u8>> {
-        let index = *self.toc.chunk_id_map.get(&chunk_id).with_context(|| {
-            format!("container {:?} does not contain {:?}", self.name, chunk_id)
-        })?;
+        let index = *self
+            .toc
+            .chunk_id_map
+            .get(&chunk_id.with_version(self.toc.version))
+            .with_context(|| {
+                format!("container {:?} does not contain {:?}", self.name, chunk_id)
+            })?;
         let mut file_lock = self.cas.acquire()?;
         self.toc.read(&mut file_lock.file(), index)
     }
+    fn read_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> Result<Vec<u8>> {
+        self.read(FIoChunkId::from_raw(chunk_id_raw, self.toc.version))
+    }
     fn has_chunk_id(&self, chunk_id: FIoChunkId) -> bool {
-        self.toc.chunk_id_map.contains_key(&chunk_id)
+        self.toc
+            .chunk_id_map
+            .contains_key(&chunk_id.with_version(self.toc.version))
+    }
+    fn has_chunk_id_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> bool {
+        self.has_chunk_id(FIoChunkId::from_raw(chunk_id_raw, self.toc.version))
     }
     fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + '_> {
         Box::new(self.toc.chunks.iter().map(|&id| ChunkInfo {

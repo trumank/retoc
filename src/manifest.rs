@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
-use crate::FIoChunkId;
+use crate::{chunk_id::FIoChunkIdRaw, FIoChunkId};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct PackageStoreManifest {
@@ -29,6 +29,6 @@ pub(crate) struct PackageStoreEntry {
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct ChunkData {
     #[serde_as(as = "serde_with::hex::Hex")]
-    pub(crate) id: FIoChunkId,
+    pub(crate) id: FIoChunkIdRaw,
     pub(crate) filename: String,
 }
