@@ -4,11 +4,11 @@ use anyhow::{anyhow, bail, Result};
 use strum::FromRepr;
 use tracing::instrument;
 
-use crate::name_map::{read_name_batch, write_name_batch, EMappedNameType};
+use crate::name_map::{read_name_batch, read_name_batch_parts, write_name_batch, EMappedNameType};
 use crate::script_objects::FPackageObjectIndex;
 use crate::ser::{WriteExt, Writeable};
 use crate::{align_u64, align_usize, break_down_name_string, name_map::{FMappedName, FNameMap}, EIoStoreTocVersion, FGuid, FPackageId, FSHAHash, ReadExt, Readable};
-use crate::container_header::{EIoContainerHeaderVersion, StoreEntry};
+use crate::container_header::{self, EIoContainerHeaderVersion, StoreEntry};
 use crate::version_heuristics::{heuristic_zen_has_bulk_data, heuristic_zen_package_version};
 
 pub(crate) fn get_package_name(data: &[u8], container_header_version: EIoContainerHeaderVersion) -> Result<String> {
@@ -66,6 +66,7 @@ pub(crate) struct FZenPackageSummary {
     pub(crate) has_versioning_info: u32,
     pub(crate) header_size: u32,
     pub(crate) name: FMappedName,
+    pub(crate) source_name: FMappedName, // version == Initial
     pub(crate) package_flags: u32,
     pub(crate) cooked_header_size: u32,
     pub(crate) imported_public_export_hashes_offset: i32,
@@ -76,17 +77,46 @@ pub(crate) struct FZenPackageSummary {
     dependency_bundle_headers_offset: i32,
     dependency_bundle_entries_offset: i32,
     imported_package_names_offset: i32,
+
+    // if EIoContainerHeaderVersion == Initial
+    name_map_names_offset: i32,
+    name_map_names_size: i32,
+    name_map_hashes_offset: i32,
+    name_map_hashes_size: i32,
 }
 impl FZenPackageSummary {
     #[instrument(skip_all, name = "FZenPackageSummary")]
     fn deserialize<S: Read>(s: &mut S, container_header_version: EIoContainerHeaderVersion) -> Result<Self> {
 
-        let has_versioning_info: u32 = s.de()?;
-        let header_size: u32 = s.de()?;
+        let mut has_versioning_info: u32 = 0;
+        let mut header_size: u32 = 0;
+        if container_header_version > EIoContainerHeaderVersion::Initial {
+            has_versioning_info = s.de()?;
+            header_size = s.de()?;
+        }
         let name: FMappedName = s.de()?;
+        let mut source_name: FMappedName = Default::default();
+        if container_header_version == EIoContainerHeaderVersion::Initial {
+            source_name = s.de()?;
+        }
         let package_flags: u32 = s.de()?;
         let cooked_header_size: u32 = s.de()?;
-        let imported_public_export_hashes_offset: i32 = s.de()?;
+
+        let mut imported_public_export_hashes_offset = -1;
+
+        let mut name_map_names_offset: i32 = -1;
+        let mut name_map_names_size: i32 = -1;
+        let mut name_map_hashes_offset: i32 = -1;
+        let mut name_map_hashes_size: i32 = -1;
+        if container_header_version == EIoContainerHeaderVersion::Initial {
+            name_map_names_offset = s.de()?;
+            name_map_names_size = s.de()?;
+            name_map_hashes_offset = s.de()?;
+            name_map_hashes_size = s.de()?;
+        } else {
+            imported_public_export_hashes_offset = s.de()?;
+        }
+
         let import_map_offset: i32 = s.de()?;
         let export_map_offset: i32 = s.de()?;
         let export_bundle_entries_offset: i32 = s.de()?;
@@ -105,9 +135,27 @@ impl FZenPackageSummary {
             graph_data_offset = s.de()?;
         }
 
-        Ok(Self{has_versioning_info, header_size, name, package_flags, cooked_header_size, imported_public_export_hashes_offset,
-            import_map_offset, export_map_offset, export_bundle_entries_offset, graph_data_offset,
-            dependency_bundle_headers_offset, dependency_bundle_entries_offset, imported_package_names_offset})
+        Ok(Self{
+            has_versioning_info,
+            header_size,
+            name,
+            source_name,
+            package_flags,
+            cooked_header_size,
+            imported_public_export_hashes_offset,
+            import_map_offset,
+            export_map_offset,
+            export_bundle_entries_offset,
+            graph_data_offset,
+            dependency_bundle_headers_offset,
+            dependency_bundle_entries_offset,
+            imported_package_names_offset,
+
+            name_map_names_offset,
+            name_map_names_size,
+            name_map_hashes_offset,
+            name_map_hashes_size,
+        })
     }
 
     #[instrument(skip_all, name = "FZenPackageSummary")]
@@ -342,7 +390,8 @@ impl FExportMapEntry {
 #[repr(u32)]
 pub(crate) enum EExportCommandType {
     #[default] Create,
-    Serialize
+    Serialize,
+    Count,
 }
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(C)] // Needed to determine the number of export bundle entries
@@ -666,10 +715,16 @@ impl FZenPackageHeader {
 
     // Retrieves the package name from the package. Does the bare minimum of package reading to get the name out
     #[instrument(skip_all, name = "FZenPackageHeader - GetPackageName")]
-    pub(crate) fn get_package_name<S: Read>(s: &mut S, container_header_version: EIoContainerHeaderVersion) -> Result<String> {
+    pub(crate) fn get_package_name<S: Read + Seek>(s: &mut S, container_header_version: EIoContainerHeaderVersion) -> Result<String> {
         let summary: FZenPackageSummary = FZenPackageSummary::deserialize(s, container_header_version)?;
-        let _versioning_info: Option<FZenPackageVersioningInfo> = if summary.has_versioning_info != 0 { Some(s.de()?) } else { None };
-        let name_map: FNameMap = FNameMap::deserialize(s, EMappedNameType::Package)?;
+        let name_map = if container_header_version > EIoContainerHeaderVersion::Initial {
+            let _versioning_info: Option<FZenPackageVersioningInfo> = if summary.has_versioning_info != 0 { Some(s.de()?) } else { None };
+            FNameMap::deserialize(s, EMappedNameType::Package)?
+        } else {
+            s.seek(SeekFrom::Start(summary.name_map_names_offset as u64))?;
+            let names_buffer: Vec<u8> = s.de_ctx(summary.name_map_names_size as usize)?;
+            FNameMap::create_from_names(EMappedNameType::Package, read_name_batch_parts(&names_buffer)?)
+        };
         Ok(name_map.get(summary.name).to_string())
     }
 
@@ -679,7 +734,14 @@ impl FZenPackageHeader {
         let package_start_offset = s.stream_position()?;
         let summary: FZenPackageSummary = FZenPackageSummary::deserialize(s, header_version)?;
         let optional_versioning_info: Option<FZenPackageVersioningInfo> = if summary.has_versioning_info != 0 { Some(s.de()?) } else { None };
-        let name_map: FNameMap = FNameMap::deserialize(s, EMappedNameType::Package)?;
+
+        let name_map = if header_version > EIoContainerHeaderVersion::Initial {
+            FNameMap::deserialize(s, EMappedNameType::Package)?
+        } else {
+            s.seek(SeekFrom::Start(summary.name_map_names_offset as u64))?;
+            let names_buffer: Vec<u8> = s.de_ctx(summary.name_map_names_size as usize)?;
+            FNameMap::create_from_names(EMappedNameType::Package, read_name_batch_parts(&names_buffer)?)
+        };
 
         let optional_package_version = optional_versioning_info.as_ref()
             .map(|x| { x.package_file_version })
@@ -716,8 +778,12 @@ impl FZenPackageHeader {
         let imported_public_export_hashes_count = (summary.import_map_offset - summary.imported_public_export_hashes_offset) as usize / size_of::<u64>();
         let imported_public_export_hashes_start_offset = package_start_offset + summary.imported_public_export_hashes_offset as u64;
 
-        s.seek(SeekFrom::Start(imported_public_export_hashes_start_offset))?;
-        let imported_public_export_hashes: Vec<u64> = s.de_ctx(imported_public_export_hashes_count)?;
+        let imported_public_export_hashes: Vec<u64> = if header_version > EIoContainerHeaderVersion::Initial {
+            s.seek(SeekFrom::Start(imported_public_export_hashes_start_offset))?;
+            s.de_ctx(imported_public_export_hashes_count)?
+        } else {
+            vec![]
+        };
 
         let import_map_count = (summary.export_map_offset - summary.import_map_offset) as usize / size_of::<FPackageObjectIndex>();
         let import_map_start_offset = package_start_offset + summary.import_map_offset as u64;

@@ -62,17 +62,17 @@ pub trait IoStoreTrait: Send + Sync {
     fn read_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> Result<Vec<u8>>;
     fn has_chunk_id(&self, chunk_id: FIoChunkId) -> bool;
     fn has_chunk_id_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> bool;
-    fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + '_>;
-    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + '_>;
+    fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + Send + '_>;
+    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + Send + '_>;
     fn child_containers(&self) -> Box<dyn Iterator<Item = &dyn IoStoreTrait> + '_>;
     /// Get absolute path (including mount point) if it has one
     fn chunk_path(&self, chunk_id: FIoChunkId) -> Option<String>;
     fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntry>;
 
     fn load_script_objects(&self) -> Result<ZenScriptObjects> {
-        let script_objects_id = FIoChunkId::create(0, 0, EIoChunkType::ScriptObjects);
-        if self.has_chunk_id(script_objects_id) {
-            let script_objects_data = self.read(script_objects_id)?;
+        if self.container_file_version().unwrap() > EIoStoreTocVersion::PerfectHash {
+            let script_objects_data =
+                self.read(FIoChunkId::create(0, 0, EIoChunkType::ScriptObjects))?;
             ZenScriptObjects::deserialize_new(&mut Cursor::new(script_objects_data))
         } else {
             let script_objects_data = self.read(FIoChunkId::create(
@@ -221,10 +221,10 @@ impl IoStoreTrait for IoStoreBackend {
             .iter()
             .any(|c| c.has_chunk_id_raw(chunk_id_raw))
     }
-    fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + '_> {
+    fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + Send + '_> {
         Box::new(self.containers.iter().flat_map(|c| c.chunks()))
     }
-    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + '_> {
+    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + Send + '_> {
         Box::new(self.containers.iter().flat_map(|c| c.packages()))
     }
     fn child_containers(&self) -> Box<dyn Iterator<Item = &dyn IoStoreTrait> + '_> {
@@ -309,8 +309,8 @@ impl IoStoreTrait for IoStoreContainer {
         // assumes header has already been parsed
         indent_println!(
             depth,
-            "has_container_header: {}",
-            self.container_header.is_some()
+            "container_header_version: {:?}",
+            self.container_header.as_ref().map(|h| h.version)
         );
         indent_println!(
             depth,
@@ -340,13 +340,13 @@ impl IoStoreTrait for IoStoreContainer {
     fn has_chunk_id_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> bool {
         self.has_chunk_id(FIoChunkId::from_raw(chunk_id_raw, self.toc.version))
     }
-    fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + '_> {
+    fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + Send + '_> {
         Box::new(self.toc.chunks.iter().map(|&id| ChunkInfo {
             id,
             container: self,
         }))
     }
-    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + '_> {
+    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + Send + '_> {
         Box::new(
             self.container_header
                 .iter()
