@@ -830,7 +830,8 @@ fn build_io_store_shader_code_archive_header(shader_library: &FShaderLibraryHead
         let shader_map_entry = shader_library.shader_map_entries[shader_map_index].clone();
 
         for i in 0..shader_map_entry.num_shaders {
-            let shader_index = (shader_map_entry.shader_indices_offset + i) as usize;
+            let shader_indices_index = (shader_map_entry.shader_indices_offset + i) as usize;
+            let shader_index = shader_library.shader_indices[shader_indices_index] as usize;
             shader_to_referencing_shader_maps.entry(shader_index).or_default().push(shader_map_index);
         }
     }
