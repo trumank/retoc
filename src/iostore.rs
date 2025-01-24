@@ -62,8 +62,8 @@ pub trait IoStoreTrait: Send + Sync {
     fn read_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> Result<Vec<u8>>;
     fn has_chunk_id(&self, chunk_id: FIoChunkId) -> bool;
     fn has_chunk_id_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> bool;
-    fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + '_>;
-    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + '_>;
+    fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + Send + '_>;
+    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + Send + '_>;
     fn child_containers(&self) -> Box<dyn Iterator<Item = &dyn IoStoreTrait> + '_>;
     /// Get absolute path (including mount point) if it has one
     fn chunk_path(&self, chunk_id: FIoChunkId) -> Option<String>;
@@ -221,10 +221,10 @@ impl IoStoreTrait for IoStoreBackend {
             .iter()
             .any(|c| c.has_chunk_id_raw(chunk_id_raw))
     }
-    fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + '_> {
+    fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + Send + '_> {
         Box::new(self.containers.iter().flat_map(|c| c.chunks()))
     }
-    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + '_> {
+    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + Send + '_> {
         Box::new(self.containers.iter().flat_map(|c| c.packages()))
     }
     fn child_containers(&self) -> Box<dyn Iterator<Item = &dyn IoStoreTrait> + '_> {
@@ -340,13 +340,13 @@ impl IoStoreTrait for IoStoreContainer {
     fn has_chunk_id_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> bool {
         self.has_chunk_id(FIoChunkId::from_raw(chunk_id_raw, self.toc.version))
     }
-    fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + '_> {
+    fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + Send + '_> {
         Box::new(self.toc.chunks.iter().map(|&id| ChunkInfo {
             id,
             container: self,
         }))
     }
-    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + '_> {
+    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + Send + '_> {
         Box::new(
             self.container_header
                 .iter()
