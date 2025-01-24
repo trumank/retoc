@@ -136,12 +136,16 @@ struct ActionPackZen {
     #[arg(index = 2)]
     output: PathBuf,
 
-    #[arg(short, long)]
-    filter: Option<String>,
-
     /// Engine version
     #[arg(long)]
     version: EngineVersion,
+
+    #[arg(short, long, default_value = "false")]
+    verbose: bool,
+    #[arg(long, default_value = "false")]
+    debug: bool,
+    #[arg(short, long)]
+    filter: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -789,6 +793,7 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
         mount_point.to_string(),
     )?;
 
+    let log = Log::new(args.verbose, args.debug);
     let mut asset_paths = vec![];
     let mut shader_lib_paths = vec![];
 
@@ -818,7 +823,7 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
     // Convert shader libraries first, since the data contained in their asset metadata is needed to build the package store entries
     let mut package_name_to_referenced_shader_maps: HashMap<String, Vec<FSHAHash>> = HashMap::new();
     for path in shader_lib_paths {
-        println!("converting shader library {path:?}");
+        log!(&log, "converting shader library {path:?}");
         let relative_path = path.strip_prefix(&args.input).unwrap();
 
         let shader_library_buffer = fs::read(&path)?;
@@ -836,12 +841,13 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
             &mut writer,
             &shader_library_buffer,
             &Path::new(mount_point).join(relative_path).to_string_lossy(),
+            &log,
         )?;
     }
 
     // Convert assets now
     for path in asset_paths {
-        println!("converting asset {path:?}");
+        log!(&log, "converting asset {path:?}");
         let relative_path = path.strip_prefix(&args.input).unwrap();
 
         fn read_optional(path: &Path) -> Result<Option<Vec<u8>>, std::io::Error> {

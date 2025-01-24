@@ -1075,7 +1075,7 @@ pub(crate) fn read_shader_asset_info(shader_asset_metadata_buffer: &Vec<u8>, pac
     Ok({})
 }
 
-pub(crate) fn write_io_store_library(store_writer: &mut IoStoreWriter, raw_shader_library_buffer: &Vec<u8>, shader_library_path: &str) -> anyhow::Result<()> {
+pub(crate) fn write_io_store_library(store_writer: &mut IoStoreWriter, raw_shader_library_buffer: &Vec<u8>, shader_library_path: &str, log: &Log) -> anyhow::Result<()> {
 
     let mut shader_library_reader = Cursor::new(raw_shader_library_buffer);
 
@@ -1087,6 +1087,7 @@ pub(crate) fn write_io_store_library(store_writer: &mut IoStoreWriter, raw_shade
     let shader_library_header = FShaderLibraryHeader::deserialize(&mut shader_library_reader)?;
     // Shader library code offsets are relative to the end of the shader library header
     let shader_library_code_start_offset = shader_library_reader.stream_position()?;
+    let total_library_compressed_size = raw_shader_library_buffer.len() - shader_library_code_start_offset as usize;
 
     // Figure out the name of the format of this shader library
     let library_filename = UEPath::new(shader_library_path).file_stem().ok_or_else(|| { anyhow!("Failed to retrieve file stem from shader library path") })?;
@@ -1107,6 +1108,8 @@ pub(crate) fn write_io_store_library(store_writer: &mut IoStoreWriter, raw_shade
 
     // Cached compression method for this shader library
     let mut compression_method: Option<CompressionMethod> = None;
+    let mut total_compressed_groups_size: usize = 0;
+    let mut total_library_uncompressed_size: usize = 0;
 
     // Create shader chunks for each shader group from the library
     for shader_group_index in 0..io_store_library_header.shader_group_entries.len() {
@@ -1145,6 +1148,7 @@ pub(crate) fn write_io_store_library(store_writer: &mut IoStoreWriter, raw_shade
                     expected_shader_code_offset, actual_shader_code_offset);
             }
             shader_group_chunk_buffer.append(&mut uncompressed_shader_code);
+            total_library_uncompressed_size += shader_code_entry.uncompressed_size as usize;
         }
 
         // Make sure the uncompressed size matches the expected size written into the header
@@ -1171,6 +1175,7 @@ pub(crate) fn write_io_store_library(store_writer: &mut IoStoreWriter, raw_shade
 
         // Write the shader code chunk for this group into the container. Note that shader chunks do not have filenames
         store_writer.write_chunk_raw(shader_group_chunk_id, None, &shader_group_chunk_buffer)?;
+        total_compressed_groups_size += compressed_group_size;
     }
 
     // Create a new chunk for the shader library header
@@ -1186,6 +1191,17 @@ pub(crate) fn write_io_store_library(store_writer: &mut IoStoreWriter, raw_shade
     // Write the shader library header chunk using the provided filename
     let shader_library_chunk_id = FIoChunkId::create_shader_library_chunk_id(&shader_library_name, &shader_format_name);
     store_writer.write_chunk(shader_library_chunk_id, Some(shader_library_path), &io_store_shader_library_buffer)?;
+
+    // Write statistics
+    if log.allow_stdout() {
+        let recompression_ratio = f64::round((total_library_compressed_size as f64 / total_compressed_groups_size as f64) * 100.0f64) as i64;
+        let compression_ratio = f64::round((total_library_uncompressed_size as f64 / total_compressed_groups_size as f64) * 100.0f64) as i64;
+        log!(log, "Shader Library {} statistics: Shader Groups: {}, Shader Maps: {}, Uncompressed Size: {}MB, Original Compressed Size: {}MB, Total Group Compressed Size: {}MB, Recompression Ratio: {}%, Total Compression Ratio: {}%",
+            UEPath::new(shader_library_path).file_stem().unwrap().to_string(),
+            io_store_library_header.shader_group_entries.len(), io_store_library_header.shader_map_entries.len(),
+            total_library_uncompressed_size / 1024 / 1024, total_library_compressed_size / 1024 / 1024,
+            total_compressed_groups_size / 1024 / 1024, recompression_ratio, compression_ratio);
+    }
     Ok({})
 }
 
