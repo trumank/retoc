@@ -5,7 +5,7 @@ use crate::name_map::{EMappedNameType, FNameMap};
 use crate::script_objects::{FPackageImportReference, FPackageObjectIndex, FPackageObjectIndexType};
 use crate::version_heuristics::heuristic_zen_version_from_package_file_version;
 use crate::zen::{EExportCommandType, EExportFilterFlags, EObjectFlags, EZenPackageVersion, FBulkDataMapEntry, FDependencyBundleEntry, FDependencyBundleHeader, FExportBundleEntry, FExportBundleHeader, FExportMapEntry, FExternalDependencyArc, FImportedPackageDependency, FInternalDependencyArc, FPackageFileVersion, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo};
-use crate::{EIoChunkType, FIoChunkId, FPackageId, UEPath};
+use crate::{EIoChunkType, FIoChunkId, FPackageId, FSHAHash, UEPath};
 use anyhow::bail;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::io::{Cursor, Write};
@@ -740,11 +740,14 @@ fn serialize_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: &FSeria
     Ok((result_store_entry, result_package_buffer))
 }
 
-fn write_zen_asset(writer: &mut IoStoreWriter, builder: &ZenPackageBuilder, legacy_asset_bundle: &FSerializedAssetBundle, path: &str) -> anyhow::Result<FPackageId> {
+fn write_zen_asset(writer: &mut IoStoreWriter, builder: &ZenPackageBuilder, legacy_asset_bundle: &FSerializedAssetBundle, path: &str, package_name_to_referenced_shader_maps: &HashMap<String, Vec<FSHAHash>>) -> anyhow::Result<FPackageId> {
 
-    let (result_store_entry, result_package_buffer) = serialize_zen_asset(builder, legacy_asset_bundle)?;
+    let (mut result_store_entry, result_package_buffer) = serialize_zen_asset(builder, legacy_asset_bundle)?;
 
-    // TODO: write file paths for all of the chunks written down
+    // Append shader map hashes to the store entry from the package name to shader maps lookup
+    if let Some(referenced_shader_maps) = package_name_to_referenced_shader_maps.get(&builder.legacy_package.summary.package_name) {
+        result_store_entry.shader_map_hashes.append(&mut referenced_shader_maps.clone());
+    }
 
     // Write package chunk into zen
     let package_chunk_id = FIoChunkId::from_package_id(builder.package_id, 0, EIoChunkType::ExportBundleData);
@@ -796,12 +799,12 @@ pub(crate) fn build_serialize_zen_asset(legacy_asset: &FSerializedAssetBundle, c
 }
 
 // Builds zen asset and writes it into the container using the provided serialized legacy asset and package version
-pub(crate) fn build_write_zen_asset(writer: &mut IoStoreWriter, legacy_asset: &FSerializedAssetBundle, path: &str, package_version_fallback: Option<FPackageFileVersion>) -> anyhow::Result<FPackageId> {
+pub(crate) fn build_write_zen_asset(writer: &mut IoStoreWriter, legacy_asset: &FSerializedAssetBundle, package_name_to_referenced_shader_maps: &HashMap<String, Vec<FSHAHash>>, path: &str, package_version_fallback: Option<FPackageFileVersion>) -> anyhow::Result<FPackageId> {
 
     let builder = build_zen_asset_internal(legacy_asset, writer.container_header_version(), package_version_fallback)?;
 
     // Serialize the resulting asset into the container writer
-    write_zen_asset(writer, &builder, legacy_asset, path)
+    write_zen_asset(writer, &builder, legacy_asset, path, package_name_to_referenced_shader_maps)
 }
 
 #[cfg(test)]

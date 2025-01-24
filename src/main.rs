@@ -789,7 +789,8 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
         mount_point.to_string(),
     )?;
 
-    let mut paths = vec![];
+    let mut asset_paths = vec![];
+    let mut shader_lib_paths = vec![];
 
     let check_path = |path: &Path| {
         !args
@@ -806,12 +807,41 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
         ]
         .contains(&path.extension());
         if is_asset && check_path(&path) {
-            paths.push(file.path());
+            asset_paths.push(file.path());
+        }
+        let is_shader_lib = Some(std::ffi::OsStr::new("ushaderbytecode")) == path.extension();
+        if is_shader_lib && check_path(&path) {
+            shader_lib_paths.push(file.path());
         }
     })?;
 
-    for path in paths {
-        println!("converting {path:?}");
+    // Convert shader libraries first, since the data contained in their asset metadata is needed to build the package store entries
+    let mut package_name_to_referenced_shader_maps: HashMap<String, Vec<FSHAHash>> = HashMap::new();
+    for path in shader_lib_paths {
+        println!("converting shader library {path:?}");
+        let relative_path = path.strip_prefix(&args.input).unwrap();
+
+        let shader_library_buffer = fs::read(&path)?;
+        let asset_metadata_filename = get_shader_asset_info_filename_from_library_filename(&path.file_name().unwrap().to_string_lossy())?;
+        let asset_metadata_path = path.join(asset_metadata_filename);
+
+        // Read asset metadata and store it into the global map to be picked up by zen packages later
+        if fs::metadata(&asset_metadata_path)?.is_file() {
+            let shader_asset_info_buffer = fs::read(&asset_metadata_path)?;
+            shader_library::read_shader_asset_info(&shader_asset_info_buffer, &mut package_name_to_referenced_shader_maps)?;
+        }
+
+        // Convert shader library to the container shader chunks
+        shader_library::write_io_store_library(
+            &mut writer,
+            &shader_library_buffer,
+            &Path::new(mount_point).join(relative_path).to_string_lossy(),
+        )?;
+    }
+
+    // Convert assets now
+    for path in asset_paths {
+        println!("converting asset {path:?}");
         let relative_path = path.strip_prefix(&args.input).unwrap();
 
         fn read_optional(path: &Path) -> Result<Option<Vec<u8>>, std::io::Error> {
@@ -833,6 +863,7 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
         zen_asset_conversion::build_write_zen_asset(
             &mut writer,
             &bundle,
+            &package_name_to_referenced_shader_maps,
             &Path::new(mount_point).join(relative_path).to_string_lossy(),
             Some(FPackageFileVersion::create_ue5(
                 args.version.object_ue5_version(),

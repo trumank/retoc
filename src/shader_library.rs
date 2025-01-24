@@ -1064,6 +1064,17 @@ fn build_io_store_shader_code_archive_header(shader_library: &FShaderLibraryHead
     io_store_library_header
 }
 
+pub(crate) fn read_shader_asset_info(shader_asset_metadata_buffer: &Vec<u8>, package_name_to_shader_maps: &mut HashMap<String, Vec<FSHAHash>>) -> anyhow::Result<()> {
+    let shader_asset_info: ShaderAssetInfoFileRoot = serde_json::from_slice(&shader_asset_metadata_buffer)?;
+
+    for shader_map_entry in &shader_asset_info.shader_code_to_assets {
+        for package_name in &shader_map_entry.package_names {
+            package_name_to_shader_maps.entry(package_name.clone()).or_default().push(shader_map_entry.shader_map_hash.clone());
+        }
+    }
+    Ok({})
+}
+
 pub(crate) fn write_io_store_library(store_writer: &mut IoStoreWriter, raw_shader_library_buffer: &Vec<u8>, shader_library_path: &str) -> anyhow::Result<()> {
 
     let mut shader_library_reader = Cursor::new(raw_shader_library_buffer);
