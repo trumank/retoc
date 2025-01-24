@@ -1,11 +1,19 @@
 use anyhow::{bail, Result};
 use std::io::{Read as _, Write};
-use strum::{AsRefStr, EnumString};
+use strum::{AsRefStr, EnumString, VariantArray};
 
-#[derive(Debug, Clone, Copy, EnumString, AsRefStr)]
+#[derive(Debug, Clone, Copy, EnumString, AsRefStr, VariantArray)]
 pub enum CompressionMethod {
     Zlib,
     Oodle,
+}
+impl CompressionMethod {
+    pub(crate) fn from_str_ignore_case(value: &str) -> Option<Self> {
+        CompressionMethod::VARIANTS
+            .iter()
+            .copied()
+            .find(|v| v.as_ref().eq_ignore_ascii_case(value))
+    }
 }
 
 pub fn compress<S: Write>(
