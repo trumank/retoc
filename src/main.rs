@@ -216,54 +216,54 @@ fn main() -> Result<()> {
 }
 
 fn action_manifest(args: ActionManifest, config: Arc<Config>) -> Result<()> {
-    let toc: Toc = BufReader::new(fs::File::open(&args.utoc)?).de_ctx(config)?;
-    let ucas = &args.utoc.with_extension("ucas");
+    let iostore = iostore::open(args.utoc, config)?;
 
     let entries = Arc::new(Mutex::new(vec![]));
 
-    toc.file_map.keys().par_bridge().try_for_each_init(
-        || {
-            (
-                entries.clone(),
-                BufReader::new(fs::File::open(ucas).unwrap()),
-            )
-        },
-        |(entries, ucas), file_name| -> Result<()> {
-            let chunk_info = toc.get_chunk_info(file_name);
+    let container_header_version = iostore.container_header_version().unwrap();
+    let toc_version = iostore.container_file_version().unwrap();
 
-            if chunk_info.id.get_chunk_type() == EIoChunkType::ExportBundleData {
-                let data = toc.read(ucas, toc.file_map[file_name])?;
+    iostore
+        .packages()
+        .par_bridge()
+        .try_for_each(|package_info| -> Result<()> {
+            let chunk_id =
+                FIoChunkId::from_package_id(package_info.id(), 0, EIoChunkType::ExportBundleData)
+                    .with_version(toc_version);
+            let package_path = package_info
+                .container()
+                .chunk_path(chunk_id)
+                .with_context(|| format!("{:?} has no path name entry", package_info.id()))?;
+            let data = package_info.container().read(chunk_id)?;
 
-                // TODO @trumank fix this
-                let package_name = get_package_name(&data, EIoContainerHeaderVersion::NoExportInfo)
-                    .with_context(|| file_name.to_string())?;
+            let package_name = get_package_name(&data, container_header_version)
+                .with_context(|| package_path.to_string())?;
 
-                let mut entry = manifest::Op {
-                    packagestoreentry: manifest::PackageStoreEntry {
-                        packagename: package_name,
-                    },
-                    packagedata: vec![manifest::ChunkData {
-                        id: chunk_info.id.get_raw(),
-                        filename: file_name.to_string(),
-                    }],
-                    bulkdata: vec![],
-                };
+            let mut entry = manifest::Op {
+                packagestoreentry: manifest::PackageStoreEntry {
+                    packagename: package_name,
+                },
+                packagedata: vec![manifest::ChunkData {
+                    id: chunk_id.get_raw(),
+                    filename: package_path.to_string(),
+                }],
+                bulkdata: vec![],
+            };
 
-                if let Some((path, _ext)) = file_name.rsplit_once(".") {
-                    let bulk_path = format!("{path}.ubulk");
-                    if let Some(&bulk) = toc.file_map_lower.get(&bulk_path.to_ascii_lowercase()) {
-                        entry.bulkdata.push(manifest::ChunkData {
-                            id: toc.chunks[bulk as usize].get_raw(),
-                            filename: bulk_path,
-                        });
-                    }
-                }
-
-                entries.lock().unwrap().push(entry);
+            let bulk_id = FIoChunkId::from_package_id(package_info.id(), 0, EIoChunkType::BulkData)
+                .with_version(toc_version);
+            if iostore.has_chunk_id(bulk_id) {
+                entry.bulkdata.push(manifest::ChunkData {
+                    id: bulk_id.get_raw(),
+                    filename: UEPath::new(&package_path)
+                        .with_extension("ubulk")
+                        .to_string(),
+                });
             }
+
+            entries.lock().unwrap().push(entry);
             Ok(())
-        },
-    )?;
+        })?;
 
     let mut entries = Arc::into_inner(entries).unwrap().into_inner().unwrap();
     //entries.sort_by_key(|op| op.packagedata.first().map(|c| c.filename.clone()));
