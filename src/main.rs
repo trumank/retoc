@@ -1620,13 +1620,13 @@ mod chunk_id {
             use std::fmt::Write;
             let mut buf = String::new();
             for b in &self.id[..11] {
-                write!(&mut buf, "{b:x}").unwrap();
+                write!(&mut buf, "{b:02x}").unwrap();
             }
             // special case last byte and only print hex value if we know it
             if self.id[11] >> 6 & 1 != 0 {
                 // has version so get raw byte value
                 let is_new = self.id[11] >> 7 != 0; // read version bit
-                write!(&mut buf, "{:x}", self.get_chunk_type().value(is_new)).unwrap();
+                write!(&mut buf, "{:02x}", self.get_chunk_type().value(is_new)).unwrap();
             } else {
                 // version info unknown so raw byte value unknown
                 write!(&mut buf, "??").unwrap();
