@@ -1630,6 +1630,12 @@ mod chunk_id {
         ) -> Self {
             Self::create(package_id.0, chunk_index, chunk_type)
         }
+        pub(crate) fn create_shader_code_chunk_id(shader_hash: &FSHAHash) -> Self {
+            let mut id = [0; 12];
+            id[0..11].copy_from_slice(&shader_hash.0[0..11]);
+            id[11] = EIoChunkType::ShaderCode as u8;
+            Self{ id }
+        }
         pub(crate) fn get_chunk_id(&self) -> u64 {
             u64::from_le_bytes(self.id[0..8].try_into().unwrap())
         }
