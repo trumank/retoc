@@ -1014,7 +1014,7 @@ fn read_compression_methods<R: Read>(
                 .take_while(|&b| b != 0)
                 .collect(),
         )?;
-        let method = CompressionMethod::from_str(&name)
+        let method = CompressionMethod::from_str_ignore_case(&name)
             .with_context(|| format!("unknown compression method: {name:?}"))?;
         methods.push(method);
     }
