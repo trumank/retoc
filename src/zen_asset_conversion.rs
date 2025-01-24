@@ -1,4 +1,4 @@
-use std::cmp::max;
+use std::cmp::{max, Ordering};
 use crate::container_header::{EIoContainerHeaderVersion, StoreEntry};
 use crate::legacy_asset::{EPackageFlags, FLegacyPackageFileSummary, FLegacyPackageHeader, FSerializedAssetBundle};
 use crate::name_map::{EMappedNameType, FNameMap};
@@ -7,10 +7,9 @@ use crate::version_heuristics::heuristic_zen_version_from_package_file_version;
 use crate::zen::{EExportCommandType, EExportFilterFlags, EObjectFlags, EZenPackageVersion, FBulkDataMapEntry, FDependencyBundleEntry, FDependencyBundleHeader, FExportBundleEntry, FExportBundleHeader, FExportMapEntry, FExternalDependencyArc, FImportedPackageDependency, FInternalDependencyArc, FPackageFileVersion, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo};
 use crate::{EIoChunkType, FIoChunkId, FPackageId};
 use anyhow::bail;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::io::{Cursor, Write};
 use byteorder::{ReadBytesExt, LE};
-use topo_sort::{SortResults, TopoSort};
 use crate::iostore_writer::IoStoreWriter;
 
 /// NOTE: assumes leading slash is already stripped
@@ -287,16 +286,15 @@ struct ZenDependencyGraphNode {
     command_type: EExportCommandType,
 }
 
-fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, sorted_deps: &Vec<ZenDependencyGraphNode>, export_dependencies: &HashMap<ZenDependencyGraphNode, Vec<ZenDependencyGraphNode>>) {
+fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_load_order: &Vec<ZenExportGraphNode>, export_dependencies: &HashMap<ZenDependencyGraphNode, Vec<ZenDependencyGraphNode>>) {
 
     let mut current_export_bundle_header_index: i64 = -1;
     let mut current_export_offset: u64 = 0;
     let mut export_to_bundle_map: HashMap<ZenDependencyGraphNode, usize> = HashMap::new();
 
     // Create export bundles from the export list sorted by the dependencies
-    for graph_node_index in 0..sorted_deps.len() {
-
-        let dependency_graph_node = sorted_deps[graph_node_index].clone();
+    for graph_node_index in 0..export_load_order.len() {
+        let dependency_graph_node = export_load_order[graph_node_index].node.clone();
 
         // Skip non-export items in the dependency graph. Imports will occasionally appear in the graph when there is a requirement for both a creation and a serialization
         if !dependency_graph_node.package_index.is_export() {
@@ -412,12 +410,11 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, sorted_d
     }
 }
 
-fn build_zen_dependency_bundle_new(builder: &mut ZenPackageBuilder, sorted_deps: &Vec<ZenDependencyGraphNode>, export_dependencies: &HashMap<ZenDependencyGraphNode, Vec<ZenDependencyGraphNode>>) {
+fn build_zen_dependency_bundle_new(builder: &mut ZenPackageBuilder, export_load_order: &Vec<ZenExportGraphNode>, export_dependencies: &HashMap<ZenDependencyGraphNode, Vec<ZenDependencyGraphNode>>) {
 
     // Create a single dependency bundle with all exports
-    for graph_node_index in 0..sorted_deps.len() {
-
-        let dependency_graph_node = sorted_deps[graph_node_index].clone();
+    for graph_node_index in 0..export_load_order.len() {
+        let dependency_graph_node = export_load_order[graph_node_index].node.clone();
 
         // Skip non-export items in the dependency graph. Imports will occasionally appear in the graph when there is a requirement for both a creation and a serialization
         if !dependency_graph_node.package_index.is_export() {
@@ -491,14 +488,82 @@ fn build_zen_dependency_bundle_new(builder: &mut ZenPackageBuilder, sorted_deps:
     }
 }
 
+#[derive(PartialEq, Eq, Copy, Clone, Hash)]
+struct ZenExportGraphNode {
+    node: ZenDependencyGraphNode,
+    is_public_export: bool,
+}
+impl PartialOrd for ZenExportGraphNode {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for ZenExportGraphNode {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other.is_public_export.cmp(&self.is_public_export)
+            .then(self.node.command_type.cmp(&other.node.command_type))
+            .then(self.node.package_index.to_export_index().cmp(&other.node.package_index.to_export_index()))
+            .reverse()
+    }
+}
+
+fn sort_dependencies_in_load_order(export_graph_nodes: &Vec<ZenExportGraphNode>, dependency_to_dependants: &HashMap<ZenExportGraphNode, Vec<ZenExportGraphNode>>) -> anyhow::Result<Vec<ZenExportGraphNode>> {
+
+    let mut incoming_edge_count: HashMap<ZenExportGraphNode, usize> = HashMap::new();
+
+    // Prime all nodes that have dependencies
+    for (_, to_nodes) in dependency_to_dependants {
+        for to_node in to_nodes {
+            *incoming_edge_count.entry(*to_node).or_default() += 1;
+        }
+    }
+
+    // Prime list of nodes that have no dependencies on other nodes
+    let mut nodes_with_no_incoming_edges: BinaryHeap<ZenExportGraphNode> = BinaryHeap::with_capacity(export_graph_nodes.len());
+    for export_node in export_graph_nodes {
+        if *incoming_edge_count.entry(*export_node).or_default() == 0 {
+            nodes_with_no_incoming_edges.push(*export_node);
+        }
+    }
+
+    // Take nodes with no dependencies until we run out of them
+    let mut load_order: Vec<ZenExportGraphNode> = Vec::with_capacity(export_graph_nodes.len());
+    while !nodes_with_no_incoming_edges.is_empty() {
+
+        let removed_node = nodes_with_no_incoming_edges.pop().unwrap();
+        load_order.push(removed_node);
+
+        // Remove one edge from all the nodes that depend on this node
+        if let Some(node_dependants) = dependency_to_dependants.get(&removed_node) {
+            for to_node in node_dependants {
+
+                // Make sure the to node has the edge for this node
+                let incoming_edge_count = incoming_edge_count.entry(*to_node).or_default();
+                *incoming_edge_count -= 1;
+
+                // If to node no longer has any dependencies that are still unsatisfied, add it to the list of nodes with no incoming edges to be processed later
+                if *incoming_edge_count == 0 {
+                    nodes_with_no_incoming_edges.push(*to_node);
+                }
+            }
+        }
+    }
+
+    // Make sure we actually sorted all the dependencies. If we did not we have a circular dependency on one of the nodes
+    if load_order.len() != export_graph_nodes.len() {
+        bail!("Failed to sort exports in load order because of circular dependencies");
+    }
+    Ok(load_order)
+}
+
 fn build_zen_preload_dependencies(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
 
-    // Build a dependency graph with each export and it's preload dependencies
-    let mut topological_sort: TopoSort<ZenDependencyGraphNode> = TopoSort::new();
-    let mut export_dependencies: HashMap<ZenDependencyGraphNode, Vec<ZenDependencyGraphNode>> = HashMap::new();
-    let mut import_nodes_already_populated: HashSet<ZenDependencyGraphNode> = HashSet::new();
+    // Build a dependency map with each export and it's preload dependencies
+    let export_count = builder.legacy_package.exports.len();
+    let mut export_dependencies: HashMap<ZenDependencyGraphNode, Vec<ZenDependencyGraphNode>> = HashMap::with_capacity(export_count);
+    let mut export_graph_nodes: Vec<ZenExportGraphNode> = Vec::with_capacity(export_count);
 
-    for export_index in 0..builder.legacy_package.exports.len() {
+    for export_index in 0..export_count {
 
         let export_package_index = FPackageIndex::create_export(export_index as u32);
         let object_export = builder.legacy_package.exports[export_index].clone();
@@ -509,30 +574,24 @@ fn build_zen_preload_dependencies(builder: &mut ZenPackageBuilder) -> anyhow::Re
         let mut create_dependencies: Vec<ZenDependencyGraphNode> = Vec::new();
         let mut serialize_dependencies: Vec<ZenDependencyGraphNode> = Vec::new();
 
+        //This export's serialize has a dependency on this export's create. This dependency is added first because it is added before anything else by the Package Store Optimizer
+        serialize_dependencies.push(create_graph_node);
+
         // Collect create and serialize dependencies for this export
         if object_export.first_export_dependency_index != -1 {
 
-            // Serialize before serialize dependencies
-            for i in 0..object_export.serialize_before_serialize_dependencies {
+            // Create before create dependencies. They go first because Package Store Optimizer puts them first
+            for i in 0..object_export.create_before_create_dependencies {
 
-                let preload_dependency_index = object_export.first_export_dependency_index + i;
-                let preload_dependency = builder.legacy_package.preload_dependencies[preload_dependency_index as usize];
-
-                let dependency = ZenDependencyGraphNode{package_index: preload_dependency, command_type: EExportCommandType::Serialize};
-                serialize_dependencies.push(dependency);
-            }
-
-            // Create before serialize dependencies
-            for i in 0..object_export.create_before_serialize_dependencies {
-
-                let preload_dependency_index = object_export.first_export_dependency_index + object_export.serialize_before_serialize_dependencies + i;
+                let preload_dependency_index = object_export.first_export_dependency_index + object_export.serialize_before_serialize_dependencies +
+                    object_export.create_before_serialize_dependencies + object_export.serialize_before_create_dependencies + i;
                 let preload_dependency = builder.legacy_package.preload_dependencies[preload_dependency_index as usize];
 
                 let dependency = ZenDependencyGraphNode{package_index: preload_dependency, command_type: EExportCommandType::Create};
-                serialize_dependencies.push(dependency);
+                create_dependencies.push(dependency);
             }
 
-            // Serialize before create dependencies
+            // Serialize before create dependencies. They go second because Package Store Optimizer puts them second
             for i in 0..object_export.serialize_before_create_dependencies {
 
                 let preload_dependency_index = object_export.first_export_dependency_index + object_export.serialize_before_serialize_dependencies +
@@ -543,50 +602,58 @@ fn build_zen_preload_dependencies(builder: &mut ZenPackageBuilder) -> anyhow::Re
                 create_dependencies.push(dependency);
             }
 
-            // Create before create dependencies
-            for i in 0..object_export.create_before_create_dependencies {
+            // Create before serialize dependencies. They go third because Package Store Optimizer puts them third
+            for i in 0..object_export.create_before_serialize_dependencies {
 
-                let preload_dependency_index = object_export.first_export_dependency_index + object_export.serialize_before_serialize_dependencies +
-                    object_export.create_before_serialize_dependencies + object_export.serialize_before_create_dependencies + i;
+                let preload_dependency_index = object_export.first_export_dependency_index + object_export.serialize_before_serialize_dependencies + i;
                 let preload_dependency = builder.legacy_package.preload_dependencies[preload_dependency_index as usize];
 
                 let dependency = ZenDependencyGraphNode{package_index: preload_dependency, command_type: EExportCommandType::Create};
-                create_dependencies.push(dependency);
+                serialize_dependencies.push(dependency);
+            }
+
+            // Serialize before serialize dependencies. They go last because Package Store Optimizer puts them last
+            for i in 0..object_export.serialize_before_serialize_dependencies {
+
+                let preload_dependency_index = object_export.first_export_dependency_index + i;
+                let preload_dependency = builder.legacy_package.preload_dependencies[preload_dependency_index as usize];
+
+                let dependency = ZenDependencyGraphNode{package_index: preload_dependency, command_type: EExportCommandType::Serialize};
+                serialize_dependencies.push(dependency);
             }
         }
-
-        // Add synthetic dependency from import serialization to import create to make some of the export dependency requirements that are invalid
-        // actually trigger the cyclic topological sort error instead of producing incorrect assets
-        for import_serialize_node in create_dependencies.iter().chain(&serialize_dependencies) {
-
-            // We only want to handle Serialize dependencies for imported package indices here, not for other exports
-            // Also only populate each dependency once, and then add it to the map
-            if import_serialize_node.package_index.is_import() && import_serialize_node.command_type == EExportCommandType::Serialize &&
-                !import_nodes_already_populated.contains(import_serialize_node) {
-
-                import_nodes_already_populated.insert(import_serialize_node.clone());
-                let import_create_node = ZenDependencyGraphNode{package_index: import_serialize_node.package_index, command_type: EExportCommandType::Create};
-                topological_sort.insert(import_serialize_node.clone(), [import_create_node]);
-            }
-        }
-
-        //This export's serialize has a dependency on this export's create
-        serialize_dependencies.push(create_graph_node);
 
         // Add create and serialize graph nodes for this export
-        topological_sort.insert(create_graph_node, create_dependencies.clone());
-        topological_sort.insert(serialize_graph_node, serialize_dependencies.clone());
+        // Nodes are added into the graph in export order, Create first, then Serialize. So Export0Create -> Export0Serialize -> Export1Create -> Export1Serialize -> etc
+        let is_public_export = builder.zen_package.export_map[export_index].is_public_export();
+        export_graph_nodes.push(ZenExportGraphNode{node: create_graph_node.clone(), is_public_export});
+        export_graph_nodes.push(ZenExportGraphNode{node: serialize_graph_node.clone(), is_public_export});
 
         // Remember dependencies associated with each node. This is necessary for building dependency arcs later
         export_dependencies.insert(create_graph_node, create_dependencies);
         export_dependencies.insert(serialize_graph_node, serialize_dependencies);
     }
 
-    // Make sure that we are able to sort the entire list without cycles
-    let sorted_node_list = match topological_sort.into_vec_nodes() {
-        SortResults::Partial(_) => bail!("Failed to create dependency bundles for the package because of the circular dependency in preload dependencies"),
-        SortResults::Full(full_result) => full_result,
-    };
+    // Build a reverse lookup from export to exports that depend on it
+    let mut dependency_to_dependants: HashMap<ZenExportGraphNode, Vec<ZenExportGraphNode>> = HashMap::with_capacity(export_count);
+    for dependant_node in &export_graph_nodes {
+        if let Some(dependencies) = export_dependencies.get(&dependant_node.node) {
+            for raw_dependency_node in dependencies {
+
+                // Skip non-export dependencies from exports. They do not matter for graph building purposes
+                if !raw_dependency_node.package_index.is_export() { continue }
+                // Determine whenever this export is public or not to create a ZenExportGraphNode
+                let is_public_export = builder.zen_package.export_map[raw_dependency_node.package_index.to_export_index() as usize].is_public_export();
+
+                // Create the dependency node and add the dependant node to it's dependants list
+                let dependency_node = ZenExportGraphNode{node: raw_dependency_node.clone(), is_public_export};
+                dependency_to_dependants.entry(dependency_node).or_default().push(dependant_node.clone());
+            }
+        }
+    }
+
+    // Sort the export graph nodes in load order
+    let sorted_node_list = sort_dependencies_in_load_order(&export_graph_nodes, &dependency_to_dependants)?;
 
     // Use legacy path for versions before NoExportInfo, and a new one for versions after
     if builder.container_header_version >= EIoContainerHeaderVersion::NoExportInfo {
@@ -739,10 +806,9 @@ pub(crate) fn build_write_zen_asset(writer: &mut IoStoreWriter, legacy_asset: &F
 
 #[cfg(test)]
 mod test {
-    use std::process::abort;
     use super::*;
     use fs_err as fs;
-    use crate::{EIoStoreTocVersion, FSHAHash};
+    use crate::{EIoStoreTocVersion};
     use crate::zen::EUnrealEngineObjectUE5Version;
 
     #[test]
@@ -780,6 +846,7 @@ mod test {
         assert_eq!(original_zen_asset_package.export_map.clone(), converted_zen_asset_package.export_map.clone());
         assert_eq!(original_zen_asset_package.dependency_bundle_headers.clone(), converted_zen_asset_package.dependency_bundle_headers.clone());
         assert_eq!(original_zen_asset_package.dependency_bundle_entries.clone(), converted_zen_asset_package.dependency_bundle_entries.clone());
+        assert_eq!(original_zen_asset_package.export_bundle_entries.clone(), converted_zen_asset_package.export_bundle_entries.clone());
 
         // Make sure export blob is identical after the header size. Offsets in export map are relative to the end of the header so if they are correct and this data is correct exports are correct
         assert_eq!(original_zen_asset[(original_zen_asset_package.summary.header_size as usize)..].to_vec(), asset_exports_buffer.clone(), "Uexp file and the original zen asset exports do not match");

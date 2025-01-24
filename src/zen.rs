@@ -334,8 +334,11 @@ impl Writeable for FExportMapEntry {
         Ok({})
     }
 }
+impl FExportMapEntry {
+    pub(crate) fn is_public_export(&self) -> bool { self.public_export_hash != 0 }
+}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, FromRepr)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, FromRepr)]
 #[repr(u32)]
 pub(crate) enum EExportCommandType {
     #[default] Create,
