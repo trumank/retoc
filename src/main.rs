@@ -1636,6 +1636,11 @@ mod chunk_id {
             id[11] = EIoChunkType::ShaderCode as u8;
             Self{ id }
         }
+        pub(crate) fn create_shader_library_chunk_id(shader_library_name: &str, shader_format_name: &str) -> Self {
+            let name = format!("{shader_library_name}-{shader_format_name}");
+            let hash = lower_utf16_cityhash(&name);
+            Self::create(hash, 0, EIoChunkType::ShaderCodeLibrary)
+        }
         pub(crate) fn get_chunk_id(&self) -> u64 {
             u64::from_le_bytes(self.id[0..8].try_into().unwrap())
         }

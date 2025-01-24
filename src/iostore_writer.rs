@@ -136,6 +136,9 @@ impl IoStoreWriter {
         container_header.add_package(FPackageId(chunk_id.get_chunk_id()), store_entry.clone());
         self.write_chunk(chunk_id, path, data)
     }
+    pub(crate) fn container_version(&self) -> EIoStoreTocVersion {
+        self.toc.version
+    }
     pub(crate) fn container_header_version(&self) -> EIoContainerHeaderVersion {
         self.container_header.as_ref().unwrap().version
     }

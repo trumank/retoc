@@ -11,11 +11,12 @@ use anyhow::{anyhow, bail};
 use key_mutex::Empty;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::fmt::{Debug, Formatter};
-use std::io::{Cursor, Read, Seek, Write};
+use std::fmt::{format, Debug, Formatter};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use sha1::{Digest, Sha1};
 use sha1::digest::{DynDigest, Update};
 use strum::{Display, FromRepr, ToString};
+use crate::iostore_writer::IoStoreWriter;
 
 #[derive(Debug, Copy, Clone, Default)]
 struct FIoStoreShaderMapEntry
@@ -31,6 +32,13 @@ impl Readable for FIoStoreShaderMapEntry {
         })
     }
 }
+impl Writeable for FIoStoreShaderMapEntry {
+    fn ser<S: Write>(&self, s: &mut S) -> anyhow::Result<()> {
+        s.ser(&self.shader_indices_offset)?;
+        s.ser(&self.num_shaders)?;
+        Ok({})
+    }
+}
 
 #[derive(Copy, Clone, Default)]
 struct FIoStoreShaderCodeEntry {
@@ -39,6 +47,12 @@ struct FIoStoreShaderCodeEntry {
 impl Readable for FIoStoreShaderCodeEntry {
     fn de<S: Read>(s: &mut S) -> anyhow::Result<Self> {
         Ok(Self{packed: s.de()?})
+    }
+}
+impl Writeable for FIoStoreShaderCodeEntry {
+    fn ser<S: Write>(&self, s: &mut S) -> anyhow::Result<()> {
+        s.ser(&self.packed)?;
+        Ok({})
     }
 }
 impl FIoStoreShaderCodeEntry {
@@ -90,6 +104,15 @@ impl Readable for FIoStoreShaderGroupEntry {
         })
     }
 }
+impl Writeable for FIoStoreShaderGroupEntry {
+    fn ser<S: Write>(&self, s: &mut S) -> anyhow::Result<()> {
+        s.ser(&self.shader_indices_offset)?;
+        s.ser(&self.num_shaders)?;
+        s.ser(&self.uncompressed_size)?;
+        s.ser(&self.compressed_size)?;
+        Ok({})
+    }
+}
 
 #[derive(Debug, Copy, Clone, FromRepr)]
 #[repr(u32)]
@@ -129,9 +152,20 @@ impl FIoStoreShaderCodeArchiveHeader {
             shader_indices,
         })
     }
+    fn serialize<S: Write>(&self, s: &mut S, _version: EIoStoreShaderLibraryVersion) -> anyhow::Result<()> {
+
+        s.ser(&self.shader_map_hashes)?;
+        s.ser(&self.shader_hashes)?;
+        s.ser(&self.shader_group_chunk_ids)?;
+        s.ser(&self.shader_map_entries)?;
+        s.ser(&self.shader_entries)?;
+        s.ser(&self.shader_group_entries)?;
+        s.ser(&self.shader_indices)?;
+        Ok({})
+    }
 }
 
-fn determine_compression_method_for_shader_group(shader_group_data: &Vec<u8>, container_version: EIoStoreTocVersion, container_header_version: Option<EIoContainerHeaderVersion>) -> CompressionMethod {
+fn determine_compression_method_for_shader_code(shader_group_data: &Vec<u8>, container_version: EIoStoreTocVersion, container_header_version: Option<EIoContainerHeaderVersion>) -> CompressionMethod {
 
     // There is no indication of what compression algorithm is used, however, starting with UE5.3, it is always oodle
     let is_compression_always_oodle = container_version >= EIoStoreTocVersion::OnDemandMetaData ||
@@ -152,7 +186,7 @@ fn determine_compression_method_for_shader_group(shader_group_data: &Vec<u8>, co
     CompressionMethod::Oodle
 }
 
-fn decompress_shader_group_chunk(shader_group_data: &Vec<u8>, compression_method: CompressionMethod, uncompressed_size: usize) -> anyhow::Result<Vec<u8>> {
+fn decompress_shader_code(shader_group_data: &Vec<u8>, compression_method: CompressionMethod, uncompressed_size: usize) -> anyhow::Result<Vec<u8>> {
 
     // Sanity check against empty compressed data chunks
     if shader_group_data.is_empty() {
@@ -212,9 +246,9 @@ impl IoStoreShaderCodeArchive {
                     let container_version = store_access.container_file_version().ok_or_else(|| { anyhow!("Failed to retrieve container file version") })?;
                     let container_header_version = store_access.container_header_version();
 
-                    compression_method = Some(determine_compression_method_for_shader_group(&shader_group_data, container_version, container_header_version))
+                    compression_method = Some(determine_compression_method_for_shader_code(&shader_group_data, container_version, container_header_version))
                 }
-                shader_group_data = decompress_shader_group_chunk(&shader_group_data, compression_method.unwrap(), shader_group_entry.uncompressed_size as usize)?;
+                shader_group_data = decompress_shader_code(&shader_group_data, compression_method.unwrap(), shader_group_entry.uncompressed_size as usize)?;
 
                 if shader_group_data.len() != shader_group_entry.uncompressed_size as usize {
                     bail!("Invalid amount of uncompressed data from decompress_shader_group_chunk: Expected {}, got {}", shader_group_entry.uncompressed_size, shader_group_data.len());
@@ -288,6 +322,16 @@ struct FShaderMapEntry
     first_preload_index: u32,
     num_preload_entries: u32,
 }
+impl Readable for FShaderMapEntry {
+    fn de<S: Read>(s: &mut S) -> anyhow::Result<Self> {
+        Ok(Self{
+            shader_indices_offset: s.de()?,
+            num_shaders: s.de()?,
+            first_preload_index: s.de()?,
+            num_preload_entries: s.de()?,
+        })
+    }
+}
 impl Writeable for FShaderMapEntry {
     fn ser<S: Write>(&self, s: &mut S) -> anyhow::Result<()> {
         s.ser(&self.shader_indices_offset)?;
@@ -305,6 +349,16 @@ struct FShaderCodeEntry {
     uncompressed_size: u32,
     frequency: u8,
 }
+impl Readable for FShaderCodeEntry {
+    fn de<S: Read>(s: &mut S) -> anyhow::Result<Self> {
+        Ok(Self{
+            offset: s.de()?,
+            size: s.de()?,
+            uncompressed_size: s.de()?,
+            frequency: s.de()?,
+        })
+    }
+}
 impl Writeable for FShaderCodeEntry {
     fn ser<S: Write>(&self, s: &mut S) -> anyhow::Result<()> {
         s.ser(&self.offset)?;
@@ -319,6 +373,14 @@ struct FFileCachePreloadEntry {
     // Relative to the end of the shader library header
     offset: i64,
     size: i64,
+}
+impl Readable for FFileCachePreloadEntry {
+    fn de<S: Read>(s: &mut S) -> anyhow::Result<Self> {
+        Ok(Self{
+            offset: s.de()?,
+            size: s.de()?,
+        })
+    }
 }
 impl Writeable for FFileCachePreloadEntry {
     fn ser<S: Write>(&self, s: &mut S) -> anyhow::Result<()> {
@@ -345,6 +407,16 @@ impl FShaderLibraryHeader {
         s.ser(&self.preload_entries)?;
         s.ser(&self.shader_indices)?;
         Ok({})
+    }
+    fn deserialize<S: Read>(s: &mut S) -> anyhow::Result<Self> {
+        Ok(Self{
+            shader_map_hashes: s.de()?,
+            shader_hashes: s.de()?,
+            shader_map_entries: s.de()?,
+            shader_entries: s.de()?,
+            preload_entries: s.de()?,
+            shader_indices: s.de()?,
+        })
     }
 }
 
@@ -749,7 +821,7 @@ fn is_raytracing_shader_frequency(shader_frequency: u8) -> bool {
         shader_frequency == EShaderFrequency::RayHitGroup as u8 || shader_frequency == EShaderFrequency::RayCallable as u8
 }
 
-fn build_io_store_shader_code_archive_header(shader_library: &FShaderLibraryHeader, format_name: &str, container_version: EIoStoreTocVersion, separate_raytracing_shaders: bool, max_uncompressed_shader_group_size: usize) -> FIoStoreShaderCodeArchiveHeader {
+fn build_io_store_shader_code_archive_header(shader_library: &FShaderLibraryHeader, shader_format_name: &str, container_version: EIoStoreTocVersion, max_uncompressed_shader_group_size: usize) -> FIoStoreShaderCodeArchiveHeader {
 
     let mut shader_to_referencing_shader_maps: HashMap<usize, Vec<usize>> = HashMap::with_capacity(shader_library.shader_hashes.len());
 
@@ -813,6 +885,7 @@ fn build_io_store_shader_code_archive_header(shader_library: &FShaderLibraryHead
     }
 
     // Split each shader group into non-raytracing and raytracing shaders if requested
+    let separate_raytracing_shaders = shader_format_name == "PCD3D_SM5";
     if separate_raytracing_shaders {
         shader_groups = shader_groups.iter().cloned().flat_map(|x| {
 
@@ -973,7 +1046,7 @@ fn build_io_store_shader_code_archive_header(shader_library: &FShaderLibraryHead
             uncompressed_group_size += shader_code_entry.uncompressed_size as usize;
         }
         // Add the name of the shader library format into the group hash
-        Digest::update(&mut group_hasher, format_name.as_bytes());
+        Digest::update(&mut group_hasher, shader_format_name.as_bytes());
         let shader_hash = FSHAHash(group_hasher.finalize().into());
 
         // Store shader indices into the global array, or find an existing entry
@@ -989,6 +1062,120 @@ fn build_io_store_shader_code_archive_header(shader_library: &FShaderLibraryHead
         io_store_library_header.shader_group_chunk_ids.push(FIoChunkId::create_shader_code_chunk_id(&shader_hash).with_version(container_version).get_raw());
     }
     io_store_library_header
+}
+
+pub(crate) fn write_io_store_library(store_writer: &mut IoStoreWriter, raw_shader_library_buffer: &Vec<u8>, shader_library_path: &str) -> anyhow::Result<()> {
+
+    let mut shader_library_reader = Cursor::new(raw_shader_library_buffer);
+
+    // Read shader library header
+    let shader_library_version_loose: i32 = shader_library_reader.de()?;
+    if shader_library_version_loose != 2 {
+        bail!("Unknown shader library file version {}. Current version is 2", shader_library_version_loose);
+    }
+    let shader_library_header = FShaderLibraryHeader::deserialize(&mut shader_library_reader)?;
+    // Shader library code offsets are relative to the end of the shader library header
+    let shader_library_code_start_offset = shader_library_reader.stream_position()?;
+
+    // Figure out the name of the format of this shader library
+    let library_filename = UEPath::new(shader_library_path).file_stem().ok_or_else(|| { anyhow!("Failed to retrieve file stem from shader library path") })?;
+    let shader_library_name_separator_index = library_filename.find('-').ok_or_else(|| { anyhow!("Failed to derive shader library name from shader library filename") })?;
+    let shader_format_separator_index = library_filename.rfind('-').ok_or_else(|| { anyhow!("Failed to derive format name from shader library filename") })?;
+
+    // Note that this splitting logic is actually wrong, shader format will end up being part of the library name, ahd shader format will end up being a name of the shader platform
+    // However, we have to follow the wrong logic in UnrealPak to get matching shader chunk IDs. If it ever gets fixed in UE, this logic will need to be changed.
+    // Shader library names are like this: ShaderArchive-Global-PCD3D_SM6-PCD3D_SM6.ushaderbytecode
+    // Logic above gives "Global-PCD3D_SM6" as library name and "PCD3D_SM6" as shader format.
+    // However, actual library name is "Global", actual shader format name is "PCD3D" and shader platform is "PCD3D_SM6"
+    let shader_library_name = library_filename[shader_library_name_separator_index + 1..shader_format_separator_index].to_string();
+    let shader_format_name = library_filename[shader_format_separator_index + 1..].to_string();
+
+    // Create IoStore shader library header to split shaders into groups
+    let max_shader_group_size = 1024 * 1024; // from UE source, can be adjusted per game using r.ShaderCodeLibrary.MaxShaderGroupSize CVar
+    let mut io_store_library_header = build_io_store_shader_code_archive_header(&shader_library_header, &shader_format_name, store_writer.container_version(), max_shader_group_size);
+
+    // Cached compression method for this shader library
+    let mut compression_method: Option<CompressionMethod> = None;
+
+    // Create shader chunks for each shader group from the library
+    for shader_group_index in 0..io_store_library_header.shader_group_entries.len() {
+
+        let shader_group_entry = io_store_library_header.shader_group_entries[shader_group_index].clone();
+        let mut shader_group_chunk_buffer: Vec<u8> = Vec::new();
+
+        // Read and decompress each individual shader contained within this group
+        for i in 0..shader_group_entry.num_shaders {
+            let shader_indices_index = (shader_group_entry.shader_indices_offset + i) as usize;
+            let shader_index = io_store_library_header.shader_indices[shader_indices_index] as usize;
+
+            // Resolve the offset of the shader code into the shader library and seek there
+            let shader_code_entry = shader_library_header.shader_entries[shader_index].clone();
+            let shader_code_offset = shader_library_code_start_offset + shader_code_entry.offset;
+            shader_library_reader.seek(SeekFrom::Start(shader_code_offset))?;
+
+            // Read the shader code into the temporary buffer
+            let mut uncompressed_shader_code: Vec<u8> = vec![0; shader_code_entry.size as usize];
+            shader_library_reader.read_exact(&mut uncompressed_shader_code)?;
+
+            // Decompress the shader code if it's size is actually different from the uncompressed size
+            if shader_code_entry.size != shader_code_entry.uncompressed_size {
+                // Determine the compression method from the shader code if we do not know it yet
+                if compression_method.is_none() {
+                    compression_method = Some(determine_compression_method_for_shader_code(&uncompressed_shader_code, store_writer.container_version(), Some(store_writer.container_header_version())));
+                }
+                uncompressed_shader_code = decompress_shader_code(&uncompressed_shader_code, compression_method.unwrap(), shader_code_entry.uncompressed_size as usize)?;
+            }
+
+            // Write the shader code into the uncompressed chunk buffer. Make sure shader code offset matches it's actual placement
+            let expected_shader_code_offset = io_store_library_header.shader_entries[shader_index].shader_uncompressed_offset_in_group();
+            let actual_shader_code_offset = shader_group_chunk_buffer.len();
+            if actual_shader_code_offset != expected_shader_code_offset {
+                bail!("Shader code placement inside of the group did not match it's expected placement from the library header. Expected shader code to be at offset {}, but it's actual placement is at offset {}",
+                    expected_shader_code_offset, actual_shader_code_offset);
+            }
+            shader_group_chunk_buffer.append(&mut uncompressed_shader_code);
+        }
+
+        // Make sure the uncompressed size matches the expected size written into the header
+        let actual_uncompressed_group_size = shader_group_chunk_buffer.len();
+        let expected_uncompressed_group_size = shader_group_entry.uncompressed_size as usize;
+        if actual_uncompressed_group_size != expected_uncompressed_group_size {
+            bail!("Expected uncompressed group size to be {} as written into the header, but after the actual shader code placement uncompressed size was {}", expected_uncompressed_group_size, actual_uncompressed_group_size);
+        }
+
+        // If we know the compression method for shaders, compress this groups content with it
+        if compression_method.is_some() {
+            let compressed_group_data = compress_shader(&shader_group_chunk_buffer, compression_method.unwrap())?;
+
+            // Only take the compressed data over the decompressed data if it is actually smaller
+            if compressed_group_data.len() < actual_uncompressed_group_size {
+                shader_group_chunk_buffer = compressed_group_data;
+            }
+        }
+
+        // Now that we know compressed group size, write it into the shader group header
+        let compressed_group_size = shader_group_chunk_buffer.len();
+        io_store_library_header.shader_group_entries[shader_group_index].compressed_size = compressed_group_size as u32;
+        let shader_group_chunk_id = io_store_library_header.shader_group_chunk_ids[shader_group_index].clone();
+
+        // Write the shader code chunk for this group into the container. Note that shader chunks do not have filenames
+        store_writer.write_chunk_raw(shader_group_chunk_id, None, &shader_group_chunk_buffer)?;
+    }
+
+    // Create a new chunk for the shader library header
+    let mut io_store_shader_library_buffer: Vec<u8> = Vec::new();
+    let mut io_store_shader_library_writer = Cursor::new(&mut io_store_shader_library_buffer);
+
+    // Write the version and then the contents of the shader code archive
+    let io_store_library_version = EIoStoreShaderLibraryVersion::Initial;
+    let io_store_library_version_raw: u32 = io_store_library_version as u32;
+    io_store_shader_library_writer.ser(&io_store_library_version_raw)?;
+    FIoStoreShaderCodeArchiveHeader::serialize(&io_store_library_header, &mut io_store_shader_library_writer, io_store_library_version)?;
+
+    // Write the shader library header chunk using the provided filename
+    let shader_library_chunk_id = FIoChunkId::create_shader_library_chunk_id(&shader_library_name, &shader_format_name);
+    store_writer.write_chunk(shader_library_chunk_id, Some(shader_library_path), &io_store_shader_library_buffer)?;
+    Ok({})
 }
 
 #[cfg(test)]
