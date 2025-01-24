@@ -816,9 +816,26 @@ mod test {
 
     #[test]
     fn test_zen_asset_identity_conversion() -> anyhow::Result<()> {
+        run_test(
+            "tests/UE5.4/BP_Table_Lamp.uasset",
+            "tests/UE5.4/BP_Table_Lamp.uexp",
+            "tests/UE5.4/BP_Table_Lamp.uzenasset",
+        )?;
 
-        let asset_header_buffer = fs::read("tests/UE5.4/BP_Table_Lamp.uasset")?;
-        let asset_exports_buffer = fs::read("tests/UE5.4/BP_Table_Lamp.uexp")?;
+        run_test(
+            "tests/UE5.4/Randy.uasset",
+            "tests/UE5.4/Randy.uexp",
+            "tests/UE5.4/Randy.uzenasset",
+        )?;
+
+        Ok(())
+    }
+
+    fn run_test(header: &str, exports: &str, original_zen: &str) -> anyhow::Result<()> {
+        use pretty_assertions::assert_eq;
+
+        let asset_header_buffer = fs::read(header)?;
+        let asset_exports_buffer = fs::read(exports)?;
 
         let serialized_asset_bundle = FSerializedAssetBundle{
             asset_file_buffer: asset_header_buffer,
@@ -831,7 +848,7 @@ mod test {
         let container_header_version = EIoContainerHeaderVersion::NoExportInfo;
         let container_toc_version = EIoStoreTocVersion::OnDemandMetaData;
 
-        let original_zen_asset = fs::read("tests/UE5.4/BP_Table_Lamp.uzenasset")?;
+        let original_zen_asset = fs::read(original_zen)?;
         let original_zen_asset_package = FZenPackageHeader::deserialize(&mut Cursor::new(&original_zen_asset), None, container_toc_version, container_header_version, package_file_version.clone())?;
 
         let (_, _, converted_zen_asset) = build_serialize_zen_asset(&serialized_asset_bundle, container_header_version, package_file_version.clone())?;
