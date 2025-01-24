@@ -115,7 +115,9 @@ impl IoStoreWriter {
             data.len() as u64,
         );
 
-        self.toc.chunks.push(chunk_id);
+        self.toc
+            .chunks
+            .push(chunk_id.with_version(self.toc.version));
         self.toc.chunk_offset_lengths.push(offset_and_length);
         self.toc.chunk_metas.push(meta);
 
