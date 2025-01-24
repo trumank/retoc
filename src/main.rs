@@ -148,7 +148,7 @@ struct ActionGet {
     #[arg(index = 1)]
     utoc: PathBuf,
     #[arg(index = 2)]
-    chunk_id: FIoChunkId,
+    chunk_id: FIoChunkIdRaw,
 }
 
 #[derive(Parser, Debug)]
@@ -242,7 +242,7 @@ fn action_manifest(args: ActionManifest, config: Arc<Config>) -> Result<()> {
                         packagename: package_name,
                     },
                     packagedata: vec![manifest::ChunkData {
-                        id: chunk_info.id,
+                        id: chunk_info.id.get_raw(),
                         filename: file_name.to_string(),
                     }],
                     bulkdata: vec![],
@@ -252,7 +252,7 @@ fn action_manifest(args: ActionManifest, config: Arc<Config>) -> Result<()> {
                     let bulk_path = format!("{path}.ubulk");
                     if let Some(&bulk) = toc.file_map_lower.get(&bulk_path.to_ascii_lowercase()) {
                         entry.bulkdata.push(manifest::ChunkData {
-                            id: toc.chunks[bulk as usize],
+                            id: toc.chunks[bulk as usize].get_raw(),
                             filename: bulk_path,
                         });
                     }
@@ -307,7 +307,7 @@ fn action_list(args: ActionList, config: Arc<Config>) -> Result<()> {
         println!(
             "{:30}  {}  {:20}  {}",
             chunk.container().container_name(),
-            hex::encode(id),
+            hex::encode(id.get_raw()),
             chunk_type.as_ref(),
             chunk.path().as_deref().unwrap_or("-"),
             //package_store_entry,
@@ -426,7 +426,7 @@ mod raw {
 
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    use crate::{EIoStoreTocVersion, FIoChunkId};
+    use crate::{EIoStoreTocVersion, FIoChunkId, FIoChunkIdRaw};
 
     #[derive(Serialize, Deserialize)]
     pub(crate) struct RawIoManifest {
@@ -436,27 +436,27 @@ mod raw {
     }
     #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub(crate) struct ChunkId(
-        #[serde(serialize_with = "to_hex", deserialize_with = "from_hex")] pub(crate) FIoChunkId,
+        #[serde(serialize_with = "to_hex", deserialize_with = "from_hex")] pub(crate) FIoChunkIdRaw,
     );
-    impl From<FIoChunkId> for ChunkId {
-        fn from(value: FIoChunkId) -> Self {
+    impl From<FIoChunkIdRaw> for ChunkId {
+        fn from(value: FIoChunkIdRaw) -> Self {
             Self(value)
         }
     }
 
-    fn to_hex<S>(chunk_id: &FIoChunkId, serializer: S) -> Result<S::Ok, S::Error>
+    fn to_hex<S>(chunk_id: &FIoChunkIdRaw, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         serializer.serialize_str(&hex::encode(chunk_id.id))
     }
-    fn from_hex<'de, D>(deserializer: D) -> Result<FIoChunkId, D::Error>
+    fn from_hex<'de, D>(deserializer: D) -> Result<FIoChunkIdRaw, D::Error>
     where
         D: Deserializer<'de>,
     {
         let s: String = Deserialize::deserialize(deserializer)?;
         let v = hex::decode(s).map_err(serde::de::Error::custom)?;
-        Ok(FIoChunkId {
+        Ok(FIoChunkIdRaw {
             id: v.try_into().map_err(|v: Vec<u8>| {
                 serde::de::Error::invalid_length(v.len(), &"a 12 byte hex string")
             })?,
@@ -482,9 +482,11 @@ fn action_unpack_raw(args: ActionUnpackRaw, config: Arc<Config>) -> Result<()> {
 
     for chunk in iostore.chunks() {
         let data = chunk.read()?;
-        fs::write(chunks_dir.join(hex::encode(chunk.id())), data)?;
+        fs::write(chunks_dir.join(hex::encode(chunk.id().get_raw())), data)?;
         if let Some(path) = chunk.path() {
-            manifest.chunk_paths.insert(chunk.id().into(), path);
+            manifest
+                .chunk_paths
+                .insert(chunk.id().get_raw().into(), path);
         }
     }
 
@@ -512,13 +514,13 @@ fn action_pack_raw(args: ActionPackRaw, _config: Arc<Config>) -> Result<()> {
     )?;
     for entry in args.input.join("chunks").read_dir()? {
         let entry = entry?;
-        let chunk_id = FIoChunkId::from_str(entry.file_name().to_string_lossy().as_ref())?;
+        let chunk_id = FIoChunkIdRaw::from_str(entry.file_name().to_string_lossy().as_ref())?;
         let path = manifest
             .chunk_paths
             .get(&chunk_id.into())
             .map(String::as_ref);
         let data = fs::read(entry.path())?;
-        writer.write_chunk(chunk_id, path, &data)?;
+        writer.write_chunk_raw(chunk_id, path, &data)?;
     }
     writer.finalize()?;
     Ok(())
@@ -854,7 +856,7 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
 
 fn action_get(args: ActionGet, config: Arc<Config>) -> Result<()> {
     let iostore = iostore::open(args.utoc, config)?;
-    let data = iostore.read(args.chunk_id)?;
+    let data = iostore.read_raw(args.chunk_id)?;
     std::io::stdout().write_all(&data)?;
     Ok(())
 }
@@ -952,7 +954,9 @@ impl Writeable for FIoStoreTocHeader {
 
 #[instrument(skip_all)]
 fn read_chunk_ids<R: Read>(stream: &mut R, header: &FIoStoreTocHeader) -> Result<Vec<FIoChunkId>> {
-    stream.de_ctx(header.toc_entry_count as usize)
+    read_array(header.toc_entry_count as usize, stream, |s| {
+        s.de_ctx(header.version)
+    })
 }
 
 #[instrument(skip_all)]
@@ -1288,7 +1292,7 @@ impl Toc {
     /// get absolute path (including mount point) for given chunk ID if has one
     fn file_name(&self, chunk_id: FIoChunkId) -> Option<String> {
         self.chunk_id_map
-            .get(&chunk_id)
+            .get(&chunk_id.with_version(self.version))
             .and_then(|index| self.file_map_rev.get(index))
             .map(|path| {
                 UEPath::new(&self.directory_index.mount_point)
@@ -1484,69 +1488,146 @@ mod test {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct FIoChunkId {
-    id: [u8; 12],
-}
-impl std::fmt::Debug for FIoChunkId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FIoChunkId")
-            .field("chunk_id", &hex::encode(self.id))
-            .field("chunk_type", &self.get_chunk_type())
-            .finish()
-    }
-}
-impl AsRef<[u8]> for FIoChunkId {
-    fn as_ref(&self) -> &[u8] {
-        &self.id
-    }
-}
-impl TryFrom<Vec<u8>> for FIoChunkId {
-    type Error = Vec<u8>;
+use chunk_id::{FIoChunkId, FIoChunkIdRaw};
+mod chunk_id {
+    use super::*;
 
-    fn try_from(value: Vec<u8>) -> std::result::Result<Self, Self::Error> {
-        Ok(Self {
-            id: value.try_into()?,
-        })
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    pub(crate) struct FIoChunkIdRaw {
+        pub(crate) id: [u8; 12],
     }
-}
-impl FromStr for FIoChunkId {
-    type Err = anyhow::Error;
+    impl std::fmt::Debug for FIoChunkIdRaw {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("FIoChunkIdRaw")
+                .field("chunk_id", &hex::encode(self.id))
+                .finish()
+        }
+    }
+    impl Readable for FIoChunkIdRaw {
+        fn de<S: Read>(s: &mut S) -> Result<Self> {
+            Ok(Self { id: s.de()? })
+        }
+    }
+    impl Writeable for FIoChunkIdRaw {
+        fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+            s.ser(&self.id)
+        }
+    }
+    impl FromStr for FIoChunkIdRaw {
+        type Err = anyhow::Error;
 
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        let id = hex::decode(s)
-            .ok()
-            .and_then(|bytes| bytes.try_into().ok())
-            .context("expected 12 byte hex string")?;
-        Ok(FIoChunkId { id })
+        fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+            let id = hex::decode(s)
+                .ok()
+                .and_then(|bytes| bytes.try_into().ok())
+                .context("expected 12 byte hex string")?;
+            Ok(FIoChunkIdRaw { id })
+        }
     }
-}
-impl Readable for FIoChunkId {
-    fn de<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(Self { id: stream.de()? })
+    impl AsRef<[u8]> for FIoChunkIdRaw {
+        fn as_ref(&self) -> &[u8] {
+            &self.id
+        }
     }
-}
-impl Writeable for FIoChunkId {
-    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
-        s.ser(&self.id)
+    impl TryFrom<Vec<u8>> for FIoChunkIdRaw {
+        type Error = Vec<u8>;
+
+        fn try_from(value: Vec<u8>) -> std::result::Result<Self, Self::Error> {
+            Ok(Self {
+                id: value.try_into()?,
+            })
+        }
     }
-}
-impl FIoChunkId {
-    fn create(chunk_id: u64, chunk_index: u16, chunk_type: EIoChunkType) -> Self {
-        let mut id = [0; 12];
-        id[0..8].copy_from_slice(&u64::to_le_bytes(chunk_id));
-        id[8..10].copy_from_slice(&u16::to_le_bytes(chunk_index));
-        id[11] = chunk_type as u8;
-        Self { id }
+
+    #[derive(Clone, Copy)]
+    pub(crate) struct FIoChunkId {
+        id: [u8; 12],
     }
-    fn from_package_id(package_id: FPackageId, chunk_index: u16, chunk_type: EIoChunkType) -> Self {
-        Self::create(package_id.0, chunk_index, chunk_type)
+    impl std::cmp::Eq for FIoChunkId {}
+    impl PartialEq for FIoChunkId {
+        fn eq(&self, other: &Self) -> bool {
+            self.get_raw() == other.get_raw()
+        }
     }
-    fn get_chunk_id(&self) -> u64 {
-        u64::from_le_bytes(self.id[0..8].try_into().unwrap())
+    impl std::cmp::PartialOrd for FIoChunkId {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            self.get_raw().partial_cmp(&other.get_raw())
+        }
     }
-    fn get_chunk_type(&self) -> EIoChunkType {
-        EIoChunkType::from_repr(self.id[11]).unwrap()
+    impl std::cmp::Ord for FIoChunkId {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            self.get_raw().cmp(&other.get_raw())
+        }
+    }
+    impl std::hash::Hash for FIoChunkId {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            self.get_raw().hash(state)
+        }
+    }
+    impl std::fmt::Debug for FIoChunkId {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("FIoChunkId")
+                .field("chunk_id", &hex::encode(self.id))
+                .field("chunk_type", &self.get_chunk_type())
+                .finish()
+        }
+    }
+    impl ReadableCtx<EIoStoreTocVersion> for FIoChunkId {
+        fn de<S: Read>(s: &mut S, version: EIoStoreTocVersion) -> Result<Self> {
+            let raw: FIoChunkIdRaw = s.de()?;
+            Ok(Self::from_raw(raw, version))
+        }
+    }
+    impl Writeable for FIoChunkId {
+        fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+            s.ser(&self.get_raw())
+        }
+    }
+    impl FIoChunkId {
+        pub(crate) fn from_raw(raw: FIoChunkIdRaw, version: EIoStoreTocVersion) -> Self {
+            let mut id: [u8; 12] = raw.id;
+            let is_new = version > EIoStoreTocVersion::PerfectHash;
+            id[11] = EIoChunkType::new(id[11], is_new) as u8;
+            id[11] |= (is_new as u8) << 7; // set bit to is_new
+            id[11] |= 1 << 6; // set bit to indicate has version
+            Self { id }
+        }
+        pub(crate) fn with_version(self, version: EIoStoreTocVersion) -> Self {
+            let mut id: [u8; 12] = self.id;
+            let is_new = version > EIoStoreTocVersion::PerfectHash;
+            id[11] |= (is_new as u8) << 7; // set bit to is_new
+            id[11] |= 1 << 6; // set bit to indicate has version
+            Self { id }
+        }
+        pub(crate) fn create(chunk_id: u64, chunk_index: u16, chunk_type: EIoChunkType) -> Self {
+            let mut id = [0; 12];
+            id[0..8].copy_from_slice(&u64::to_le_bytes(chunk_id));
+            id[8..10].copy_from_slice(&u16::to_le_bytes(chunk_index));
+            id[11] = chunk_type as u8;
+            Self { id }
+        }
+        pub(crate) fn from_package_id(
+            package_id: FPackageId,
+            chunk_index: u16,
+            chunk_type: EIoChunkType,
+        ) -> Self {
+            Self::create(package_id.0, chunk_index, chunk_type)
+        }
+        pub(crate) fn get_chunk_id(&self) -> u64 {
+            u64::from_le_bytes(self.id[0..8].try_into().unwrap())
+        }
+        pub(crate) fn get_chunk_type(&self) -> EIoChunkType {
+            EIoChunkType::from_repr(self.id[11] & 0b11_1111).unwrap()
+        }
+        pub(crate) fn get_raw(&self) -> FIoChunkIdRaw {
+            let mut id = self.id;
+            if id[11] >> 6 & 1 == 0 {
+                panic!("no version info, cannot convert to raw");
+            }
+            let is_new = id[11] >> 7 != 0;
+            id[11] = self.get_chunk_type().value(is_new);
+            FIoChunkIdRaw { id }
+        }
     }
 }
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -1887,32 +1968,107 @@ struct FIoStoreTocChunkInfo {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, FromRepr, AsRefStr)]
 #[repr(u8)]
 enum EIoChunkType {
-    Invalid = 0,
-    ExportBundleData = 1,
-    BulkData = 2,
-    OptionalBulkData = 3,
-    MemoryMappedBulkData = 4,
-    ScriptObjects = 5,
-    ContainerHeader = 6,
-    ExternalFile = 7,
-    ShaderCodeLibrary = 8,
-    ShaderCode = 9,
-    PackageStoreEntry = 10,
-    DerivedData = 11,
-    EditorDerivedData = 12,
-    PackageResource = 13,
-    // from 4.25
-    //Invalid = 0x0,
-    //InstallManifest = 0x1,
-    //ExportBundleData = 0x2,
-    //BulkData = 0x3,
-    //OptionalBulkData = 0x4,
-    //MemoryMappedBulkData = 0x5,
-    //LoaderGlobalMeta = 0x6,
-    //LoaderInitialLoadMeta = 0x7,
-    //LoaderGlobalNames = 0x8,
-    //LoaderGlobalNameHashes = 0x9,
-    //ContainerHeader = 0xa,
+    Invalid,
+    ExportBundleData,
+    BulkData,
+    OptionalBulkData,
+    MemoryMappedBulkData,
+    ScriptObjects,
+    ContainerHeader,
+    ExternalFile,
+    ShaderCodeLibrary,
+    ShaderCode,
+    PackageStoreEntry,
+    DerivedData,
+    EditorDerivedData,
+    PackageResource,
+
+    // old chunk types
+    InstallManifest,
+    LoaderGlobalMeta,
+    LoaderInitialLoadMeta,
+    LoaderGlobalNames,
+    LoaderGlobalNameHashes,
+}
+impl EIoChunkType {
+    fn new(value: u8, is_new: bool) -> Self {
+        use EIoChunkType::*;
+        if is_new {
+            match value {
+                0 => Invalid,
+                1 => ExportBundleData,
+                2 => BulkData,
+                3 => OptionalBulkData,
+                4 => MemoryMappedBulkData,
+                5 => ScriptObjects,
+                6 => ContainerHeader,
+                7 => ExternalFile,
+                8 => ShaderCodeLibrary,
+                9 => ShaderCode,
+                10 => PackageStoreEntry,
+                11 => DerivedData,
+                12 => EditorDerivedData,
+                13 => PackageResource,
+                _ => panic!("invalid chunk type for version"),
+            }
+        } else {
+            match value {
+                0 => Invalid,
+                1 => InstallManifest,
+                2 => ExportBundleData,
+                3 => BulkData,
+                4 => OptionalBulkData,
+                5 => MemoryMappedBulkData,
+                6 => LoaderGlobalMeta,
+                7 => LoaderInitialLoadMeta,
+                8 => LoaderGlobalNames,
+                9 => LoaderGlobalNameHashes,
+                10 => ContainerHeader,
+                11 => ShaderCodeLibrary,
+                12 => ShaderCode,
+                _ => panic!("invalid chunk type for version"),
+            }
+        }
+    }
+    fn value(self, is_new: bool) -> u8 {
+        use EIoChunkType::*;
+        if is_new {
+            match self {
+                Invalid => 0,
+                ExportBundleData => 1,
+                BulkData => 2,
+                OptionalBulkData => 3,
+                MemoryMappedBulkData => 4,
+                ScriptObjects => 5,
+                ContainerHeader => 6,
+                ExternalFile => 7,
+                ShaderCodeLibrary => 8,
+                ShaderCode => 9,
+                PackageStoreEntry => 10,
+                DerivedData => 11,
+                EditorDerivedData => 12,
+                PackageResource => 13,
+                _ => panic!("invalid chunk type for version"),
+            }
+        } else {
+            match self {
+                Invalid => 0,
+                InstallManifest => 1,
+                ExportBundleData => 2,
+                BulkData => 3,
+                OptionalBulkData => 4,
+                MemoryMappedBulkData => 5,
+                LoaderGlobalMeta => 6,
+                LoaderInitialLoadMeta => 7,
+                LoaderGlobalNames => 8,
+                LoaderGlobalNameHashes => 9,
+                ContainerHeader => 10,
+                ShaderCodeLibrary => 11,
+                ShaderCode => 12,
+                _ => panic!("invalid chunk type for version"),
+            }
+        }
+    }
 }
 
 use crate::asset_conversion::FZenPackageContext;
