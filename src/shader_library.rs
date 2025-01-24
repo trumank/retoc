@@ -749,7 +749,7 @@ fn is_raytracing_shader_frequency(shader_frequency: u8) -> bool {
         shader_frequency == EShaderFrequency::RayHitGroup as u8 || shader_frequency == EShaderFrequency::RayCallable as u8
 }
 
-fn build_io_store_shader_code_archive_header(shader_library: &FShaderLibraryHeader, format_name: &str, separate_raytracing_shaders: bool, max_uncompressed_shader_group_size: usize) -> FIoStoreShaderCodeArchiveHeader {
+fn build_io_store_shader_code_archive_header(shader_library: &FShaderLibraryHeader, format_name: &str, container_version: EIoStoreTocVersion, separate_raytracing_shaders: bool, max_uncompressed_shader_group_size: usize) -> FIoStoreShaderCodeArchiveHeader {
 
     let mut shader_to_referencing_shader_maps: HashMap<usize, Vec<usize>> = HashMap::with_capacity(shader_library.shader_hashes.len());
 
@@ -819,20 +819,20 @@ fn build_io_store_shader_code_archive_header(shader_library: &FShaderLibraryHead
             let mut non_raytracing_shaders: Vec<usize> = Vec::with_capacity(x.len());
             let mut raytracing_shaders: Vec<usize> = Vec::new();
 
-            for shader_index in x {
-                let shader_frequency = shader_library.shader_entries[shader_index].frequency;
+            for shader_index in &x {
+                let shader_frequency = shader_library.shader_entries[*shader_index].frequency;
                 if is_raytracing_shader_frequency(shader_frequency) {
-                    raytracing_shaders.push(shader_index);
+                    raytracing_shaders.push(*shader_index);
                 } else {
-                    non_raytracing_shaders.push(shader_index);
+                    non_raytracing_shaders.push(*shader_index);
                 }
             }
 
             // Only use the split up groups if both groups are not empty, otherwise use the original group
             if !non_raytracing_shaders.is_empty() && !raytracing_shaders.is_empty() {
-                return non_raytracing_shaders.into_iter().chain(raytracing_shaders.into_iter())
+                return vec![non_raytracing_shaders, raytracing_shaders].into_iter()
             }
-            x.into_iter()
+            vec![x].into_iter()
         }).collect();
     }
 
@@ -849,16 +849,16 @@ fn build_io_store_shader_code_archive_header(shader_library: &FShaderLibraryHead
     }
 
     // Now, split the shader groups by their size, ensuring that no group is larger than maximum group size
-    shader_groups = shader_groups.iter().flat_map(|x| {
+    shader_groups = shader_groups.iter().cloned().flat_map(|x| {
 
         // Calculate current group size
         let mut group_size: usize = 0;
-        for shader_index in x {
+        for shader_index in &x {
             group_size += shader_library.shader_entries[*shader_index].uncompressed_size as usize;
         }
         // Do not split up groups that are under the size limit or only contain one shader
         if group_size <= max_uncompressed_shader_group_size || x.len() == 1 {
-            return vec![x.clone()].iter();
+            return vec![x].into_iter();
         }
 
         let num_new_groups = min(group_size / max_uncompressed_shader_group_size + 1, x.len());
@@ -886,7 +886,7 @@ fn build_io_store_shader_code_archive_header(shader_library: &FShaderLibraryHead
             new_shader_groups[smallest_new_group_index].push(shader_index);
             new_shader_group_sizes[smallest_new_group_index] += shader_size;
         }
-        return new_shader_groups.iter();
+        return new_shader_groups.into_iter();
     }).collect();
 
     // Final step, sort shaders in each shader group ascending
@@ -963,21 +963,21 @@ fn build_io_store_shader_code_archive_header(shader_library: &FShaderLibraryHead
         let mut uncompressed_group_size: usize = 0;
 
         // Populate shader entries and calculate the resulting hash of the group
-        for shader_index in shader_group {
-            let shader_code_entry = shader_library.shader_entries[shader_index].clone();
-            let shader_hash = shader_library.shader_hashes[shader_index].clone();
-            io_store_library_header.shader_entries[shader_index] = FIoStoreShaderCodeEntry::new(shader_group_index, uncompressed_group_size, shader_code_entry.frequency);
+        for shader_index in &shader_group {
+            let shader_code_entry = shader_library.shader_entries[*shader_index].clone();
+            let shader_hash = shader_library.shader_hashes[*shader_index].clone();
+            io_store_library_header.shader_entries[*shader_index] = FIoStoreShaderCodeEntry::new(shader_group_index, uncompressed_group_size, shader_code_entry.frequency);
 
-            group_hasher.update(&shader_hash.0);
-            group_hasher.update(&shader_code_entry.uncompressed_size.to_le_bytes());
-            uncompressed_group_size += shader_code_entry.uncompressed_size;
+            Digest::update(&mut group_hasher, &shader_hash.0);
+            Digest::update(&mut group_hasher, &shader_code_entry.uncompressed_size.to_le_bytes());
+            uncompressed_group_size += shader_code_entry.uncompressed_size as usize;
         }
         // Add the name of the shader library format into the group hash
-        group_hasher.update(format_name.as_bytes());
-        let shader_hash = FSHAHash(group_hasher.finalize().as_slice().clone());
+        Digest::update(&mut group_hasher, format_name.as_bytes());
+        let shader_hash = FSHAHash(group_hasher.finalize().into());
 
         // Store shader indices into the global array, or find an existing entry
-        let group_indices_offset = find_or_add_sequence_in_shader_indices(&mut io_store_library_header, shader_group);
+        let group_indices_offset = find_or_add_sequence_in_shader_indices(&mut io_store_library_header, &shader_group);
 
         // Prime uncompressed size, but leave compressed size as zero. it will be written later
         io_store_library_header.shader_group_entries.push(FIoStoreShaderGroupEntry{
@@ -986,8 +986,9 @@ fn build_io_store_shader_code_archive_header(shader_library: &FShaderLibraryHead
             uncompressed_size: uncompressed_group_size as u32,
             compressed_size: 0,
         });
-        io_store_library_header.shader_group_chunk_ids.push(FIoChunkId::create_shader_code_chunk_id(&shader_hash));
+        io_store_library_header.shader_group_chunk_ids.push(FIoChunkId::create_shader_code_chunk_id(&shader_hash).with_version(container_version).get_raw());
     }
+    io_store_library_header
 }
 
 #[cfg(test)]
