@@ -1,5 +1,6 @@
 use crate::{
-    container_header::EIoContainerHeaderVersion, zen::EUnrealEngineObjectUE5Version,
+    container_header::EIoContainerHeaderVersion,
+    zen::{EUnrealEngineObjectUE4Version, EUnrealEngineObjectUE5Version, FPackageFileVersion},
     EIoStoreTocVersion,
 };
 
@@ -8,6 +9,7 @@ use strum::{IntoStaticStr, VariantArray};
 use EngineVersion::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, IntoStaticStr, VariantArray)]
 pub(crate) enum EngineVersion {
+    UE4_27,
     UE5_0,
     UE5_1,
     UE5_2,
@@ -29,6 +31,7 @@ impl EngineVersion {
     pub(crate) fn toc_version(self) -> EIoStoreTocVersion {
         use EIoStoreTocVersion::*;
         match self {
+            UE4_27 => PartitionSize,
             UE5_0 => PerfectHashWithOverflow,
             UE5_1 => PerfectHashWithOverflow,
             UE5_2 => PerfectHashWithOverflow,
@@ -40,12 +43,20 @@ impl EngineVersion {
     pub(crate) fn container_header_version(self) -> EIoContainerHeaderVersion {
         use EIoContainerHeaderVersion::*;
         match self {
+            UE4_27 => Initial,
             UE5_0 => LocalizedPackages,
             UE5_1 => OptionalSegmentPackages,
             UE5_2 => OptionalSegmentPackages,
             UE5_3 => NoExportInfo,
             UE5_4 => NoExportInfo,
             UE5_5 => SoftPackageReferences,
+        }
+    }
+    pub(crate) fn object_ue4_version(self) -> EUnrealEngineObjectUE4Version {
+        use EUnrealEngineObjectUE4Version::*;
+        match self {
+            UE4_27 => CorrectLicenseeFlag,
+            _ => unreachable!(),
         }
     }
     pub(crate) fn object_ue5_version(self) -> EUnrealEngineObjectUE5Version {
@@ -57,6 +68,14 @@ impl EngineVersion {
             UE5_3 => DataResources,
             UE5_4 => PropertyTagCompleteTypeName,
             UE5_5 => AssetRegistryPackageBuildDependencies,
+            _ => unreachable!(),
+        }
+    }
+    pub(crate) fn package_file_version(self) -> FPackageFileVersion {
+        if self < UE5_0 {
+            FPackageFileVersion::create_ue4(self.object_ue4_version())
+        } else {
+            FPackageFileVersion::create_ue5(self.object_ue5_version())
         }
     }
 }

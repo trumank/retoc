@@ -655,9 +655,8 @@ fn action_extract_legacy_assets(
         packages_to_extract.push((package_info, package_path));
     }
 
-    let package_file_version: Option<FPackageFileVersion> = args
-        .version
-        .map(|v| FPackageFileVersion::create_ue5(EngineVersion::object_ue5_version(v)));
+    let package_file_version: Option<FPackageFileVersion> =
+        args.version.map(|v| v.package_file_version());
     let package_context = FZenPackageContext::create(iostore, package_file_version, log);
 
     let count = packages_to_extract.len();
@@ -834,9 +833,7 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
             &mut writer,
             &bundle,
             &Path::new(mount_point).join(relative_path).to_string_lossy(),
-            Some(FPackageFileVersion::create_ue5(
-                args.version.object_ue5_version(),
-            )),
+            Some(args.version.package_file_version()),
         )?;
     }
 
@@ -2036,7 +2033,7 @@ impl EIoChunkType {
                 11 => DerivedData,
                 12 => EditorDerivedData,
                 13 => PackageResource,
-                _ => panic!("invalid chunk type for version"),
+                _ => panic!("invalid chunk type for version >= UE5: {value}"),
             }
         } else {
             match value {
@@ -2053,7 +2050,7 @@ impl EIoChunkType {
                 10 => ContainerHeader,
                 11 => ShaderCodeLibrary,
                 12 => ShaderCode,
-                _ => panic!("invalid chunk type for version"),
+                _ => panic!("invalid chunk type for version < UE5: {value}"),
             }
         }
     }
@@ -2075,7 +2072,7 @@ impl EIoChunkType {
                 DerivedData => 11,
                 EditorDerivedData => 12,
                 PackageResource => 13,
-                _ => panic!("invalid chunk type for version"),
+                _ => panic!("invalid chunk type for version >= UE5: {self:?}"),
             }
         } else {
             match self {
@@ -2092,7 +2089,7 @@ impl EIoChunkType {
                 ContainerHeader => 10,
                 ShaderCodeLibrary => 11,
                 ShaderCode => 12,
-                _ => panic!("invalid chunk type for version"),
+                _ => panic!("invalid chunk type for version < UE5: {self:?}"),
             }
         }
     }
