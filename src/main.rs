@@ -836,7 +836,7 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
         )?;
         let asset_metadata_path = path
             .parent()
-            .map(|x| x.join(asset_metadata_filename))
+            .map(|x| x.join(&asset_metadata_filename))
             .unwrap_or(PathBuf::from(&asset_metadata_filename));
 
         // Read asset metadata and store it into the global map to be picked up by zen packages later
