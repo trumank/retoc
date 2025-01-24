@@ -1,19 +1,19 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-use std::io::{Read, Write};
 use std::io::Seek;
+use std::io::{Read, Write};
 
 use anyhow::Result;
 use serde::Serializer;
 use strum::FromRepr;
 use tracing::instrument;
 
+use crate::name_map::EMappedNameType;
 use crate::{
     name_map::{FMappedName, FNameMap},
     read_array,
     ser::*,
 };
-use crate::name_map::EMappedNameType;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ZenScriptObjects {
@@ -29,11 +29,16 @@ impl Readable for ZenScriptObjects {
         let script_objects = read_array(num_script_objects as usize, s, FScriptObjectEntry::read)?;
 
         // Build lookup by package object index for fast access
-        let mut script_object_lookup: HashMap<FPackageObjectIndex, FScriptObjectEntry> = HashMap::with_capacity(num_script_objects as usize);
+        let mut script_object_lookup: HashMap<FPackageObjectIndex, FScriptObjectEntry> =
+            HashMap::with_capacity(num_script_objects as usize);
         script_objects.iter().for_each(|script_object| {
             script_object_lookup.insert(script_object.global_index, *script_object);
         });
-        Ok(Self{ global_name_map, script_objects, script_object_lookup })
+        Ok(Self {
+            global_name_map,
+            script_objects,
+            script_object_lookup,
+        })
     }
 }
 
@@ -67,13 +72,13 @@ pub(crate) enum FPackageObjectIndexType {
     Export,
     ScriptImport,
     PackageImport,
-    Null
+    Null,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub(crate) struct FPackageImportReference {
     pub(crate) imported_package_index: u32,
-    pub(crate) imported_public_export_hash_index: u32
+    pub(crate) imported_public_export_hash_index: u32,
 }
 
 impl FPackageObjectIndex {
@@ -82,9 +87,10 @@ impl FPackageObjectIndex {
     const TYPE_SHIFT: u64 = Self::INDEX_BITS;
     const INVALID_ID: u64 = !0;
 
-    pub(crate) fn create(kind: FPackageObjectIndexType, value: u64) -> Self
-    {
-        Self{type_and_id: ((kind as u64) << Self::TYPE_SHIFT) | value}
+    pub(crate) fn create(kind: FPackageObjectIndexType, value: u64) -> Self {
+        Self {
+            type_and_id: ((kind as u64) << Self::TYPE_SHIFT) | value,
+        }
     }
     pub(crate) fn create_null() -> Self {
         Self::create(FPackageObjectIndexType::Null, Self::INVALID_ID)
@@ -97,10 +103,13 @@ impl FPackageObjectIndex {
         Self::create(FPackageObjectIndexType::ScriptImport, import_hash)
     }
     pub(crate) fn create_package_import(import_ref: FPackageImportReference) -> Self {
-        let import_value = import_ref.imported_public_export_hash_index as u64 | ((import_ref.imported_package_index as u64) << 32);
+        let import_value = import_ref.imported_public_export_hash_index as u64
+            | ((import_ref.imported_package_index as u64) << 32);
         Self::create(FPackageObjectIndexType::PackageImport, import_value)
     }
-    pub(crate) fn raw_index(self) -> u64 { self.type_and_id & Self::INDEX_MASK }
+    pub(crate) fn raw_index(self) -> u64 {
+        self.type_and_id & Self::INDEX_MASK
+    }
     pub(crate) fn kind(self) -> FPackageObjectIndexType {
         FPackageObjectIndexType::from_repr((self.type_and_id >> Self::TYPE_SHIFT) as usize).unwrap()
     }
@@ -111,12 +120,15 @@ impl FPackageObjectIndex {
         (self.kind() == FPackageObjectIndexType::Export).then_some(self.type_and_id as u32)
     }
     pub(crate) fn package_import(self) -> Option<FPackageImportReference> {
-        (self.kind() == FPackageObjectIndexType::PackageImport).then_some(FPackageImportReference{
-            imported_package_index: ((self.type_and_id & FPackageObjectIndex::INDEX_MASK) >> 32) as u32,
-            imported_public_export_hash_index: (self.type_and_id as u32)
+        (self.kind() == FPackageObjectIndexType::PackageImport).then_some(FPackageImportReference {
+            imported_package_index: ((self.type_and_id & FPackageObjectIndex::INDEX_MASK) >> 32)
+                as u32,
+            imported_public_export_hash_index: (self.type_and_id as u32),
         })
     }
-    pub(crate) fn is_null(self) -> bool { self.kind() == FPackageObjectIndexType::Null }
+    pub(crate) fn is_null(self) -> bool {
+        self.kind() == FPackageObjectIndexType::Null
+    }
 
     fn generate_import_hash_from_object_path(object_path: &str) -> u64 {
         let lower_slash_path = object_path
@@ -165,19 +177,17 @@ mod test {
     use super::*;
     #[test]
     fn test_read_script_objects() -> Result<()> {
-        let mut stream = BufReader::new(fs::File::open("giga.bin")?);
+        let mut stream = BufReader::new(fs::File::open("tests/UE5.3/ScriptObjects.bin")?);
 
-        ser_hex::read("trace.json", &mut stream, |s| -> Result<()> {
-            let script_objects: ZenScriptObjects = s.de()?;
+        let script_objects: ZenScriptObjects =
+            ser_hex::TraceStream::new("out/script_objects.trace.json", &mut stream).de()?;
 
-            for s in script_objects.script_objects {
-                println!("{}:", script_objects.global_name_map.get(s.object_name));
-                println!("  global_index:    {:?}", s.global_index.value());
-                println!("  outer_index:     {:?}", s.outer_index.value());
-                println!("  cdo_class_index: {:?}", s.cdo_class_index.value());
-            }
-            return Ok({})
-        })?;
+        for s in script_objects.script_objects {
+            println!("{}:", script_objects.global_name_map.get(s.object_name));
+            println!("  global_index:    {:?}", s.global_index.value());
+            println!("  outer_index:     {:?}", s.outer_index.value());
+            println!("  cdo_class_index: {:?}", s.cdo_class_index.value());
+        }
 
         Ok(())
     }

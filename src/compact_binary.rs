@@ -114,6 +114,45 @@ enum FieldValue {
     //CustomById,
     //CustomByName,
 }
+macro_rules! unwrap_field {
+    ($func_name:ident, $variant:ident, $type:ty) => {
+        impl FieldValue {
+            fn $func_name(&self) -> &$type {
+                match self {
+                    FieldValue::$variant(value) => &value,
+                    _ => panic!(concat!("unwrap ", stringify!($variant), " failed")),
+                }
+            }
+        }
+    };
+}
+macro_rules! unwrap_field_mut {
+    ($func_name:ident, $variant:ident, $type:ty) => {
+        impl FieldValue {
+            fn $func_name(&mut self) -> &mut $type {
+                match self {
+                    FieldValue::$variant(value) => value,
+                    _ => panic!(concat!("unwrap ", stringify!($variant), " failed")),
+                }
+            }
+        }
+    };
+}
+unwrap_field!(unwrap_object, Object, IndexMap<String, FieldValue>);
+unwrap_field!(unwrap_uniform_object, UniformObject, IndexMap<String, FieldValue>);
+unwrap_field!(unwrap_array, Array, Vec<FieldValue>);
+unwrap_field!(unwrap_uniform_array, UniformArray, Vec<FieldValue>);
+unwrap_field!(unwrap_string, String, String);
+unwrap_field!(unwrap_binary_attachment, BinaryAttachment, [u8; 20]);
+unwrap_field!(unwrap_object_id, ObjectId, [u8; 12]);
+
+unwrap_field_mut!(unwrap_object_mut, Object, IndexMap<String, FieldValue>);
+unwrap_field_mut!(unwrap_uniform_object_mut, UniformObject, IndexMap<String, FieldValue>);
+unwrap_field_mut!(unwrap_array_mut, Array, Vec<FieldValue>);
+unwrap_field_mut!(unwrap_uniform_array_mut, UniformArray, Vec<FieldValue>);
+unwrap_field_mut!(unwrap_string_mut, String, String);
+unwrap_field_mut!(unwrap_binary_attachment_mut, BinaryAttachment, [u8; 20]);
+unwrap_field_mut!(unwrap_object_id_mut, ObjectId, [u8; 12]);
 
 #[instrument(skip_all)]
 fn read_string<S: Read>(stream: &mut S) -> Result<String> {
@@ -218,11 +257,10 @@ mod test {
 
     #[test]
     fn test_compact_binary() -> Result<()> {
-        let mut stream = BufReader::new(fs::File::open("asdf/out/packagestore.manifest")?);
+        let mut stream = BufReader::new(fs::File::open("tests/UE5.4/packagestore.manifest")?);
+        let mut field = read_compact_binary(&mut stream)?;
 
-        let mut field = ser_hex::read("trace.json", &mut stream, read_compact_binary)?;
-
-        //dbg!(field);
+        //println!("{:#?}", field.value.unwrap_uniform_object()["oplog"]);
         fn sort_by_key_ref<T, F, K>(a: &mut [T], key: F)
         where
             F: Fn(&T) -> &K,
@@ -231,33 +269,16 @@ mod test {
             a.sort_by(|x, y| key(x).cmp(key(y)));
         }
 
-        match &mut field.value {
-            FieldValue::UniformObject(ref mut vec) => match &mut vec[0] {
-                FieldValue::UniformObject(ref mut index_map) => match &mut index_map["entries"] {
-                    FieldValue::UniformArray(vec) => {
-                        sort_by_key_ref(vec, |op| match op {
-                            FieldValue::Object(index_map) => {
-                                match &index_map["packagestoreentry"] {
-                                    FieldValue::UniformObject(index_map) => {
-                                        match &index_map["packagename"] {
-                                            FieldValue::String(string) => string,
-                                            _ => unreachable!(),
-                                        }
-                                    }
-                                    _ => unreachable!(),
-                                }
-                            }
-                            _ => unreachable!(),
-                        });
-                    }
-                    _ => unreachable!(),
-                },
-                _ => unreachable!(),
+        sort_by_key_ref(
+            field.value.unwrap_uniform_object_mut()["oplog"].unwrap_uniform_object_mut()["entries"]
+                .unwrap_uniform_array_mut(),
+            |op| {
+                op.unwrap_object()["packagestoreentry"].unwrap_uniform_object()["packagename"]
+                    .unwrap_string()
             },
-            _ => unreachable!(),
-        }
+        );
 
-        fs::write("packagestore.json", serde_json::to_vec(&field)?)?;
+        fs::write("out/packagestore.json", serde_json::to_vec(&field)?)?;
 
         Ok(())
     }

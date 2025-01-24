@@ -4,6 +4,7 @@ use std::{
 };
 
 use crate::{
+    align_usize,
     container_header::{EIoContainerHeaderVersion, FIoContainerHeader, StoreEntry},
     EIoChunkType, FPackageId,
 };
@@ -129,6 +130,9 @@ impl IoStoreWriter {
         if let Some(container_header) = &self.container_header {
             let mut chunk_buffer = vec![];
             container_header.ser(&mut chunk_buffer)?;
+            // container header is always aligned for AES for some reason
+            chunk_buffer.resize(align_usize(chunk_buffer.len(), 16), 0);
+
             let chunk_id = FIoChunkId::create(
                 container_header.container_id.0,
                 0,
