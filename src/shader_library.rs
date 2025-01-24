@@ -4,8 +4,12 @@ use crate::container_header::EIoContainerHeaderVersion;
 use crate::iostore::IoStoreTrait;
 use crate::logging::*;
 use crate::ser::{ReadExt, Readable, WriteExt, Writeable};
-use crate::{EIoStoreTocVersion, FIoChunkId, FSHAHash};
+use crate::zen::FZenPackageHeader;
+use crate::{EIoChunkType, EIoStoreTocVersion, FIoChunkId, FSHAHash, UEPath};
 use anyhow::{anyhow, bail};
+use key_mutex::Empty;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::io::{Cursor, Read, Seek, Write};
 use strum::FromRepr;
@@ -509,8 +513,102 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive, compress_
     })
 }
 
-// Returns the file contents of the built shader library on success
-pub(crate) fn rebuild_shader_library_from_io_store(store_access: &dyn IoStoreTrait, library_chunk_id: FIoChunkId, log: &Log, compress_shaders: bool) -> anyhow::Result<Vec<u8>> {
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub(crate) struct ShaderMapToPackageNameListEntry {
+    #[serde(rename = "ShaderMapHash")]
+    pub(crate) shader_map_hash: FSHAHash,
+    #[serde(rename = "Assets")]
+    pub(crate) package_names: Vec<String>,
+}
+
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub(crate) struct ShaderAssetInfoFileRoot {
+    #[serde(rename = "ShaderCodeToAssets")]
+    pub(crate) shader_code_to_assets: Vec<ShaderMapToPackageNameListEntry>,
+}
+
+// Resolves shader library filename (with optional path) into a shader asset info filename associated with that library
+pub(crate) fn get_shader_asset_info_filename_from_library_filename(shader_library_filename: &str) -> anyhow::Result<String> {
+
+    let library_name_without_extension = UEPath::new(shader_library_filename).file_stem().ok_or_else(|| { anyhow!("Failed to retrieve filename from path") })?;
+    let prefix_separator_index = library_name_without_extension.find('-').ok_or_else(|| { anyhow!("Invalid shader library filename, does not have a library name and format separator") })?;
+    let library_name_and_format = &library_name_without_extension[prefix_separator_index + 1..];
+
+    let asset_info_filename = format!("ShaderAssetInfo-{library_name_and_format}.assetinfo.json");
+
+    if let Some(parent_path) = UEPath::new(shader_library_filename).parent() {
+        return Ok(parent_path.join(asset_info_filename).to_string());
+    }
+    Ok(asset_info_filename)
+}
+
+fn build_shader_asset_metadata_from_io_store_packages(store_access: &dyn IoStoreTrait, shader_map_hashes: &HashSet<FSHAHash>, log: &Log) -> (usize, ShaderAssetInfoFileRoot) {
+    let container_header_version = store_access.container_header_version();
+
+    // Make sure container header version is actually available first
+    if container_header_version.is_empty() {
+        log!(log, "WARNING: Skipping shader asset metadata build for shader library because container header version is not present");
+        return (0, ShaderAssetInfoFileRoot::default())
+    }
+    let mut shader_map_hash_to_package_names: HashMap<FSHAHash, Vec<String>> = HashMap::new();
+    let mut total_package_references: usize = 0;
+
+    // Iterate all packages that reference any shader maps in this library and track their names
+    for package_info in store_access.packages() {
+        let package_id = package_info.id();
+        if let Some(package_store_entry) = package_info.container().package_store_entry(package_id) {
+
+            // Filter shader map hashes to only the ones actually contained in this shader library
+            let referenced_shader_map_hashes: Vec<FSHAHash> = package_store_entry.shader_map_hashes
+                .iter().filter(|x| { shader_map_hashes.contains(x) }).cloned().collect();
+
+            // Skip this package if it actually does not reference any shader maps from this shader library. this saves us time reading and parsing its data
+            if referenced_shader_map_hashes.is_empty() {
+                continue
+            }
+
+            // Skip this package if we could not actually read its data from the container
+            let package_data_buffer = store_access.read(FIoChunkId::from_package_id(package_id, 0, EIoChunkType::ExportBundleData));
+            if package_data_buffer.is_err() {
+                let error_message = package_data_buffer.unwrap_err().to_string();
+                log!(log, "WARNING: Skipping reference to shader maps {referenced_shader_map_hashes:?} from package {package_id:?} because it's data could not be read: {error_message}");
+                continue;
+            }
+
+            // Skip this package if we could not resolve package name from it's serialized data
+            let package_header = FZenPackageHeader::get_package_name(&mut Cursor::new(&package_data_buffer.unwrap()), container_header_version.unwrap());
+            if package_header.is_err() {
+                let error_message = package_header.unwrap_err().to_string();
+                log!(log, "WARNING: Skipping reference to shader maps {referenced_shader_map_hashes:?} from package {package_id:?} because it failed to parse as a valid asset: {error_message}");
+                continue;
+            }
+            let package_name = package_header.unwrap();
+            total_package_references += 1;
+
+            // Associate this package name with all shader map hashes contained in it
+            for shader_map_hash in referenced_shader_map_hashes {
+                shader_map_hash_to_package_names.entry(shader_map_hash).or_default().push(package_name.clone());
+            }
+        }
+    }
+
+    // Sort to get a predictable order in the resulting JSON file
+    let mut referenced_shader_map_hashes: Vec<FSHAHash> = shader_map_hash_to_package_names.keys().cloned().collect();
+    referenced_shader_map_hashes.sort();
+
+    // Create the resulting JSON file structure
+    let mut shader_asset_info = ShaderAssetInfoFileRoot::default();
+    for shader_map_hash in &referenced_shader_map_hashes {
+        shader_asset_info.shader_code_to_assets.push(ShaderMapToPackageNameListEntry{
+            shader_map_hash: shader_map_hash.clone(),
+            package_names: shader_map_hash_to_package_names.get(shader_map_hash).unwrap().clone(),
+        })
+    }
+    (total_package_references, shader_asset_info)
+}
+
+// Returns the file contents of the built shader library on success. Second file contents are that of asset metadata for the shader library
+pub(crate) fn rebuild_shader_library_from_io_store(store_access: &dyn IoStoreTrait, library_chunk_id: FIoChunkId, log: &Log, compress_shaders: bool) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
 
     // Read IoStore shader library
     let io_store_shader_library = IoStoreShaderCodeArchive::read(store_access, library_chunk_id)?;
@@ -606,15 +704,20 @@ pub(crate) fn rebuild_shader_library_from_io_store(store_access: &dyn IoStoreTra
     // Serialize shader code
     result_library_writer.write(&shader_code.shader_code_buffer)?;
 
+    // Resolve asset names referencing the shader maps contained in this library
+    let contained_shader_map_hashes: HashSet<FSHAHash> = shader_library.shader_map_hashes.iter().cloned().collect();
+    let (total_package_references, shader_asset_info) = build_shader_asset_metadata_from_io_store_packages(store_access, &contained_shader_map_hashes, log);
+    let result_shader_asset_metadata_buffer = serde_json::to_vec_pretty(&shader_asset_info)?;
+
     // Print shader library statistics to stdout if allowed
     if log.allow_stdout() {
         let compression_ratio = f64::round((io_store_shader_library.total_shader_code_size as f64 / shader_code.shader_code_buffer.len() as f64) * 100.0f64) as i64;
-        log!(log, "Shader Library {} statistics: Shared Shaders: {}; Unique Shaders: {}; Detached Shaders: {}; Shader Maps: {}, Uncompressed Size: {}MB, Compressed Size: {}MB, Compression Ratio: {}%",
-            library_name.clone(), shader_code.total_shared_shaders, shader_code.total_unique_shaders, shader_code.total_detached_shaders, shader_library.shader_map_entries.len(),
+        log!(log, "Shader Library {} statistics: Shared Shaders: {}; Unique Shaders: {}; Detached Shaders: {}; Shader Maps: {} (referenced by {} packages), Uncompressed Size: {}MB, Compressed Size: {}MB, Compression Ratio: {}%",
+            library_name.clone(), shader_code.total_shared_shaders, shader_code.total_unique_shaders, shader_code.total_detached_shaders, shader_library.shader_map_entries.len(), total_package_references,
              io_store_shader_library.total_shader_code_size / 1024 / 1024, shader_code.shader_code_buffer.len() / 1024 / 1024, compression_ratio,
         );
     }
-    Ok(result_shader_library_buffer)
+    Ok((result_shader_library_buffer, result_shader_asset_metadata_buffer))
 }
 
 #[cfg(test)]

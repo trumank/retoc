@@ -41,6 +41,7 @@ use std::{
     str::FromStr,
     sync::{Arc, Mutex},
 };
+use serde_with::serde_as;
 use strum::{AsRefStr, FromRepr};
 use tracing::instrument;
 use version::EngineVersion;
@@ -741,13 +742,15 @@ fn action_extract_legacy_shaders(
                 format!("failed to strip mount prefix from {shader_library_path:?}")
             })?;
 
-        let shader_library_buffer = rebuild_shader_library_from_io_store(
+        let shader_asset_info_path = get_shader_asset_info_filename_from_library_filename(path)?;
+        let (shader_library_buffer, shader_asset_info_buffer) = rebuild_shader_library_from_io_store(
             chunk_info.container(),
             chunk_info.id(),
             log,
             compress_shaders,
         )?;
         file_writer.write_file(path.to_string(), false, shader_library_buffer)?;
+        file_writer.write_file(shader_asset_info_path, compress_shaders, shader_asset_info_buffer)?;
         libraries_extracted += 1;
     }
 
@@ -1830,24 +1833,23 @@ impl Writeable for FGuid {
         Ok({})
     }
 }
-#[derive(Default, Clone, Copy, PartialEq)]
-struct FSHAHash {
-    data: [u8; 20],
-}
+#[serde_as]
+#[derive(Default, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+struct FSHAHash(#[serde_as(as = "serde_with::hex::Hex")] [u8; 20]);
 impl Readable for FSHAHash {
     fn de<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(Self { data: stream.de()? })
+        Ok(Self { 0: stream.de()? })
     }
 }
 impl Writeable for FSHAHash {
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
-        s.ser(&self.data)
+        s.ser(&self.0)
     }
 }
 impl std::fmt::Debug for FSHAHash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "FSHAHash(")?;
-        for b in self.data {
+        for b in self.0 {
             write!(f, "{:02X}", b)?;
         }
         write!(f, ")")
@@ -2073,7 +2075,7 @@ impl EIoChunkType {
 
 use crate::asset_conversion::FZenPackageContext;
 use crate::container_header::EIoContainerHeaderVersion;
-use crate::shader_library::rebuild_shader_library_from_io_store;
+use crate::shader_library::{get_shader_asset_info_filename_from_library_filename, rebuild_shader_library_from_io_store};
 use crate::zen::FPackageFileVersion;
 use directory_index::*;
 use zen::get_package_name;
