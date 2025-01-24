@@ -262,7 +262,7 @@ impl StoreEntries {
         package_count: usize,
     ) -> Result<Self> {
         let buffer: Vec<u8> = s.de()?;
-        let mut cur = ser_hex::TraceStream::new("trace2.json", Cursor::new(buffer));
+        let mut cur = Cursor::new(buffer);
 
         let (member_offset, entry_size) = if version >= EIoContainerHeaderVersion::NoExportInfo {
             (0, 16)
