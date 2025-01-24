@@ -1569,8 +1569,22 @@ mod chunk_id {
     }
     impl std::fmt::Debug for FIoChunkId {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            use std::fmt::Write;
+            let mut buf = String::new();
+            for b in &self.id[..11] {
+                write!(&mut buf, "{b:x}").unwrap();
+            }
+            // special case last byte and only print hex value if we know it
+            if self.id[11] >> 6 & 1 != 0 {
+                // has version so get raw byte value
+                let is_new = self.id[11] >> 7 != 0; // read version bit
+                write!(&mut buf, "{:x}", self.get_chunk_type().value(is_new)).unwrap();
+            } else {
+                // version info unknown so raw byte value unknown
+                write!(&mut buf, "??").unwrap();
+            }
             f.debug_struct("FIoChunkId")
-                .field("chunk_id", &hex::encode(self.id))
+                .field("chunk_id", &buf)
                 .field("chunk_type", &self.get_chunk_type())
                 .finish()
         }
