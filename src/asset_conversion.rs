@@ -725,7 +725,7 @@ fn apply_standalone_dependencies_to_package(builder: &mut LegacyAssetBuilder, ex
             dependencies.create_before_create.push(export_object.outer_index);
         }
         if !export_object.super_index.is_null() && !dependencies.create_before_create.contains(&export_object.super_index) {
-            dependencies.create_before_create.push(export_object.super_index);;
+            dependencies.create_before_create.push(export_object.super_index);
         }
         // Ensure that we have class and archetype as serialize before create dependencies
         if !export_object.class_index.is_null() && !dependencies.serialize_before_create.contains(&export_object.class_index) {
@@ -920,7 +920,7 @@ pub(crate) fn serialize_asset(builder: &LegacyAssetBuilder) -> anyhow::Result<FS
     // Write the asset file first
     let mut asset_file_buffer: Vec<u8> = Vec::new();
     let mut asset_cursor = Cursor::new(&mut asset_file_buffer);
-    FLegacyPackageHeader::serialize(&builder.legacy_package, &mut asset_cursor, builder.package_context.log)?;
+    FLegacyPackageHeader::serialize(&builder.legacy_package, &mut asset_cursor, Some(builder.zen_package.summary.cooked_header_size as usize), builder.package_context.log)?;
 
     // Copy the raw export data from the chunk into the exports file
     let raw_exports_data = builder.package_context.read_full_package_data(builder.package_id)?;

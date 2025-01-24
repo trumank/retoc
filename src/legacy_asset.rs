@@ -837,7 +837,7 @@ impl FLegacyPackageHeader {
         }
         Ok(FLegacyPackageHeader{summary: package_summary, name_map, imports, exports, preload_dependencies, data_resources})
     }
-    pub(crate) fn serialize<S: Write + Seek>(&self, s: &mut S, log: &Log) -> Result<()> {
+    pub(crate) fn serialize<S: Write + Seek>(&self, s: &mut S, desired_header_size: Option<usize>, log: &Log) -> Result<()> {
 
         let package_summary_offset: u64 = s.stream_position()?;
         let mut package_summary: FLegacyPackageFileSummary = self.summary.clone();
@@ -908,6 +908,13 @@ impl FLegacyPackageHeader {
             for data_resource in &self.data_resources {
                 s.ser(&data_resource.clone())?;
             }
+        }
+
+        // Write zero padding after normal header data to maintain the zen asset binary equality if desired
+        let data_total_header_size = (s.stream_position()? - package_summary_offset) as usize;
+        if desired_header_size.is_some() && desired_header_size.unwrap() > data_total_header_size {
+            let extra_null_padding_bytes = desired_header_size.unwrap() - data_total_header_size;
+            s.write(&vec![0; extra_null_padding_bytes])?;
         }
 
         // Set total size of the serialized header. The rest of the data is not considered the part of it

@@ -847,11 +847,13 @@ mod test {
         assert_eq!(original_zen_asset_package.dependency_bundle_headers.clone(), converted_zen_asset_package.dependency_bundle_headers.clone());
         assert_eq!(original_zen_asset_package.dependency_bundle_entries.clone(), converted_zen_asset_package.dependency_bundle_entries.clone());
         assert_eq!(original_zen_asset_package.export_bundle_entries.clone(), converted_zen_asset_package.export_bundle_entries.clone());
+        assert_eq!(original_zen_asset_package.summary.clone(), converted_zen_asset_package.summary.clone());
 
         // Make sure export blob is identical after the header size. Offsets in export map are relative to the end of the header so if they are correct and this data is correct exports are correct
         assert_eq!(original_zen_asset[(original_zen_asset_package.summary.header_size as usize)..].to_vec(), asset_exports_buffer.clone(), "Uexp file and the original zen asset exports do not match");
         assert_eq!(original_zen_asset[(original_zen_asset_package.summary.header_size as usize)..].to_vec(), converted_zen_asset[(converted_zen_asset_package.summary.header_size as usize)..].to_vec(), "Original zen asset and converted zen asset exports do not match");
 
+        assert_eq!(original_zen_asset, converted_zen_asset, "Original and converted asset binary equality check failed");
         Ok(())
     }
 }

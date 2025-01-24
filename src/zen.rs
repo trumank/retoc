@@ -61,7 +61,7 @@ impl Readable for FPackageFileSummary {
     }
 }
 
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub(crate) struct FZenPackageSummary {
     pub(crate) has_versioning_info: u32,
     pub(crate) header_size: u32,
