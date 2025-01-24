@@ -30,6 +30,7 @@ use logging::*;
 use rayon::prelude::*;
 use ser::*;
 use serde::{Deserialize, Serialize, Serializer};
+use serde_with::serde_as;
 use std::fmt::{Debug, Display, Formatter};
 use std::io::BufWriter;
 use std::path::Path;
@@ -41,7 +42,6 @@ use std::{
     str::FromStr,
     sync::{Arc, Mutex},
 };
-use serde_with::serde_as;
 use strum::{AsRefStr, FromRepr};
 use tracing::instrument;
 use version::EngineVersion;
@@ -746,14 +746,19 @@ fn action_extract_legacy_shaders(
             })?;
 
         let shader_asset_info_path = get_shader_asset_info_filename_from_library_filename(path)?;
-        let (shader_library_buffer, shader_asset_info_buffer) = rebuild_shader_library_from_io_store(
-            chunk_info.container(),
-            chunk_info.id(),
-            log,
-            compress_shaders,
-        )?;
+        let (shader_library_buffer, shader_asset_info_buffer) =
+            rebuild_shader_library_from_io_store(
+                chunk_info.container(),
+                chunk_info.id(),
+                log,
+                compress_shaders,
+            )?;
         file_writer.write_file(path.to_string(), false, shader_library_buffer)?;
-        file_writer.write_file(shader_asset_info_path, compress_shaders, shader_asset_info_buffer)?;
+        file_writer.write_file(
+            shader_asset_info_path,
+            compress_shaders,
+            shader_asset_info_buffer,
+        )?;
         libraries_extracted += 1;
     }
 
@@ -826,13 +831,21 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
         let relative_path = path.strip_prefix(&args.input).unwrap();
 
         let shader_library_buffer = fs::read(&path)?;
-        let asset_metadata_filename = get_shader_asset_info_filename_from_library_filename(&path.file_name().unwrap().to_string_lossy())?;
-        let asset_metadata_path = path.parent().map(|x| { x.join(asset_metadata_filename) }).unwrap_or(PathBuf::from(&asset_metadata_filename));
+        let asset_metadata_filename = get_shader_asset_info_filename_from_library_filename(
+            &path.file_name().unwrap().to_string_lossy(),
+        )?;
+        let asset_metadata_path = path
+            .parent()
+            .map(|x| x.join(asset_metadata_filename))
+            .unwrap_or(PathBuf::from(&asset_metadata_filename));
 
         // Read asset metadata and store it into the global map to be picked up by zen packages later
         if fs::metadata(&asset_metadata_path)?.is_file() {
             let shader_asset_info_buffer = fs::read(&asset_metadata_path)?;
-            shader_library::read_shader_asset_info(&shader_asset_info_buffer, &mut package_name_to_referenced_shader_maps)?;
+            shader_library::read_shader_asset_info(
+                &shader_asset_info_buffer,
+                &mut package_name_to_referenced_shader_maps,
+            )?;
         }
 
         // Convert shader library to the container shader chunks
@@ -876,17 +889,18 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
 
     writer.finalize()?;
 
-    // creat empty pak file (necessary for game to detect and load container)
-    repak::PakBuilder::new()
-        .writer(
-            &mut BufWriter::new(fs::File::create(
-                Path::new(&args.output).with_extension("pak"),
-            )?),
-            repak::Version::V11,
-            mount_point.to_string(),
-            None,
-        )
-        .write_index()?;
+    // create empty pak file if one does not already exist (necessary for game to detect and load container)
+    let pak_path = Path::new(&args.output).with_extension("pak");
+    if !pak_path.exists() {
+        repak::PakBuilder::new()
+            .writer(
+                &mut BufWriter::new(fs::File::create(pak_path)?),
+                repak::Version::V11,
+                mount_point.to_string(),
+                None,
+            )
+            .write_index()?;
+    }
 
     Ok(())
 }
@@ -1668,9 +1682,12 @@ mod chunk_id {
             let mut id = [0; 12];
             id[0..11].copy_from_slice(&shader_hash.0[0..11]);
             id[11] = EIoChunkType::ShaderCode as u8;
-            Self{ id }
+            Self { id }
         }
-        pub(crate) fn create_shader_library_chunk_id(shader_library_name: &str, shader_format_name: &str) -> Self {
+        pub(crate) fn create_shader_library_chunk_id(
+            shader_library_name: &str,
+            shader_format_name: &str,
+        ) -> Self {
             let name = format!("{shader_library_name}-{shader_format_name}");
             let hash = lower_utf16_cityhash(&name);
             Self::create(hash, 0, EIoChunkType::ShaderCodeLibrary)
@@ -2134,7 +2151,9 @@ impl EIoChunkType {
 
 use crate::asset_conversion::FZenPackageContext;
 use crate::container_header::EIoContainerHeaderVersion;
-use crate::shader_library::{get_shader_asset_info_filename_from_library_filename, rebuild_shader_library_from_io_store};
+use crate::shader_library::{
+    get_shader_asset_info_filename_from_library_filename, rebuild_shader_library_from_io_store,
+};
 use crate::zen::FPackageFileVersion;
 use directory_index::*;
 use zen::get_package_name;
