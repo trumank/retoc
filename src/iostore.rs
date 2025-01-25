@@ -351,7 +351,7 @@ impl IoStoreTrait for IoStoreContainer {
             self.container_header
                 .iter()
                 .flat_map(|header| header.package_ids())
-                .map(|&id| PackageInfo {
+                .map(|id| PackageInfo {
                     id,
                     container: self,
                 }),

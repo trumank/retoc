@@ -1,10 +1,11 @@
 use std::{
-    collections::HashMap,
+    collections::BTreeMap,
     io::{Cursor, Read, Seek as _, SeekFrom, Write},
     marker::PhantomData,
 };
 
 use anyhow::{Context as _, Result};
+use serde::{Deserialize, Serialize};
 use strum::FromRepr;
 use tracing::instrument;
 
@@ -15,19 +16,16 @@ use crate::{
     FIoContainerId, FPackageId, FSHAHash, ReadExt,
 };
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct FIoContainerHeader {
     pub(crate) version: EIoContainerHeaderVersion,
     pub(crate) container_id: FIoContainerId,
-    package_ids: Vec<FPackageId>,
-    store_entries: StoreEntries,
+    packages: StoreEntries,
     optional_segment_package_ids: Vec<FPackageId>,
     optional_segment_store_entries: Vec<u8>,
     redirect_name_map: FNameMap,
     localized_packages: Vec<FIoContainerHeaderLocalizedPackage>,
     package_redirects: Vec<FIoContainerHeaderPackageRedirect>,
-
-    package_entry_map: HashMap<FPackageId, u32>,
 }
 impl Readable for FIoContainerHeader {
     #[instrument(skip_all, name = "FIoContainerHeader")]
@@ -59,8 +57,7 @@ impl Readable for FIoContainerHeader {
             assert_eq!(name_hashes.len(), 8, "impl names");
         }
 
-        new.package_ids = s.de()?;
-        new.store_entries = StoreEntries::deserialize(s, version, new.package_ids.len())?;
+        new.packages = StoreEntries::deserialize(s, version)?;
 
         if version > EIoContainerHeaderVersion::Initial {
             new.optional_segment_package_ids = s.de()?;
@@ -82,13 +79,6 @@ impl Readable for FIoContainerHeader {
             todo!("soft package references")
         }
 
-        new.package_entry_map = new
-            .package_ids
-            .iter()
-            .enumerate()
-            .map(|(i, &id)| (id, i as u32))
-            .collect();
-
         Ok(new)
     }
 }
@@ -101,7 +91,7 @@ impl Writeable for FIoContainerHeader {
         s.ser(&self.container_id)?;
 
         if self.version == EIoContainerHeaderVersion::Initial {
-            s.ser(&(self.package_ids.len() as u32))?;
+            s.ser(&(self.packages.0.len() as u32))?;
 
             //let unknown: u32 = s.de()?; // ff7r2?
 
@@ -110,8 +100,7 @@ impl Writeable for FIoContainerHeader {
             s.ser(&0xC1640000u64)?; // TODO names
         }
 
-        s.ser(&self.package_ids)?;
-        self.store_entries.serialize(s, self.version)?;
+        self.packages.serialize(s, self.version)?;
 
         if self.version > EIoContainerHeaderVersion::Initial {
             s.ser(&self.optional_segment_package_ids)?;
@@ -138,33 +127,31 @@ impl FIoContainerHeader {
         Self {
             version,
             container_id,
-            package_ids: vec![],
-            store_entries: StoreEntries::default(),
+            packages: StoreEntries::default(),
             optional_segment_package_ids: vec![],
             optional_segment_store_entries: vec![],
             redirect_name_map: FNameMap::default(),
             localized_packages: vec![],
             package_redirects: vec![],
-            package_entry_map: HashMap::new(),
         }
     }
 
     pub(crate) fn add_package(&mut self, package_id: FPackageId, store_entry: StoreEntry) {
-        self.package_ids.push(package_id);
-        self.store_entries.entries.push(store_entry);
+        self.packages.0.insert(package_id, store_entry);
     }
 
     pub(crate) fn get_store_entry(&self, package_id: FPackageId) -> Option<StoreEntry> {
         // TODO handle redirects?
-        let index = *self.package_entry_map.get(&package_id)?;
-        Some(self.store_entries.get(index))
+        Some(self.packages.get(package_id))
     }
-    pub(crate) fn package_ids(&self) -> &[FPackageId] {
-        &self.package_ids
+    pub(crate) fn package_ids(
+        &self,
+    ) -> std::iter::Copied<std::collections::btree_map::Keys<'_, FPackageId, StoreEntry>> {
+        self.packages.0.keys().copied()
     }
 }
 
-#[derive(Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr, Serialize, Deserialize)]
 #[repr(u32)]
 pub(crate) enum EIoContainerHeaderVersion {
     Initial = 0,
@@ -186,7 +173,7 @@ impl Writeable for EIoContainerHeaderVersion {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 struct FIoContainerHeaderLocalizedPackage {
     source_package_id: FPackageId,
     source_package_name: FMappedName,
@@ -208,7 +195,7 @@ impl Writeable for FIoContainerHeaderLocalizedPackage {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 struct FIoContainerHeaderPackageRedirect {
     source_package_id: FPackageId,
     target_package_id: FPackageId,
@@ -233,7 +220,7 @@ impl Writeable for FIoContainerHeaderPackageRedirect {
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct StoreEntry {
     // version == EIoContainerHeaderVersion::NoExportInfo
     pub(crate) export_bundles_size: u64,
@@ -247,20 +234,16 @@ pub(crate) struct StoreEntry {
     pub(crate) shader_map_hashes: Vec<FSHAHash>,
 }
 
-#[derive(Debug, Default, PartialEq)]
-struct StoreEntries {
-    entries: Vec<StoreEntry>,
-}
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+struct StoreEntries(BTreeMap<FPackageId, StoreEntry>);
 impl StoreEntries {
-    fn get(&self, index: u32) -> StoreEntry {
-        self.entries[index as usize].clone()
+    fn get(&self, package_id: FPackageId) -> StoreEntry {
+        self.0.get(&package_id).unwrap().clone()
     }
     #[instrument(skip_all, name = "StoreEntries")]
-    fn deserialize<S: Read>(
-        s: &mut S,
-        version: EIoContainerHeaderVersion,
-        package_count: usize,
-    ) -> Result<Self> {
+    fn deserialize<S: Read>(s: &mut S, version: EIoContainerHeaderVersion) -> Result<Self> {
+        let package_ids: Vec<FPackageId> = s.de()?;
+
         let buffer: Vec<u8> = s.de()?;
         let mut cur = Cursor::new(buffer);
 
@@ -272,7 +255,7 @@ impl StoreEntries {
             (24, 32)
         };
 
-        let entries = read_array(package_count, &mut cur, |s| {
+        let entries = read_array(package_ids.len(), &mut cur, |s| {
             FFilePackageStoreEntry::deserialize(s, version)
         })?;
 
@@ -322,10 +305,17 @@ impl StoreEntries {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(Self { entries })
+        Ok(Self(BTreeMap::from_iter(
+            package_ids.into_iter().zip(entries.into_iter()),
+        )))
     }
     #[instrument(skip_all, name = "StoreEntries")]
     fn serialize<S: Write>(&self, s: &mut S, version: EIoContainerHeaderVersion) -> Result<()> {
+        s.ser(&(self.0.len() as u32))?;
+        for package_id in self.0.keys() {
+            s.ser(package_id)?;
+        }
+
         let mut buffer: Vec<u8> = vec![];
         let mut cur = Cursor::new(&mut buffer);
 
@@ -338,9 +328,9 @@ impl StoreEntries {
         };
 
         // calculate end of entries to start writing arrays
-        let mut array_offset = self.entries.len() * entry_size;
+        let mut array_offset = self.0.len() * entry_size;
 
-        for entry in &self.entries {
+        for entry in self.0.values() {
             let mut ser_entry = FFilePackageStoreEntry {
                 export_bundles_size: entry.export_bundles_size,
                 load_order: entry.load_order,

@@ -1557,7 +1557,9 @@ impl Toc {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 struct FPackageId(u64);
 impl Readable for FPackageId {
     fn de<S: Read>(s: &mut S) -> Result<Self> {
@@ -1771,7 +1773,7 @@ mod chunk_id {
         }
     }
 }
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
 struct FIoContainerId(u64);
 impl FIoContainerId {
     fn from_name(name: &str) -> Self {

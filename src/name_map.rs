@@ -1,5 +1,6 @@
 use anyhow::Result;
 use byteorder::{WriteBytesExt, BE};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Cursor, Write};
 use std::{borrow::Cow, io::Read};
@@ -95,7 +96,7 @@ pub(crate) fn read_name_batch_parts(names_buffer: &[u8]) -> Result<Vec<String>> 
     Ok(names)
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct FNameMap {
     kind: EMappedNameType,
     names: Vec<String>,
@@ -163,7 +164,7 @@ impl FNameMap {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default, Display, FromRepr)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Display, FromRepr, Serialize, Deserialize)]
 #[repr(u32)]
 pub(crate) enum EMappedNameType {
     #[default]
@@ -171,7 +172,7 @@ pub(crate) enum EMappedNameType {
     Container = 1,
     Global = 2,
 }
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct FMappedName {
     index_and_type: u32,
     pub(crate) number: u32,
