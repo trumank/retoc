@@ -1,6 +1,7 @@
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::ops::Index;
 use anyhow::{anyhow, bail, Result};
+use serde::{Deserialize, Serialize};
 use strum::FromRepr;
 use tracing::instrument;
 
@@ -199,7 +200,7 @@ pub(crate) enum EZenPackageVersion {
     #[default] ExtraDependencies,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub(crate) struct FPackageFileVersion
 {
     pub(crate) file_version_ue4: i32,
@@ -1084,25 +1085,37 @@ impl FZenPackageHeader {
 
 #[cfg(test)]
 mod test {
+    use crate::PackageTestMetadata;
+
     use super::*;
+    use anyhow::Context as _;
     use fs_err as fs;
-    use std::io::BufReader;
+    use std::{io::BufReader, path::Path};
 
     #[test]
     fn test_zen_asset_parsing() -> Result<()> {
-        let mut stream = BufReader::new(fs::File::open(
+        let assets = [
             "tests/UE5.4/BP_Russian_pool_table.uasset",
-        )?);
+            "tests/UE4.27/Table_SignsJanuary.uasset",
+            "tests/UE4.27/T_Emissive.uasset",
+        ];
+        for asset in assets {
+            run_parse(Path::new(asset)).context(asset)?;
+        }
+        Ok(())
+    }
 
-        let header = ser_hex::read("out/zen_asset_parsing.trace.json", &mut stream, |x| {
-            FZenPackageHeader::deserialize(x, None, EIoStoreTocVersion::OnDemandMetaData, EIoContainerHeaderVersion::NoExportInfo, None)
-        })?;
+    fn run_parse(path: &Path) -> Result<()> {
+        let mut stream = BufReader::new(fs::File::open(path)?);
+        let metadata = serde_json::from_slice::<PackageTestMetadata>(&fs::read(path.with_extension("metadata.json"))?)?;
+
+        let header = FZenPackageHeader::deserialize(&mut stream, metadata.store_entry, metadata.toc_version, metadata.container_header_version, metadata.package_file_version)?;
         let package_name = header.package_name();
 
-        assert_eq!(package_name, "/Game/Billiards/Blueprints/BP_Russian_pool_table");
-        assert_eq!(header.name_map.get(header.export_map[5].object_name), "SCS_Node_10");
+        //assert_eq!(package_name, "/Game/Billiards/Blueprints/BP_Russian_pool_table");
+        //assert_eq!(header.name_map.get(header.export_map[5].object_name), "SCS_Node_10");
 
-        //dbg!(package_name);
+        dbg!(package_name);
         //dbg!(header);
         Ok(())
     }

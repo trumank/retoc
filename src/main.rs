@@ -1010,7 +1010,8 @@ fn action_dump_test(args: ActionDumpTest, config: Arc<Config>) -> Result<()> {
     let metadata = PackageTestMetadata {
         toc_version: iostore.container_file_version().unwrap(),
         container_header_version: iostore.container_header_version().unwrap(),
-        store_entry,
+        package_file_version: None,
+        store_entry: Some(store_entry),
     };
 
     fs::write(
@@ -1044,11 +1045,12 @@ fn action_dump_test(args: ActionDumpTest, config: Arc<Config>) -> Result<()> {
 struct PackageTestMetadata {
     toc_version: EIoStoreTocVersion,
     container_header_version: EIoContainerHeaderVersion,
-    store_entry: StoreEntry,
+    package_file_version: Option<FPackageFileVersion>,
+    store_entry: Option<StoreEntry>,
 }
 
-fn read_file_opt(path: &str) -> Result<Option<Vec<u8>>> {
-    match fs::read(path) {
+fn read_file_opt<P: AsRef<Path>>(path: P) -> Result<Option<Vec<u8>>> {
+    match fs::read(path.as_ref()) {
         Ok(data) => Ok(Some(data)),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err.into()),
