@@ -277,7 +277,7 @@ impl Writeable for FZenPackageVersioningInfo {
     }
 }
 
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 #[repr(C)] // Needed to determine the number of bulk data entries
 pub(crate) struct FBulkDataMapEntry {
     pub(crate) serial_offset: i64,

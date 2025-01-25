@@ -313,7 +313,7 @@ impl FLegacyPackageFileSummary {
         let names_referenced_from_export_data_count: i32 = if versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::NamesReferencedFromExportData as i32 { s.de()? } else { names.count };
 
         // Package trailers should never be written for cooked packages, they are only used for saving EditorBulkData in editor domain with package virtualization
-        let _payload_toc_offset: i32 = if versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::PayloadTOC as i32 { s.de()? } else { -1 };
+        let _payload_toc_offset: i64 = if versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::PayloadTOC as i32 { s.de()? } else { -1 };
 
         // Data resource offset is only written with new bulk data save format, otherwise bulk data meta is simply saved inline
         let data_resource_offset: i32 = if versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::DataResources as i32 { s.de()? } else { -1 };

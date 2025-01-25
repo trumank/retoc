@@ -859,6 +859,7 @@ mod test {
 
         // Make sure the header is equal between the original and the converted asset, minus the load order data
         assert_eq!(original_zen_asset_package.name_map.copy_raw_names(), converted_zen_asset_package.name_map.copy_raw_names());
+        assert_eq!(original_zen_asset_package.bulk_data.clone(), converted_zen_asset_package.bulk_data.clone());
         assert_eq!(original_zen_asset_package.imported_package_names.clone(), converted_zen_asset_package.imported_package_names.clone());
         assert_eq!(original_zen_asset_package.imported_packages.clone(), converted_zen_asset_package.imported_packages.clone());
         assert_eq!(original_zen_asset_package.imported_public_export_hashes.clone(), converted_zen_asset_package.imported_public_export_hashes.clone());
