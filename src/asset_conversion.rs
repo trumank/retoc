@@ -953,11 +953,18 @@ fn rebuild_asset_export_data_internal(builder: &LegacyAssetBuilder, raw_exports_
     let mut result_exports_data: Vec<u8> = Vec::with_capacity(total_exports_file_size);
     let mut exports_data_writer = Cursor::new(&mut result_exports_data);
     let mut end_of_last_export_bundle: usize = 0;
+    // For UE4.27 and below; serial offset is implicit on export bundles, they start after the header and follow each other sequentially
+    let mut current_package_offset: usize = builder.zen_package.summary.header_size as usize;
 
     for export_bundle_index in 0..builder.zen_package.export_bundle_headers.len() {
 
         let export_bundle = builder.zen_package.export_bundle_headers[export_bundle_index].clone();
-        let mut current_serial_offset = builder.zen_package.summary.header_size as usize + export_bundle.serial_offset as usize;
+        let mut current_serial_offset = if export_bundle.serial_offset != u64::MAX {
+            builder.zen_package.summary.header_size as usize + export_bundle.serial_offset as usize
+        } else {
+            // If this is a legacy UE4.27 package, we use the current offset within the package as the starting point, since serial offsets of bundles are not explicitly tracked
+            current_package_offset
+        };
 
         for i in 0..export_bundle.entry_count {
             let export_bundle_entry_index = export_bundle.first_entry_index + i;
@@ -979,6 +986,7 @@ fn rebuild_asset_export_data_internal(builder: &LegacyAssetBuilder, raw_exports_
             }
         }
         end_of_last_export_bundle = max(end_of_last_export_bundle, current_serial_offset);
+        current_package_offset = current_serial_offset;
     }
 
     // Jump to the end of the exports data
