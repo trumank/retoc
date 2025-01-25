@@ -21,6 +21,7 @@ use anyhow::{bail, Context, Result};
 use bitflags::bitflags;
 use clap::Parser;
 use compression::{decompress, CompressionMethod};
+use container_header::StoreEntry;
 use fs_err as fs;
 use iostore::IoStoreTrait;
 use iostore_writer::IoStoreWriter;
@@ -31,6 +32,7 @@ use rayon::prelude::*;
 use ser::*;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_with::serde_as;
+use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::fmt::{Debug, Display, Formatter};
 use std::io::BufWriter;
@@ -158,6 +160,16 @@ struct ActionGet {
 }
 
 #[derive(Parser, Debug)]
+struct ActionDumpTest {
+    #[arg(index = 1)]
+    input: PathBuf,
+    #[arg(index = 2)]
+    output_dir: PathBuf,
+    #[arg(index = 3)]
+    package_id: FPackageId,
+}
+
+#[derive(Parser, Debug)]
 enum Action {
     /// Extract manifest from .utoc
     Manifest(ActionManifest),
@@ -182,6 +194,9 @@ enum Action {
 
     /// Get chunk by index and write to stdout
     Get(ActionGet),
+
+    /// Dump test
+    DumpTest(ActionDumpTest),
 }
 
 #[derive(Parser, Debug)]
@@ -217,6 +232,8 @@ fn main() -> Result<()> {
         Action::PackZen(action) => action_pack_zen(action, config),
 
         Action::Get(action) => action_get(action, config),
+
+        Action::DumpTest(action) => action_dump_test(action, config),
     }
 }
 
@@ -310,10 +327,16 @@ fn action_list(args: ActionList, config: Arc<Config>) -> Result<()> {
         //    "-".to_string()
         //};
 
+        let package_id: Cow<str> = if chunk_type == EIoChunkType::ExportBundleData {
+            FPackageId(id.get_chunk_id()).0.to_string().into()
+        } else {
+            "-".into()
+        };
         println!(
-            "{:30}  {}  {:20}  {}",
+            "{:30}  {}  {:20}  {:20}  {}",
             chunk.container().container_name(),
             hex::encode(id.get_raw()),
+            package_id,
             chunk_type.as_ref(),
             chunk.path().as_deref().unwrap_or("-"),
             //package_store_entry,
@@ -432,7 +455,7 @@ mod raw {
 
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    use crate::{EIoStoreTocVersion, FIoChunkId, FIoChunkIdRaw};
+    use crate::{EIoStoreTocVersion, FIoChunkIdRaw};
 
     #[derive(Serialize, Deserialize)]
     pub(crate) struct RawIoManifest {
@@ -587,11 +610,7 @@ impl FileReaderTrait for FSFileReader {
         Ok(fs::read(self.dir.join(path))?)
     }
     fn read_file_opt(&self, path: &str) -> Result<Option<Vec<u8>>> {
-        match fs::read(self.dir.join(path)) {
-            Ok(data) => Ok(Some(data)),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(err) => Err(err.into()),
-        }
+        read_file_opt(path)
     }
     fn list_files(&self) -> Result<Vec<String>> {
         fn visit_dirs<F>(dir: &Path, cb: &mut F) -> std::io::Result<()>
@@ -972,6 +991,68 @@ fn action_get(args: ActionGet, config: Arc<Config>) -> Result<()> {
     let data = iostore.read_raw(args.chunk_id)?;
     std::io::stdout().write_all(&data)?;
     Ok(())
+}
+
+fn action_dump_test(args: ActionDumpTest, config: Arc<Config>) -> Result<()> {
+    let iostore = iostore::open(args.input, config)?;
+
+    let chunk_id = FIoChunkId::from_package_id(args.package_id, 0, EIoChunkType::ExportBundleData);
+    let game_path = iostore
+        .chunk_path(chunk_id)
+        .context("no path found for package")?;
+    let name = UEPath::new(&game_path).file_name().unwrap();
+    let path = args.output_dir.join(name);
+    let data = iostore.read(chunk_id)?;
+    fs::write(args.output_dir.join(name), data)?;
+
+    let store_entry = iostore.package_store_entry(args.package_id).unwrap();
+
+    let metadata = PackageTestMetadata {
+        toc_version: iostore.container_file_version().unwrap(),
+        container_header_version: iostore.container_header_version().unwrap(),
+        store_entry,
+    };
+
+    fs::write(
+        path.with_extension("metadata.json"),
+        serde_json::to_vec_pretty(&metadata)?,
+    )?;
+
+    let chunk_id = FIoChunkId::from_package_id(args.package_id, 0, EIoChunkType::BulkData);
+    if iostore.has_chunk_id(chunk_id) {
+        let data = iostore.read(chunk_id)?;
+        fs::write(path.with_extension("ubulk"), data)?;
+    }
+
+    let chunk_id = FIoChunkId::from_package_id(args.package_id, 0, EIoChunkType::OptionalBulkData);
+    if iostore.has_chunk_id(chunk_id) {
+        let data = iostore.read(chunk_id)?;
+        fs::write(path.with_extension("uptnl"), data)?;
+    }
+
+    let chunk_id =
+        FIoChunkId::from_package_id(args.package_id, 0, EIoChunkType::MemoryMappedBulkData);
+    if iostore.has_chunk_id(chunk_id) {
+        let data = iostore.read(chunk_id)?;
+        fs::write(path.with_extension("m.ubulk"), data)?;
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PackageTestMetadata {
+    toc_version: EIoStoreTocVersion,
+    container_header_version: EIoContainerHeaderVersion,
+    store_entry: StoreEntry,
+}
+
+fn read_file_opt(path: &str) -> Result<Option<Vec<u8>>> {
+    match fs::read(path) {
+        Ok(data) => Ok(Some(data)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err.into()),
+    }
 }
 
 #[derive(Default)]
@@ -1579,6 +1660,13 @@ impl Display for FPackageId {
 impl FPackageId {
     fn from_name(name: &str) -> Self {
         Self(lower_utf16_cityhash(name))
+    }
+}
+impl FromStr for FPackageId {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(FPackageId(s.parse()?))
     }
 }
 
