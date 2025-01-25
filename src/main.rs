@@ -31,6 +31,7 @@ use rayon::prelude::*;
 use ser::*;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_with::serde_as;
+use std::ffi::OsStr;
 use std::fmt::{Debug, Display, Formatter};
 use std::io::BufWriter;
 use std::path::Path;
@@ -568,6 +569,93 @@ impl FileWriterTrait for NullFileWriter {
     }
 }
 
+trait FileReaderTrait: Send + Sync {
+    fn read_file(&self, path: &str) -> Result<Vec<u8>>;
+    fn read_file_opt(&self, path: &str) -> Result<Option<Vec<u8>>>;
+    fn list_files(&self) -> Result<Vec<String>>;
+}
+struct FSFileReader {
+    dir: PathBuf,
+}
+impl FSFileReader {
+    fn new<P: Into<PathBuf>>(dir: P) -> Self {
+        Self { dir: dir.into() }
+    }
+}
+impl FileReaderTrait for FSFileReader {
+    fn read_file(&self, path: &str) -> Result<Vec<u8>> {
+        Ok(fs::read(self.dir.join(path))?)
+    }
+    fn read_file_opt(&self, path: &str) -> Result<Option<Vec<u8>>> {
+        match fs::read(self.dir.join(path)) {
+            Ok(data) => Ok(Some(data)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err.into()),
+        }
+    }
+    fn list_files(&self) -> Result<Vec<String>> {
+        fn visit_dirs<F>(dir: &Path, cb: &mut F) -> std::io::Result<()>
+        where
+            F: FnMut(&fs::DirEntry),
+        {
+            if dir.is_dir() {
+                for entry in fs::read_dir(dir)? {
+                    let entry = entry?;
+                    let path = entry.path();
+                    if path.is_dir() {
+                        visit_dirs(&path, cb)?;
+                    } else {
+                        cb(&entry);
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        let mut files = vec![];
+        visit_dirs(&self.dir, &mut |file| {
+            files.push(
+                file.path()
+                    .strip_prefix(&self.dir)
+                    .expect("failed to strip dir prefix")
+                    .to_str()
+                    .expect("non-utf8 path")
+                    .to_string(),
+            );
+        })?;
+        Ok(files)
+    }
+}
+struct PakFileReader {
+    pak: repak::PakReader,
+    reader: Arc<Mutex<BufReader<fs::File>>>, // TODO convert to FilePool
+}
+impl PakFileReader {
+    fn new<P: Into<PathBuf>>(pak: P) -> Result<Self> {
+        let mut reader = BufReader::new(fs::File::open(pak)?);
+        let pak = repak::PakBuilder::new().reader(&mut reader)?;
+        Ok(Self {
+            reader: Arc::new(Mutex::new(reader)),
+            pak,
+        })
+    }
+}
+impl FileReaderTrait for PakFileReader {
+    fn read_file(&self, path: &str) -> Result<Vec<u8>> {
+        Ok(self.pak.get(path, &mut *self.reader.lock().unwrap())?)
+    }
+    fn read_file_opt(&self, path: &str) -> Result<Option<Vec<u8>>> {
+        match self.pak.get(path, &mut *self.reader.lock().unwrap()) {
+            Ok(data) => Ok(Some(data)),
+            Err(repak::Error::MissingEntry(_)) => Ok(None),
+            Err(err) => Err(err.into()),
+        }
+    }
+    fn list_files(&self) -> Result<Vec<String>> {
+        Ok(self.pak.files())
+    }
+}
+
 fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Result<()> {
     let log = Log::new(args.verbose, args.debug);
     if args.dry_run {
@@ -773,22 +861,13 @@ fn action_extract_legacy_shaders(
 }
 
 fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
-    fn visit_dirs(dir: &Path, cb: &mut dyn FnMut(&fs::DirEntry)) -> std::io::Result<()> {
-        if dir.is_dir() {
-            for entry in fs::read_dir(dir)? {
-                let entry = entry?;
-                let path = entry.path();
-                if path.is_dir() {
-                    visit_dirs(&path, cb)?;
-                } else {
-                    cb(&entry);
-                }
-            }
-        }
-        Ok(())
-    }
-
     let mount_point = "../../../";
+
+    let input_file: Box<dyn FileReaderTrait> = if args.input.is_dir() {
+        Box::new(FSFileReader::new(args.input))
+    } else {
+        Box::new(PakFileReader::new(args.input)?)
+    };
 
     let mut writer = IoStoreWriter::new(
         &args.output,
@@ -801,47 +880,35 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
     let mut asset_paths = vec![];
     let mut shader_lib_paths = vec![];
 
-    let check_path = |path: &Path| {
-        !args
-            .filter
-            .as_ref()
-            .is_some_and(|f| !path.to_string_lossy().contains(f))
-    };
+    let check_path = |path: &str| !args.filter.as_ref().is_some_and(|f| !path.contains(f));
 
-    visit_dirs(&args.input, &mut |file| {
-        let path = file.path();
-        let is_asset = [
-            Some(std::ffi::OsStr::new("uasset")),
-            Some(std::ffi::OsStr::new("umap")),
-        ]
-        .contains(&path.extension());
+    for path in input_file.list_files()? {
+        let ext = UEPath::new(&path).extension();
+        let is_asset = [Some("uasset"), Some("umap")].contains(&ext);
         if is_asset && check_path(&path) {
-            asset_paths.push(file.path());
+            asset_paths.push(path.to_string());
         }
-        let is_shader_lib = Some(std::ffi::OsStr::new("ushaderbytecode")) == path.extension();
+        let is_shader_lib = Some("ushaderbytecode") == ext;
         if is_shader_lib && check_path(&path) {
-            shader_lib_paths.push(file.path());
+            shader_lib_paths.push(path);
         }
-    })?;
+    }
 
     // Convert shader libraries first, since the data contained in their asset metadata is needed to build the package store entries
     let mut package_name_to_referenced_shader_maps: HashMap<String, Vec<FSHAHash>> = HashMap::new();
     for path in shader_lib_paths {
         log!(&log, "converting shader library {path:?}");
-        let relative_path = path.strip_prefix(&args.input).unwrap();
-
-        let shader_library_buffer = fs::read(&path)?;
-        let asset_metadata_filename = get_shader_asset_info_filename_from_library_filename(
-            &path.file_name().unwrap().to_string_lossy(),
-        )?;
+        let shader_library_buffer = input_file.read_file(&path)?;
+        let path = UEPath::new(&path);
+        let asset_metadata_filename =
+            get_shader_asset_info_filename_from_library_filename(path.file_name().unwrap())?;
         let asset_metadata_path = path
             .parent()
-            .map(|x| x.join(&asset_metadata_filename))
-            .unwrap_or(PathBuf::from(&asset_metadata_filename));
+            .map(|x| x.join(&asset_metadata_filename).to_string())
+            .unwrap_or(asset_metadata_filename);
 
         // Read asset metadata and store it into the global map to be picked up by zen packages later
-        if fs::metadata(&asset_metadata_path)?.is_file() {
-            let shader_asset_info_buffer = fs::read(&asset_metadata_path)?;
+        if let Some(shader_asset_info_buffer) = input_file.read_file_opt(&asset_metadata_path)? {
             shader_library::read_shader_asset_info(
                 &shader_asset_info_buffer,
                 &mut package_name_to_referenced_shader_maps,
@@ -852,7 +919,7 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
         shader_library::write_io_store_library(
             &mut writer,
             &shader_library_buffer,
-            &Path::new(mount_point).join(relative_path).to_string_lossy(),
+            UEPath::new(mount_point).join(path).as_str(),
             &log,
         )?;
     }
@@ -860,29 +927,24 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
     // Convert assets now
     for path in asset_paths {
         log!(&log, "converting asset {path:?}");
-        let relative_path = path.strip_prefix(&args.input).unwrap();
 
-        fn read_optional(path: &Path) -> Result<Option<Vec<u8>>, std::io::Error> {
-            match fs::read(path) {
-                Ok(data) => Ok(Some(data)),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                Err(err) => Err(err),
-            }
-        }
+        let path = UEPath::new(&path);
 
         let bundle = FSerializedAssetBundle {
-            asset_file_buffer: fs::read(&path)?,
-            exports_file_buffer: fs::read(path.with_extension("uexp"))?,
-            bulk_data_buffer: read_optional(&path.with_extension("ubulk"))?,
-            optional_bulk_data_buffer: read_optional(&path.with_extension("uptnl"))?,
-            memory_mapped_bulk_data_buffer: read_optional(&path.with_extension("m.ubulk"))?,
+            asset_file_buffer: input_file.read_file(path.as_str())?,
+            exports_file_buffer: input_file.read_file(path.with_extension("uexp").as_str())?,
+            bulk_data_buffer: input_file.read_file_opt(path.with_extension("ubulk").as_str())?,
+            optional_bulk_data_buffer: input_file
+                .read_file_opt(&path.with_extension("uptnl").as_str())?,
+            memory_mapped_bulk_data_buffer: input_file
+                .read_file_opt(&path.with_extension("m.ubulk").as_str())?,
         };
 
         zen_asset_conversion::build_write_zen_asset(
             &mut writer,
             &bundle,
             &package_name_to_referenced_shader_maps,
-            &Path::new(mount_point).join(relative_path).to_string_lossy(),
+            UEPath::new(mount_point).join(path).as_str(),
             Some(args.version.package_file_version()),
         )?;
     }
