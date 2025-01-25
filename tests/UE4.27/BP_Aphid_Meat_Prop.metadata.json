@@ -1,0 +1,18 @@
+{
+  "toc_version": "PartitionSize",
+  "container_header_version": "Initial",
+  "package_file_version": {
+    "file_version_ue4": 522,
+    "file_version_ue5": 0
+  },
+  "store_entry": {
+    "export_bundles_size": 5859,
+    "load_order": 28391,
+    "export_count": 7,
+    "export_bundle_count": 1,
+    "imported_packages": [
+      12088545253770535616
+    ],
+    "shader_map_hashes": []
+  }
+}
