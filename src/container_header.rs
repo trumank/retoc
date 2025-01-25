@@ -164,14 +164,14 @@ impl FIoContainerHeader {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
 #[repr(u32)]
 pub(crate) enum EIoContainerHeaderVersion {
     Initial = 0,
     LocalizedPackages = 1,
     OptionalSegmentPackages = 2,
     NoExportInfo = 3,
-    SoftPackageReferences = 4,
+    #[default] SoftPackageReferences = 4,
 }
 impl Readable for EIoContainerHeaderVersion {
     #[instrument(skip_all, name = "EIoContainerHeaderVersion")]

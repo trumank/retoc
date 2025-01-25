@@ -391,7 +391,12 @@ impl Writeable for FExportMapEntry {
     }
 }
 impl FExportMapEntry {
+    // Returns true if this is a public export. This is only valid for new (UE5.0+) zen packages
     pub(crate) fn is_public_export(&self) -> bool { self.public_export_hash != 0 }
+    // Reinterprets public export hash as global import index. Only valid for legacy zen packages before UE5.0
+    pub(crate) fn legacy_global_import_index(&self) -> FPackageObjectIndex {
+        FPackageObjectIndex::create_from_raw(self.public_export_hash)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, FromRepr)]
@@ -706,6 +711,7 @@ pub(crate) struct FZenPackageHeader {
     pub(crate) is_unversioned: bool,
     pub(crate) internal_dependency_arcs: Vec<FInternalDependencyArc>,
     pub(crate) external_package_dependencies: Vec<ExternalPackageDependency>,
+    pub(crate) container_header_version: EIoContainerHeaderVersion,
 }
 impl FZenPackageHeader {
     pub(crate) fn package_name(&self) -> String {
@@ -929,6 +935,7 @@ impl FZenPackageHeader {
             is_unversioned,
             internal_dependency_arcs,
             external_package_dependencies,
+            container_header_version: header_version,
         })
     }
 

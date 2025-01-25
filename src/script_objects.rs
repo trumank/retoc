@@ -96,6 +96,9 @@ impl FPackageObjectIndex {
     const TYPE_SHIFT: u64 = Self::INDEX_BITS;
     const INVALID_ID: u64 = !0;
 
+    pub(crate) fn create_from_raw(raw: u64) -> Self {
+        Self{type_and_id: raw}
+    }
     pub(crate) fn create(kind: FPackageObjectIndexType, value: u64) -> Self {
         Self {
             type_and_id: ((kind as u64) << Self::TYPE_SHIFT) | value,

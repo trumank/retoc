@@ -36,7 +36,7 @@ fn create_asset_builder(package: FLegacyPackageHeader, container_header_version:
     ZenPackageBuilder{
         package_id: FPackageId::from_name(&package.summary.package_name),
         legacy_package: package,
-        zen_package: FZenPackageHeader::default(),
+        zen_package: FZenPackageHeader{container_header_version, ..FZenPackageHeader::default()},
         container_header_version,
         package_import_lookup: HashMap::new(),
         export_hash_lookup: HashMap::new(),

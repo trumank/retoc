@@ -13,6 +13,7 @@ use std::cmp::max;
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Seek, SeekFrom, Write};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
+use crate::container_header::EIoContainerHeaderVersion;
 
 // Cache that stores the packages that were retrieved for the purpose of dependency resolution, to avoid loading and parsing them multiple times
 pub(crate) struct FZenPackageContext<'a> {
@@ -241,6 +242,15 @@ fn resolve_script_import(package_cache: &FZenPackageContext, import: FPackageObj
 }
 fn resolve_package_import(package_cache: &FZenPackageContext, package_header: &FZenPackageHeader, import: FPackageObjectIndex) -> anyhow::Result<ResolvedZenImport> {
 
+    // Use new resolution logic (using public export hashes) on UE5.0 and above
+    if package_header.container_header_version >= EIoContainerHeaderVersion::LocalizedPackages {
+        resolve_package_import_internal_new(package_cache, package_header, import)
+    } else {
+        // Use legacy resolution logic (using imported package ID enumeration, which is considerably slower)
+        resolve_package_import_internal_legacy(package_cache, package_header, import)
+    }
+}
+fn resolve_package_import_internal_new(package_cache: &FZenPackageContext, package_header: &FZenPackageHeader, import: FPackageObjectIndex) -> anyhow::Result<ResolvedZenImport> {
     let package_import = import.package_import().ok_or_else(|| { anyhow!("Failed to resolve import {} as package import", import) })?;
 
     // Make sure package index points to a valid index in the imported packages
@@ -274,6 +284,23 @@ fn resolve_package_import(package_cache: &FZenPackageContext, package_header: &F
         .ok_or_else(|| { anyhow!("Failed to resolve public export with hash {} on package {} (imported by {})",  public_export_hash, resolved_import_package.package_name(), package_header.package_name()) })?;
 
     resolve_package_export_internal(package_cache, resolved_import_package.as_ref(), imported_export)
+}
+fn resolve_package_import_internal_legacy(package_cache: &FZenPackageContext, package_header: &FZenPackageHeader, import: FPackageObjectIndex) -> anyhow::Result<ResolvedZenImport> {
+
+    // Since we do not know which imported package this import is coming from because imported object indices are black box, iterate all of them and find the one that has a matching export
+    for imported_package_id in &package_header.imported_packages {
+
+        // Resolve the imported package, and abort if we cannot resolve it
+        let resolved_import_package = package_cache.lookup(imported_package_id.clone())?;
+        let potential_imported_export = resolved_import_package.export_map.iter().find(|x| { x.legacy_global_import_index() == import });
+
+        // If we found an actual export we have imported, resolve it from this package internally
+        if let Some(imported_export) = potential_imported_export {
+            return resolve_package_export_internal(package_cache, resolved_import_package.as_ref(), imported_export)
+        }
+    }
+    // Failed to find a matching export, bail
+    bail!("Failed to resolve imported package object index {} on any of the imported packages (imported by {})", import, package_header.package_name());
 }
 fn resolve_package_export(package_cache: &FZenPackageContext, package_header: &FZenPackageHeader, export: FPackageObjectIndex) -> anyhow::Result<ResolvedZenImport> {
 
@@ -527,7 +554,9 @@ fn build_export_map(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
         let asset_object_flags: u32 = (EObjectFlags::Public as u32) | (EObjectFlags::Standalone as u32) | (EObjectFlags::Transactional as u32);
         let is_asset = zen_export.outer_index.is_null() && (object_flags & asset_object_flags) == asset_object_flags;
         // This is false for all objects in the engine presently, but we can infer if it should be true: If export is not marked as RF_Public still has an export hash, generate_public_hash must be true
-        let generate_public_hash = (object_flags & (EObjectFlags::Public as u32)) != 0 && zen_export.public_export_hash != 0;
+        // Note that this property did not exist before UE5.0, so it is always false on earlier versions
+        let generate_public_hash = builder.zen_package.container_header_version >= EIoContainerHeaderVersion::LocalizedPackages &&
+            (object_flags & (EObjectFlags::Public as u32)) != 0 && zen_export.public_export_hash != 0;
 
         // There is no real way to safely infer these from the zen package. They are only used in the editor for loading assets of undefined types to try and salvage as much data out of them as possible when using versioned serialization
         // Providing incorrect values here will crash the editor in such a case because of the serial size mismatch. However, we can make an assumption that the entire export is only script properties, and nothing else
@@ -615,7 +644,7 @@ fn resolve_export_dependencies_internal_dependency_bundles(builder: &mut LegacyA
     }
 }
 
-fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAssetBuilder, export_dependencies: &mut Vec<FStandaloneExportDependencies>) {
+fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAssetBuilder, export_dependencies: &mut Vec<FStandaloneExportDependencies>) -> anyhow::Result<()> {
 
     // "to export" is the one that depends on the given state of the "from export/import", e.g. "to export" is the export that has "from export/import" as a dependency
     let mut add_export_dependency = |from_index: FPackageIndex, to_export_index: usize, from_type: EExportCommandType, to_type: EExportCommandType| {
@@ -710,6 +739,62 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
 
         add_export_dependency(from_import_index, to_export_index, from_command_type, to_command_type);
     }
+
+    // If this is a legacy package (UE4.27 or below) where dependencies are between bundles from different packages, process them here
+    // Note that this might result in resolution and loading of new packages, which is why this function can fail
+    if builder.zen_package.container_header_version == EIoContainerHeaderVersion::Initial {
+
+        for external_package_dependency in &builder.zen_package.external_package_dependencies {
+
+            let imported_package_id = external_package_dependency.from_package_id.clone();
+            let resolved_import_package = builder.package_context.lookup(imported_package_id.clone())?;
+
+            // Link last element from the from export bundle to the first element of to export bundle
+            for bundle_to_bundle_dependency_arc in &external_package_dependency.legacy_dependency_arcs {
+
+                let from_bundle_index = bundle_to_bundle_dependency_arc.from_export_bundle_index as usize;
+                let from_bundle_header = resolved_import_package.export_bundle_headers[from_bundle_index].clone();
+
+                // Resolve indices of all exports contained in the "from" export bundle
+                let mut all_potential_import_indices: Vec<(FPackageObjectIndex, EExportCommandType)> = Vec::new();
+                for i in 0..from_bundle_header.entry_count {
+                    let from_bundle_entry_index = (from_bundle_header.first_entry_index + i) as usize;
+                    let from_bundle_entry = resolved_import_package.export_bundle_entries[from_bundle_entry_index].clone();
+
+                    let from_export_index = resolved_import_package.export_map[from_bundle_entry.local_export_index as usize].legacy_global_import_index();
+                    let from_command_type = from_bundle_entry.command_type;
+                    all_potential_import_indices.push((from_export_index, from_command_type));
+                }
+                // Reverse the array, because we want to preferably find the dependency to the last export from this export bundle first
+                all_potential_import_indices.reverse();
+
+                // Resolve the export in this package that depends on the other export
+                let to_bundle_index = bundle_to_bundle_dependency_arc.to_export_bundle_index as usize;
+                let to_bundle_header = builder.zen_package.export_bundle_headers[to_bundle_index].clone();
+
+                let to_bundle_first_entry_index = to_bundle_header.first_entry_index as usize;
+                let to_bundle_first_entry = builder.zen_package.export_bundle_entries[to_bundle_first_entry_index].clone();
+
+                let to_export_index = to_bundle_first_entry.local_export_index as usize;
+                let to_command_type = to_bundle_first_entry.command_type;
+
+                // Iterate potential import indices from other package, and add the dependency to the first one we find in the import map of this package
+                for (potential_import_object, from_command_type) in &all_potential_import_indices {
+
+                    // Skip this object if it is not actually contained in this import map
+                    let import_object_index = builder.zen_package.import_map.iter().position(|x| x == potential_import_object);
+                    if import_object_index.is_none() {
+                        continue;
+                    }
+
+                    // Create the package index from this import and add the dependency to it
+                    let from_import_index = FPackageIndex::create_import(import_object_index.unwrap() as u32);
+                    add_export_dependency(from_import_index, to_export_index, *from_command_type, to_command_type);
+                }
+            }
+        }
+    }
+    Ok({})
 }
 
 fn apply_standalone_dependencies_to_package(builder: &mut LegacyAssetBuilder, export_dependencies: &mut Vec<FStandaloneExportDependencies>) {
@@ -770,7 +855,7 @@ fn resolve_export_dependencies(builder: &mut LegacyAssetBuilder) -> anyhow::Resu
     }
     // If we have export bundle headers, this is old style dependencies
     else if !builder.zen_package.export_bundle_headers.is_empty() {
-        resolve_export_dependencies_internal_dependency_arcs(builder, &mut export_dependencies);
+        resolve_export_dependencies_internal_dependency_arcs(builder, &mut export_dependencies)?;
     }
 
     // Apply standalone dependencies to the package global list
