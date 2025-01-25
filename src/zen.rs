@@ -141,6 +141,8 @@ impl FZenPackageSummary {
         if container_header_version == EIoContainerHeaderVersion::Initial {
             graph_data_size = s.de()?;
             let _pad: i32 = s.de()?;
+            // Header size is GraphDataOffset + GraphDataSize
+            header_size = (graph_data_offset + graph_data_size) as u32;
         }
 
         Ok(Self{
