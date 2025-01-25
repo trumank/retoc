@@ -4,7 +4,7 @@ use crate::logging::Log;
 use crate::name_map::FMappedName;
 use crate::script_objects::{FPackageObjectIndex, FPackageObjectIndexType, FScriptObjectEntry, ZenScriptObjects};
 use crate::ser::{ReadExt, WriteExt};
-use crate::zen::{EExportCommandType, EExportFilterFlags, EObjectFlags, FExportMapEntry, FExternalDependencyArc, FPackageFileVersion, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo};
+use crate::zen::{EExportCommandType, EExportFilterFlags, EObjectFlags, FExportMapEntry, FExternalDependencyArc, FInternalDependencyArc, FPackageFileVersion, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo};
 use crate::{EIoChunkType, FGuid, FIoChunkId, FPackageId, FileWriterTrait, UEPath};
 use crate::logging::*;
 use anyhow::{anyhow, bail};
@@ -647,10 +647,17 @@ fn resolve_export_dependencies_internal_dependency_bundles(builder: &mut LegacyA
 fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAssetBuilder, export_dependencies: &mut Vec<FStandaloneExportDependencies>) -> anyhow::Result<()> {
 
     // "to export" is the one that depends on the given state of the "from export/import", e.g. "to export" is the export that has "from export/import" as a dependency
-    let mut add_export_dependency = |from_index: FPackageIndex, to_export_index: usize, from_type: EExportCommandType, to_type: EExportCommandType| {
+    let mut add_export_dependency = |from_index: FPackageIndex, to_export_index: usize, from_type: EExportCommandType, to_type: EExportCommandType| -> anyhow::Result<()> {
 
+        // Do not attempt to create the dependencies between the same export. They are always implied and break the loader if explicitly stated
+        if from_index.is_export() && from_index.to_export_index() as usize == to_export_index {
+            // If this is the same export, the "from" command should always be Create, and to command should always be Serialize
+            // Create depending on Serialize of the same export is always an error, and Create-Create or Serialize-Serialize are impossible dependencies
+            if from_type != EExportCommandType::Create || to_type != EExportCommandType::Serialize {
+                bail!("Invalid export bundle composition for the asset, export {} has a {:?} before {:?} dependency on itself", to_export_index, from_type, to_type);
+            }
         // for "to export" to be in Created state, it needs "from export" to be in Created (or Serialized) state
-        if to_type == EExportCommandType::Create {
+        } else if to_type == EExportCommandType::Create {
             if from_type == EExportCommandType::Create {
                 // create before create dependency
                 export_dependencies[to_export_index].create_before_create.push(from_index);
@@ -668,6 +675,7 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
                 export_dependencies[to_export_index].serialize_before_serialize.push(from_index);
             }
         }
+        Ok({})
     };
 
     // Process intra-export bundle dependencies. The sequence in which elements are laid out in the export bundle determines their dependencies relative to each other
@@ -690,13 +698,29 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
             let to_export_index = to_bundle_entry.local_export_index as usize;
             let to_command_type = to_bundle_entry.command_type;
 
-            add_export_dependency(from_index, to_export_index, from_command_type, to_command_type);
+            add_export_dependency(from_index, to_export_index, from_command_type, to_command_type)?;
+        }
+    }
+
+    // Take the internal dependency arcs for the package, but for legacy packages we might need to create them ourselves
+    let mut internal_dependency_arcs = builder.zen_package.internal_dependency_arcs.clone();
+
+    // There are no internal dependency arcs available for legacy packages. Their export bundles are always serialized sequentially (e.g. 0 -> 1 -> 2), so they have
+    // implicit dependency between the next bundle and the previous bundle. So create the synthetic preload dependencies for that
+    if builder.zen_package.container_header_version == EIoContainerHeaderVersion::Initial {
+
+        // Create an internal dependency arc from this export bundle to the previous export bundle
+        for export_bundle_index in 1..builder.zen_package.export_bundle_headers.len() {
+            internal_dependency_arcs.push(FInternalDependencyArc{
+                from_export_bundle_index: (export_bundle_index - 1) as i32,
+                to_export_bundle_index: export_bundle_index as i32,
+            })
         }
     }
 
     // Process internal dependencies (export bundle to export bundle, e.g. export to export)
     // We link first element of the "to" bundle to the last element of the "from" bundle
-    for internal_arc in builder.zen_package.internal_dependency_arcs.clone() {
+    for internal_arc in internal_dependency_arcs {
 
         let from_export_bundle = builder.zen_package.export_bundle_headers[internal_arc.from_export_bundle_index as usize].clone();
         let to_export_bundle = builder.zen_package.export_bundle_headers[internal_arc.to_export_bundle_index as usize].clone();
@@ -713,7 +737,7 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
         let to_export_index = to_export_bundle_first_element.local_export_index as usize;
         let to_command_type = to_export_bundle_first_element.command_type;
 
-        add_export_dependency(from_export_index, to_export_index, from_command_type, to_command_type);
+        add_export_dependency(from_export_index, to_export_index, from_command_type, to_command_type)?;
     }
 
     // Process external dependencies (import to export bundle, e.g. import to export)
@@ -737,7 +761,7 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
         let from_import_index_raw = builder.original_import_order.get(&from_original_import_index).unwrap().clone() as u32;
         let from_import_index = FPackageIndex::create_import(from_import_index_raw);
 
-        add_export_dependency(from_import_index, to_export_index, from_command_type, to_command_type);
+        add_export_dependency(from_import_index, to_export_index, from_command_type, to_command_type)?;
     }
 
     // If this is a legacy package (UE4.27 or below) where dependencies are between bundles from different packages, process them here
@@ -789,7 +813,7 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
 
                     // Create the package index from this import and add the dependency to it
                     let from_import_index = FPackageIndex::create_import(import_object_index.unwrap() as u32);
-                    add_export_dependency(from_import_index, to_export_index, *from_command_type, to_command_type);
+                    add_export_dependency(from_import_index, to_export_index, *from_command_type, to_command_type)?;
                 }
             }
         }
