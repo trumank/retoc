@@ -22,6 +22,7 @@ use bitflags::bitflags;
 use clap::Parser;
 use compression::{decompress, CompressionMethod};
 use container_header::StoreEntry;
+use file_pool::FilePool;
 use fs_err as fs;
 use iostore::IoStoreTrait;
 use iostore_writer::IoStoreWriter;
@@ -48,6 +49,7 @@ use std::{
 use strum::{AsRefStr, FromRepr};
 use tracing::instrument;
 use version::EngineVersion;
+use zen_asset_conversion::ConvertedZenAssetBundle;
 
 #[derive(Parser, Debug)]
 struct ActionManifest {
@@ -593,8 +595,8 @@ impl FileWriterTrait for NullFileWriter {
 }
 
 trait FileReaderTrait: Send + Sync {
-    fn read_file(&self, path: &str) -> Result<Vec<u8>>;
-    fn read_file_opt(&self, path: &str) -> Result<Option<Vec<u8>>>;
+    fn read(&self, path: &str) -> Result<Vec<u8>>;
+    fn read_opt(&self, path: &str) -> Result<Option<Vec<u8>>>;
     fn list_files(&self) -> Result<Vec<String>>;
 }
 struct FSFileReader {
@@ -606,10 +608,10 @@ impl FSFileReader {
     }
 }
 impl FileReaderTrait for FSFileReader {
-    fn read_file(&self, path: &str) -> Result<Vec<u8>> {
+    fn read(&self, path: &str) -> Result<Vec<u8>> {
         Ok(fs::read(self.dir.join(path))?)
     }
-    fn read_file_opt(&self, path: &str) -> Result<Option<Vec<u8>>> {
+    fn read_opt(&self, path: &str) -> Result<Option<Vec<u8>>> {
         read_file_opt(path)
     }
     fn list_files(&self) -> Result<Vec<String>> {
@@ -647,24 +649,23 @@ impl FileReaderTrait for FSFileReader {
 }
 struct PakFileReader {
     pak: repak::PakReader,
-    reader: Arc<Mutex<BufReader<fs::File>>>, // TODO convert to FilePool
+    file: FilePool,
 }
 impl PakFileReader {
     fn new<P: Into<PathBuf>>(pak: P) -> Result<Self> {
-        let mut reader = BufReader::new(fs::File::open(pak)?);
-        let pak = repak::PakBuilder::new().reader(&mut reader)?;
-        Ok(Self {
-            reader: Arc::new(Mutex::new(reader)),
-            pak,
-        })
+        let file = FilePool::new(pak, rayon::max_num_threads())?;
+        let pak = repak::PakBuilder::new().reader(file.acquire()?.file())?;
+        Ok(Self { file, pak })
     }
 }
 impl FileReaderTrait for PakFileReader {
-    fn read_file(&self, path: &str) -> Result<Vec<u8>> {
-        Ok(self.pak.get(path, &mut *self.reader.lock().unwrap())?)
+    fn read(&self, path: &str) -> Result<Vec<u8>> {
+        let mut handle = self.file.acquire()?;
+        Ok(self.pak.get(path, handle.file())?)
     }
-    fn read_file_opt(&self, path: &str) -> Result<Option<Vec<u8>>> {
-        match self.pak.get(path, &mut *self.reader.lock().unwrap()) {
+    fn read_opt(&self, path: &str) -> Result<Option<Vec<u8>>> {
+        let mut handle = self.file.acquire()?;
+        match self.pak.get(path, handle.file()) {
             Ok(data) => Ok(Some(data)),
             Err(repak::Error::MissingEntry(_)) => Ok(None),
             Err(err) => Err(err.into()),
@@ -737,6 +738,14 @@ fn action_extract_legacy_inner(
     Ok(())
 }
 
+fn progress_style() -> indicatif::ProgressStyle {
+    indicatif::ProgressStyle::with_template(
+        "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {wide_msg}",
+    )
+    .unwrap()
+    .progress_chars("##-")
+}
+
 fn action_extract_legacy_assets(
     args: &ActionExtractLegacy,
     file_writer: &dyn FileWriterTrait,
@@ -772,12 +781,7 @@ fn action_extract_legacy_assets(
 
     let count = packages_to_extract.len();
     let failed_count = AtomicUsize::new(0);
-    let progress_style = indicatif::ProgressStyle::with_template(
-        "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {wide_msg}",
-    )
-    .unwrap()
-    .progress_chars("##-");
-    let progress = Some(indicatif::ProgressBar::new(count as u64).with_style(progress_style));
+    let progress = Some(indicatif::ProgressBar::new(count as u64).with_style(progress_style()));
     log.set_progress(progress.as_ref());
     let prog_ref = progress.as_ref();
 
@@ -882,7 +886,7 @@ fn action_extract_legacy_shaders(
 fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
     let mount_point = "../../../";
 
-    let input_file: Box<dyn FileReaderTrait> = if args.input.is_dir() {
+    let input: Box<dyn FileReaderTrait> = if args.input.is_dir() {
         Box::new(FSFileReader::new(args.input))
     } else {
         Box::new(PakFileReader::new(args.input)?)
@@ -901,7 +905,7 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
 
     let check_path = |path: &str| !args.filter.as_ref().is_some_and(|f| !path.contains(f));
 
-    for path in input_file.list_files()? {
+    for path in input.list_files()? {
         let ext = UEPath::new(&path).extension();
         let is_asset = [Some("uasset"), Some("umap")].contains(&ext);
         if is_asset && check_path(&path) {
@@ -917,7 +921,7 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
     let mut package_name_to_referenced_shader_maps: HashMap<String, Vec<FSHAHash>> = HashMap::new();
     for path in shader_lib_paths {
         log!(&log, "converting shader library {path:?}");
-        let shader_library_buffer = input_file.read_file(&path)?;
+        let shader_library_buffer = input.read(&path)?;
         let path = UEPath::new(&path);
         let asset_metadata_filename =
             get_shader_asset_info_filename_from_library_filename(path.file_name().unwrap())?;
@@ -927,7 +931,7 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
             .unwrap_or(asset_metadata_filename);
 
         // Read asset metadata and store it into the global map to be picked up by zen packages later
-        if let Some(shader_asset_info_buffer) = input_file.read_file_opt(&asset_metadata_path)? {
+        if let Some(shader_asset_info_buffer) = input.read_opt(&asset_metadata_path)? {
             shader_library::read_shader_asset_info(
                 &shader_asset_info_buffer,
                 &mut package_name_to_referenced_shader_maps,
@@ -943,30 +947,65 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
         )?;
     }
 
+    let progress =
+        Some(indicatif::ProgressBar::new(asset_paths.len() as u64).with_style(progress_style()));
+    log.set_progress(progress.as_ref());
+    let prog_ref = progress.as_ref();
+
+    log.set_progress(prog_ref);
+
     // Convert assets now
-    for path in asset_paths {
-        log!(&log, "converting asset {path:?}");
+    let container_header_version = writer.container_header_version();
+    let process_assets = |tx: std::sync::mpsc::SyncSender<ConvertedZenAssetBundle>| -> Result<()> {
+        asset_paths.par_iter().try_for_each(|path| -> Result<()> {
+            verbose!(&log, "converting asset {path:?}");
 
-        let path = UEPath::new(&path);
+            let path = UEPath::new(&path);
 
-        let bundle = FSerializedAssetBundle {
-            asset_file_buffer: input_file.read_file(path.as_str())?,
-            exports_file_buffer: input_file.read_file(path.with_extension("uexp").as_str())?,
-            bulk_data_buffer: input_file.read_file_opt(path.with_extension("ubulk").as_str())?,
-            optional_bulk_data_buffer: input_file
-                .read_file_opt(&path.with_extension("uptnl").as_str())?,
-            memory_mapped_bulk_data_buffer: input_file
-                .read_file_opt(&path.with_extension("m.ubulk").as_str())?,
-        };
+            prog_ref.inspect(|p| p.set_message(path.to_string()));
 
-        zen_asset_conversion::build_write_zen_asset(
-            &mut writer,
-            &bundle,
-            &package_name_to_referenced_shader_maps,
-            UEPath::new(mount_point).join(path).as_str(),
-            Some(args.version.package_file_version()),
-        )?;
-    }
+            let bundle = FSerializedAssetBundle {
+                asset_file_buffer: input.read(path.as_str())?,
+                exports_file_buffer: input.read(path.with_extension("uexp").as_str())?,
+                bulk_data_buffer: input.read_opt(path.with_extension("ubulk").as_str())?,
+                optional_bulk_data_buffer: input
+                    .read_opt(&path.with_extension("uptnl").as_str())?,
+                memory_mapped_bulk_data_buffer: input
+                    .read_opt(&path.with_extension("m.ubulk").as_str())?,
+            };
+
+            let converted = zen_asset_conversion::build_zen_asset(
+                bundle,
+                &package_name_to_referenced_shader_maps,
+                UEPath::new(mount_point).join(path).as_str(),
+                Some(args.version.package_file_version()),
+                container_header_version,
+            )?;
+
+            tx.send(converted)?;
+
+            prog_ref.inspect(|p| p.inc(1));
+            Ok(())
+        })
+    };
+    let mut result = None;
+    let result_ref = &mut result;
+    rayon::in_place_scope(|scope| -> Result<()> {
+        let (tx, rx) = std::sync::mpsc::sync_channel(0);
+
+        scope.spawn(|_| {
+            *result_ref = Some(process_assets(tx));
+        });
+
+        for converted in rx {
+            converted.write(&mut writer)?;
+        }
+        Ok(())
+    })?;
+    result.unwrap()?;
+
+    prog_ref.inspect(|p| p.finish_with_message(""));
+    log.set_progress(None);
 
     writer.finalize()?;
 
