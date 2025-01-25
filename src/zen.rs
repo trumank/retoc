@@ -1106,6 +1106,7 @@ mod test {
             "tests/UE5.4/BP_Russian_pool_table.uasset",
             "tests/UE4.27/Table_SignsJanuary.uasset",
             "tests/UE4.27/T_Emissive.uasset",
+            "tests/UE4.27/BP_SpicyChoppingDamage.uasset",
         ];
         for asset in assets {
             run_parse(Path::new(asset)).context(asset)?;
