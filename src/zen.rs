@@ -83,6 +83,7 @@ pub(crate) struct FZenPackageSummary {
     name_map_names_size: i32,
     name_map_hashes_offset: i32,
     name_map_hashes_size: i32,
+    graph_data_size: i32,
 }
 impl FZenPackageSummary {
     #[instrument(skip_all, name = "FZenPackageSummary")]
@@ -135,6 +136,12 @@ impl FZenPackageSummary {
             graph_data_offset = s.de()?;
         }
 
+        let mut graph_data_size: i32 = -1;
+        if container_header_version == EIoContainerHeaderVersion::Initial {
+            graph_data_size = s.de()?;
+            let _pad: i32 = s.de()?;
+        }
+
         Ok(Self{
             has_versioning_info,
             header_size,
@@ -155,6 +162,7 @@ impl FZenPackageSummary {
             name_map_names_size,
             name_map_hashes_offset,
             name_map_hashes_size,
+            graph_data_size,
         })
     }
 
