@@ -823,7 +823,13 @@ impl FZenPackageHeader {
             let store_entry = optional_store_entry.as_ref()
                 .ok_or_else(|| { anyhow!("Zen package versions before ImportedPackageNames cannot be parsed without their associated package store entry") })?;
 
-            export_bundle_headers = s.de_ctx(store_entry.export_bundle_count as usize)?;
+            // In 4.27 there is no cooked serial offset, it is implicit, so we cannot use de_ctx here
+            export_bundle_headers.reserve(store_entry.export_bundle_count as usize);
+            for _ in 0..store_entry.export_bundle_count {
+                let first_entry_index: u32 = s.de()?;
+                let entry_count: u32 = s.de()?;
+                export_bundle_headers.push(FExportBundleHeader{serial_offset: u64::MAX, first_entry_index, entry_count});
+            }
             export_bundle_entries_count = export_bundle_headers.iter().map(|x| x.entry_count as usize).sum();
         }
 
