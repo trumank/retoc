@@ -1,5 +1,5 @@
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
-
+use std::ops::Index;
 use anyhow::{anyhow, bail, Result};
 use strum::FromRepr;
 use tracing::instrument;
@@ -577,22 +577,13 @@ impl Writeable for FExternalDependencyArc {
     }
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct FImportedPackageDependency {
-    pub(crate) dependency_arcs: Vec<FExternalDependencyArc>,
-}
-impl Readable for FImportedPackageDependency {
-    #[instrument(skip_all, name = "FImportedPackageDependency")]
-    fn de<S: Read>(s: &mut S) -> Result<Self> {
-        Ok(Self{dependency_arcs: s.de()?})
-    }
-}
-impl Writeable for FImportedPackageDependency {
-    #[instrument(skip_all, name = "FImportedPackageDependency")]
-    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
-        s.ser(&self.dependency_arcs)?;
-        Ok({})
-    }
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct ExternalPackageDependency {
+    pub(crate) from_package_id: FPackageId,
+    // External dependency arcs link an import from this package to an export bundle in this package
+    pub(crate) external_dependency_arcs: Vec<FExternalDependencyArc>,
+    // Legacy dependency arcs link export bundle in imported package to an export bundle in current package
+    pub(crate) legacy_dependency_arcs: Vec<FInternalDependencyArc>,
 }
 
 // Legacy, UE 5.2 and below, when there were multiple export bundles instead of just one
@@ -714,7 +705,7 @@ pub(crate) struct FZenPackageHeader {
     pub(crate) shader_map_hashes: Vec<FSHAHash>,
     pub(crate) is_unversioned: bool,
     pub(crate) internal_dependency_arcs: Vec<FInternalDependencyArc>,
-    pub(crate) imported_package_dependencies: Vec<FImportedPackageDependency>,
+    pub(crate) external_package_dependencies: Vec<ExternalPackageDependency>,
 }
 impl FZenPackageHeader {
     pub(crate) fn package_name(&self) -> String {
@@ -757,10 +748,13 @@ impl FZenPackageHeader {
 
         let has_bulk_data: bool = if let Some(package_version) = optional_package_version.as_ref() {
             package_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::DataResources as i32
-        } else {
+        } else if header_version >= EIoContainerHeaderVersion::OptionalSegmentPackages {
             // Use the heuristic if we do not have the version data
             let current_start_relative_offset = (s.stream_position()? - package_start_offset) as i32;
             heuristic_zen_has_bulk_data(&summary, header_version, current_start_relative_offset)
+        } else {
+            // Bulk data did not exist before OptionalSegmentPackages
+            false
         };
 
         // This is enough information to determine the package file version for unversioned zen packages
@@ -783,10 +777,10 @@ impl FZenPackageHeader {
             s.de_ctx(bulk_data_count)?
         } else { vec!() };
 
-        let imported_public_export_hashes_count = (summary.import_map_offset - summary.imported_public_export_hashes_offset) as usize / size_of::<u64>();
-        let imported_public_export_hashes_start_offset = package_start_offset + summary.imported_public_export_hashes_offset as u64;
-
         let imported_public_export_hashes: Vec<u64> = if header_version > EIoContainerHeaderVersion::Initial {
+            let imported_public_export_hashes_count = (summary.import_map_offset - summary.imported_public_export_hashes_offset) as usize / size_of::<u64>();
+            let imported_public_export_hashes_start_offset = package_start_offset + summary.imported_public_export_hashes_offset as u64;
+
             s.seek(SeekFrom::Start(imported_public_export_hashes_start_offset))?;
             s.de_ctx(imported_public_export_hashes_count)?
         } else {
@@ -804,22 +798,37 @@ impl FZenPackageHeader {
         s.seek(SeekFrom::Start(export_map_start_offset))?;
         let export_map: Vec<FExportMapEntry> = s.de_ctx(export_map_count)?;
 
-        let export_bundle_entries_end_offset = if summary.dependency_bundle_headers_offset > 0 { summary.dependency_bundle_headers_offset } else { summary.graph_data_offset };
-        let export_bundle_entries_count = (export_bundle_entries_end_offset - summary.export_bundle_entries_offset) as usize / size_of::<FExportBundleEntry>();
+        let mut export_bundle_headers: Vec<FExportBundleHeader> = Vec::new();
+        let mut export_bundle_entries: Vec<FExportBundleEntry> = Vec::new();
+
         let export_bundle_entries_start_offset = package_start_offset + summary.export_bundle_entries_offset as u64;
+        s.seek(SeekFrom::Start(export_bundle_entries_start_offset))?;
         let expected_export_bundle_entries_count = export_map_count * 2; // Each export must have Create and Serialize
+        let mut export_bundle_entries_count;
+
+        // New style export bundles entries, UE5.0+. Export bundle entries count is derived from the graph data offset
+        if header_version >= EIoContainerHeaderVersion::LocalizedPackages {
+            let export_bundle_entries_end_offset = if summary.dependency_bundle_headers_offset > 0 { summary.dependency_bundle_headers_offset } else { summary.graph_data_offset };
+            export_bundle_entries_count = (export_bundle_entries_end_offset - summary.export_bundle_entries_offset) as usize / size_of::<FExportBundleEntry>();
+
+        } else {
+            // Legacy export bundles, bundle headers followed by bundle entries. UE 4.27 and below. Export bundle entries count is derived from the total entry count of all export bundles
+            let store_entry = optional_store_entry.as_ref()
+                .ok_or_else(|| { anyhow!("Zen package versions before ImportedPackageNames cannot be parsed without their associated package store entry") })?;
+
+            export_bundle_headers = s.de_ctx(store_entry.export_bundle_count as usize)?;
+            export_bundle_entries_count = export_bundle_headers.iter().map(|x| x.entry_count as usize).sum();
+        }
+
+        export_bundle_entries = s.de_ctx(export_bundle_entries_count)?;
         if export_bundle_entries_count != expected_export_bundle_entries_count {
             bail!("Expected to have Create and Serialize commands in export bundle for each export in the package. Got only {} export bundle entries with {} exports", export_bundle_entries_count, export_map_count);
         }
 
-        s.seek(SeekFrom::Start(export_bundle_entries_start_offset))?;
-        let export_bundle_entries: Vec<FExportBundleEntry> = s.de_ctx(export_bundle_entries_count)?;
-
         let mut dependency_bundle_headers: Vec<FDependencyBundleHeader> = Vec::new();
         let mut dependency_bundle_entries: Vec<FDependencyBundleEntry> = Vec::new();
         let mut internal_dependency_arcs: Vec<FInternalDependencyArc> = Vec::new();
-        let mut imported_package_dependencies: Vec<FImportedPackageDependency> = Vec::new();
-        let mut export_bundle_headers: Vec<FExportBundleHeader> = Vec::new();
+        let mut external_package_dependencies: Vec<ExternalPackageDependency> = Vec::new();
 
         if summary.dependency_bundle_headers_offset > 0 && summary.dependency_bundle_entries_offset > 0 {
             let dependency_bundle_headers_count = (summary.dependency_bundle_entries_offset - summary.dependency_bundle_headers_offset) as usize / size_of::<FDependencyBundleHeader>();
@@ -839,18 +848,43 @@ impl FZenPackageHeader {
         }
         else if summary.graph_data_offset > 0 {
 
-            let graph_data_start_offset = package_start_offset + summary.graph_data_offset as u64;
-            s.seek(SeekFrom::Start(graph_data_start_offset))?;
             let store_entry = optional_store_entry.as_ref()
                 .ok_or_else(|| { anyhow!("Zen package versions before ImportedPackageNames cannot be parsed without their associated package store entry") })?;
 
-            let export_bundles_count = store_entry.export_bundle_count as usize;
-            export_bundle_headers = s.de_ctx(export_bundles_count)?;
+            let graph_data_start_offset = package_start_offset + summary.graph_data_offset as u64;
+            s.seek(SeekFrom::Start(graph_data_start_offset))?;
 
-            internal_dependency_arcs = s.de()?;
+            // New style graph data, UE5.0+
+            if header_version >= EIoContainerHeaderVersion::LocalizedPackages {
 
-            let external_packages_count = store_entry.imported_packages.len();
-            imported_package_dependencies = s.de_ctx(external_packages_count)?;
+                let export_bundles_count = store_entry.export_bundle_count as usize;
+                export_bundle_headers = s.de_ctx(export_bundles_count)?;
+                internal_dependency_arcs = s.de()?;
+
+                for imported_package_id in &store_entry.imported_packages {
+                    let external_arcs: Vec<FExternalDependencyArc> = s.de()?;
+
+                    external_package_dependencies.push(ExternalPackageDependency{
+                        from_package_id: imported_package_id.clone(),
+                        external_dependency_arcs: external_arcs,
+                        legacy_dependency_arcs: Vec::new(),
+                    })
+                }
+            } else {
+                // Old style graph data, UE 4.27 and below
+                let referenced_package_count: i32 = s.de()?;
+
+                for _ in 0..referenced_package_count {
+                    let imported_package_id: FPackageId = s.de()?;
+                    let legacy_arcs: Vec<FInternalDependencyArc> = s.de()?;
+
+                    external_package_dependencies.push(ExternalPackageDependency{
+                        from_package_id: imported_package_id.clone(),
+                        external_dependency_arcs: Vec::new(),
+                        legacy_dependency_arcs: legacy_arcs,
+                    })
+                }
+            }
         }
 
         // This is technically not necessary to read, but that data can be used for verification and debugging
@@ -894,7 +928,7 @@ impl FZenPackageHeader {
             shader_map_hashes,
             is_unversioned,
             internal_dependency_arcs,
-            imported_package_dependencies,
+            external_package_dependencies,
         })
     }
 
@@ -1017,9 +1051,14 @@ impl FZenPackageHeader {
             // Write internal dependency arcs after export bundle headers
             s.ser(&self.internal_dependency_arcs)?;
 
-            // Write external dependency arcs. Note that we must have as many of them as there are imported packages
-            for imported_package_arcs in &self.imported_package_dependencies {
-                s.ser(imported_package_arcs)?;
+            for imported_package_id in &self.imported_packages {
+
+                // Find all arcs that map to this specific package, and write them
+                let imported_package_arcs: Vec<FExternalDependencyArc> = self.external_package_dependencies.iter()
+                    .filter(|x| &x.from_package_id == imported_package_id)
+                    .flat_map(|x| x.external_dependency_arcs.iter().cloned())
+                    .collect();
+                s.ser(&imported_package_arcs)?;
             }
         }
 

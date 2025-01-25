@@ -4,7 +4,7 @@ use crate::legacy_asset::{EPackageFlags, FLegacyPackageFileSummary, FLegacyPacka
 use crate::name_map::{EMappedNameType, FNameMap};
 use crate::script_objects::{FPackageImportReference, FPackageObjectIndex, FPackageObjectIndexType};
 use crate::version_heuristics::heuristic_zen_version_from_package_file_version;
-use crate::zen::{EExportCommandType, EExportFilterFlags, EObjectFlags, EZenPackageVersion, FBulkDataMapEntry, FDependencyBundleEntry, FDependencyBundleHeader, FExportBundleEntry, FExportBundleHeader, FExportMapEntry, FExternalDependencyArc, FImportedPackageDependency, FInternalDependencyArc, FPackageFileVersion, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo};
+use crate::zen::{EExportCommandType, EExportFilterFlags, EObjectFlags, EZenPackageVersion, ExternalPackageDependency, FBulkDataMapEntry, FDependencyBundleEntry, FDependencyBundleHeader, FExportBundleEntry, FExportBundleHeader, FExportMapEntry, FExternalDependencyArc, FInternalDependencyArc, FPackageFileVersion, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo};
 use crate::{EIoChunkType, FIoChunkId, FPackageId, FSHAHash, UEPath};
 use anyhow::bail;
 use std::collections::{BinaryHeap, HashMap, HashSet};
@@ -380,16 +380,21 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
                 if !external_dependency_arcs.contains(&external_dependency_arc) {
 
                     external_dependency_arcs.insert(external_dependency_arc.clone());
-                    mut_builder.zen_package.imported_package_dependencies[imported_package_index].dependency_arcs.push(external_dependency_arc);
+                    // We layout external package dependencies to match imported package indices, so this is always safe
+                    mut_builder.zen_package.external_package_dependencies[imported_package_index].external_dependency_arcs.push(external_dependency_arc);
                 }
             }
         }
     };
 
-    // Pre-initialize imported package dependencies with the number of imported package IDs
-    builder.zen_package.imported_package_dependencies.reserve(builder.zen_package.imported_packages.len());
-    for _ in 0..builder.zen_package.imported_packages.len() {
-        builder.zen_package.imported_package_dependencies.push(FImportedPackageDependency{ dependency_arcs: Vec::new() });
+    // Pre-initialize external package dependencies with the number of imported package IDs
+    builder.zen_package.external_package_dependencies.reserve(builder.zen_package.imported_packages.len());
+    for imported_package_id in &builder.zen_package.imported_packages {
+        builder.zen_package.external_package_dependencies.push(ExternalPackageDependency{
+            from_package_id: imported_package_id.clone(),
+            external_dependency_arcs: Vec::new(),
+            legacy_dependency_arcs: Vec::new()
+        });
     }
 
     // Build internal and external dependency arcs

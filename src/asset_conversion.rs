@@ -689,7 +689,7 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
 
     // Process external dependencies (import to export bundle, e.g. import to export)
     // We link all the external arcs to the first element of the "to" export bundle. This is not technically correct, but since we enforce the bundle dependency initialization order, this works
-    let all_external_arcs: Vec<FExternalDependencyArc> = builder.zen_package.imported_package_dependencies.iter().flat_map(|x| { x.dependency_arcs.clone() }).collect();
+    let all_external_arcs: Vec<FExternalDependencyArc> = builder.zen_package.external_package_dependencies.iter().flat_map(|x| { x.external_dependency_arcs.clone() }).collect();
     for external_arc in all_external_arcs {
 
         let to_export_bundle = builder.zen_package.export_bundle_headers[external_arc.to_export_bundle_index as usize].clone();
