@@ -839,7 +839,7 @@ fn apply_standalone_dependencies_to_package(builder: &mut LegacyAssetBuilder, ex
             dependencies.create_before_create.push(export_object.outer_index);
         }
         if !export_object.super_index.is_null() && !dependencies.create_before_create.contains(&export_object.super_index) {
-            dependencies.create_before_create.push(export_object.super_index);
+            dependencies.serialize_before_serialize.push(export_object.super_index);
         }
         // Ensure that we have class and archetype as serialize before create dependencies
         if !export_object.class_index.is_null() && !dependencies.serialize_before_create.contains(&export_object.class_index) {
