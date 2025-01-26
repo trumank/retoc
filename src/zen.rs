@@ -1122,11 +1122,6 @@ mod test {
         let header = FZenPackageHeader::deserialize(&mut stream, metadata.store_entry, metadata.toc_version, metadata.container_header_version, metadata.package_file_version)?;
         let package_name = header.package_name();
 
-        dbg!(header.external_package_dependencies.clone());
-        dbg!(header.imported_packages.clone());
-        dbg!(header.export_bundle_headers.clone());
-        dbg!(header.export_bundle_entries.clone());
-
         //assert_eq!(package_name, "/Game/Billiards/Blueprints/BP_Russian_pool_table");
         //assert_eq!(header.name_map.get(header.export_map[5].object_name), "SCS_Node_10");
 

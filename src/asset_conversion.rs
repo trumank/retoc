@@ -786,14 +786,32 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
                     let from_bundle_entry = resolved_import_package.export_bundle_entries[from_bundle_entry_index].clone();
 
                     let from_export_index = resolved_import_package.export_map[from_bundle_entry.local_export_index as usize].legacy_global_import_index();
-                    let from_command_type = from_bundle_entry.command_type;
-                    all_potential_import_indices.push((from_export_index, from_command_type));
+
+                    // Global import index can be null for non-public exports, so do not add them as potential imports
+                    if !from_export_index.is_null() {
+                        let from_command_type = from_bundle_entry.command_type;
+                        all_potential_import_indices.push((from_export_index, from_command_type));
+                    }
                 }
                 // Reverse the array, because we want to preferably find the dependency to the last export from this export bundle first
                 all_potential_import_indices.reverse();
 
-                // Resolve the export in this package that depends on the other export
+                // Resolve the dependency from the import map of this package
+                let from_index_and_command_type = all_potential_import_indices.iter().find_map(|(export_object_index, export_command_type)| {
+                    builder.zen_package.import_map.iter().position(|import_object_index| {
+                        !import_object_index.is_null() && import_object_index == export_object_index
+                    }).map(|local_import_index| {
+                        (FPackageIndex::create_import(local_import_index as u32), *export_command_type)
+                    })
+                });
                 let to_bundle_index = bundle_to_bundle_dependency_arc.to_export_bundle_index as usize;
+
+                // We should always have an import map entry for this dependency, since zen never strips any import map entries or introduces dependencies that did not exist in the original asset
+                if from_index_and_command_type.is_none() {
+                    bail!("Failed to resolve external dependency on the package {} export bundle {} from package {} export bundle {}", imported_package_id,
+                        from_bundle_index, builder.package_id, to_bundle_index);
+                }
+                // Resolve the export in this package that depends on the other export
                 let to_bundle_header = builder.zen_package.export_bundle_headers[to_bundle_index].clone();
 
                 let to_bundle_first_entry_index = to_bundle_header.first_entry_index as usize;
@@ -802,21 +820,8 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
                 let to_export_index = to_bundle_first_entry.local_export_index as usize;
                 let to_command_type = to_bundle_first_entry.command_type;
 
-                // Iterate potential import indices from other package, and add the dependency to the first one we find in the import map of this package
-                for (potential_import_object, from_command_type) in &all_potential_import_indices {
-
-                    // Skip this object if it is not actually contained in this import map
-                    let import_object_index = builder.zen_package.import_map.iter().position(|x| x == potential_import_object);
-                    if import_object_index.is_none() {
-                        continue;
-                    }
-
-                    // Create the package index from this import and add the dependency to it
-                    let from_import_index = FPackageIndex::create_import(import_object_index.unwrap() as u32);
-                    add_export_dependency(from_import_index, to_export_index, *from_command_type, to_command_type)?;
-                    // Break, we only need the first dependency from that export bundle
-                    break;
-                }
+                let (from_package_index, from_command_type) = from_index_and_command_type.unwrap();
+                add_export_dependency(from_package_index, to_export_index, from_command_type, to_command_type)?;
             }
         }
     }
