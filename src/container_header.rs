@@ -26,6 +26,7 @@ pub(crate) struct FIoContainerHeader {
     redirect_name_map: FNameMap,
     localized_packages: Vec<FIoContainerHeaderLocalizedPackage>,
     package_redirects: Vec<FIoContainerHeaderPackageRedirect>,
+    culture_package_map: FCulturePackageMap,
 }
 impl Readable for FIoContainerHeader {
     #[instrument(skip_all, name = "FIoContainerHeader")]
@@ -66,9 +67,7 @@ impl Readable for FIoContainerHeader {
             new.localized_packages = s.de()?;
             new.package_redirects = s.de()?;
         } else {
-            // FCulturePackageMap = TMap<FString, TArray<TPair<FPackageId, FPackageId>>>;
-            let culture_package_name: u32 = s.de()?;
-            assert_eq!(culture_package_name, 0, "impl culture package map");
+            new.culture_package_map = s.de()?;
 
             // TArray<TPair<FPackageId, FPackageId>> PackageRedirects;
             let package_redirects: u32 = s.de()?;
@@ -109,7 +108,7 @@ impl Writeable for FIoContainerHeader {
             s.ser(&self.localized_packages)?;
             s.ser(&self.package_redirects)?;
         } else {
-            s.ser(&0u32)?; // TODO culture_package_name
+            s.ser(&self.culture_package_map)?;
             s.ser(&0u32)?; // TODO package_redirects
         }
 
@@ -133,6 +132,7 @@ impl FIoContainerHeader {
             redirect_name_map: FNameMap::default(),
             localized_packages: vec![],
             package_redirects: vec![],
+            culture_package_map: FCulturePackageMap::default(),
         }
     }
 
@@ -453,6 +453,36 @@ impl FFilePackageStoreEntry {
         s.ser(&self.imported_packages)?;
         if version > EIoContainerHeaderVersion::Initial {
             s.ser(&self.shader_map_hashes)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+struct FCulturePackageMap(BTreeMap<String, Vec<(FPackageId, FPackageId)>>);
+impl Readable for FCulturePackageMap {
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        let culture_package_map_len: u32 = s.de()?;
+        let mut culture_package_map = BTreeMap::new();
+        for _ in 0..culture_package_map_len {
+            let key: String = s.de()?;
+            let value: Vec<(FPackageId, FPackageId)> =
+                read_array(s.de::<u32>()? as usize, s, |s| Ok((s.de()?, s.de()?)))?;
+            culture_package_map.insert(key, value);
+        }
+        Ok(Self(culture_package_map))
+    }
+}
+impl Writeable for FCulturePackageMap {
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&(self.0.len() as u32))?;
+        for (key, value) in &self.0 {
+            s.ser(key)?;
+            s.ser(&(value.len() as u32))?;
+            for (a, b) in value {
+                s.ser(a)?;
+                s.ser(b)?;
+            }
         }
         Ok(())
     }
