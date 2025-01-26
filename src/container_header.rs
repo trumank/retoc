@@ -4,7 +4,7 @@ use std::{
     marker::PhantomData,
 };
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use strum::FromRepr;
 use tracing::instrument;
@@ -142,7 +142,7 @@ impl FIoContainerHeader {
 
     pub(crate) fn get_store_entry(&self, package_id: FPackageId) -> Option<StoreEntry> {
         // TODO handle redirects?
-        Some(self.packages.get(package_id))
+        self.packages.get(package_id)
     }
     pub(crate) fn package_ids(
         &self,
@@ -151,14 +151,17 @@ impl FIoContainerHeader {
     }
 }
 
-#[derive(Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr, Serialize, Deserialize)]
+#[derive(
+    Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr, Serialize, Deserialize,
+)]
 #[repr(u32)]
 pub(crate) enum EIoContainerHeaderVersion {
     Initial = 0,
     LocalizedPackages = 1,
     OptionalSegmentPackages = 2,
     NoExportInfo = 3,
-    #[default] SoftPackageReferences = 4,
+    #[default]
+    SoftPackageReferences = 4,
 }
 impl Readable for EIoContainerHeaderVersion {
     #[instrument(skip_all, name = "EIoContainerHeaderVersion")]
@@ -237,8 +240,8 @@ pub(crate) struct StoreEntry {
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 struct StoreEntries(BTreeMap<FPackageId, StoreEntry>);
 impl StoreEntries {
-    fn get(&self, package_id: FPackageId) -> StoreEntry {
-        self.0.get(&package_id).unwrap().clone()
+    fn get(&self, package_id: FPackageId) -> Option<StoreEntry> {
+        self.0.get(&package_id).cloned()
     }
     #[instrument(skip_all, name = "StoreEntries")]
     fn deserialize<S: Read>(s: &mut S, version: EIoContainerHeaderVersion) -> Result<Self> {
