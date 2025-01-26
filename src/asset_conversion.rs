@@ -180,6 +180,7 @@ impl ResolvedZenImport {
     const OBJECT_CLASS_NAME: &'static str = "Object";
     const CLASS_CLASS_NAME: &'static str = "Class";
     const PACKAGE_CLASS_NAME: &'static str = "Package";
+    const PRESTREAM_PACKAGE_CLASS_NAME: &'static str = "PrestreamPackage";
 }
 fn resolve_script_import(package_cache: &FZenPackageContext, import: FPackageObjectIndex) -> anyhow::Result<ResolvedZenImport> {
 
@@ -367,7 +368,7 @@ struct LegacyAssetBuilder<'a, 'b> {
     needs_to_rebuild_exports_data: bool,
 }
 
-// Lifetime: create_asset_builder -> begin_build_summary -> copy_package_sections -> build_import_map -> build_export_map -> resolve_export_dependencies -> finalize_asset -> write_asset
+// Lifetime: create_asset_builder -> begin_build_summary -> copy_package_sections -> build_import_map -> build_export_map -> resolve_prestream_package_imports -> resolve_export_dependencies -> finalize_asset -> write_asset
 fn create_asset_builder<'a, 'b>(package_context: &'a FZenPackageContext<'b>, package_id: FPackageId) -> anyhow::Result<LegacyAssetBuilder<'a, 'b>> {
     let zen_package: Arc<FZenPackageHeader> = package_context.lookup(package_id)?;
     drop(package_context.get_script_objects()?);
@@ -893,6 +894,55 @@ fn resolve_export_dependencies(builder: &mut LegacyAssetBuilder) -> anyhow::Resu
     apply_standalone_dependencies_to_package(builder, &mut export_dependencies);
     Ok({})
 }
+
+fn resolve_prestream_package_imports(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
+
+    // Figure out if we have left some package IDs that were in the imported packages, but are not presently in the import map
+    // This is needed to account for PrestreamPackage imports, which are special import map entries that do not have objects, but indicate an intention to pre-stream another package
+    let all_imported_package_ids: HashSet<FPackageId> = builder.legacy_package.imports.iter()
+        .filter(|x| x.outer_index.is_null())
+        .map(|x| builder.legacy_package.name_map.get(x.object_name).to_string())
+        .filter(|x| !x.starts_with("/Script/"))
+        .map(|x| FPackageId::from_name(&x))
+        .collect();
+
+    let prestream_package_ids: Vec<FPackageId> = builder.zen_package.imported_packages.iter()
+        .filter(|x| !all_imported_package_ids.contains(x))
+        .collect();
+
+    // Attempt to resolve prestream package references if we have some
+    for prestream_package_id in &prestream_package_ids {
+
+        // Failure to resolve a prestream package reference is not critical to the package generation
+        let resolved_prestream_package = builder.package_context.lookup(prestream_package_id.clone());
+        if resolved_prestream_package.is_err() {
+            log!(builder.package_context.log, "Failed to resolve prestream package request {} from package {}: {}",
+                    prestream_package_id.clone(), builder.legacy_package.summary.package_name.clone(), resolved_prestream_package.unwrap_err().to_string());
+            continue;
+        }
+
+        // Resolve the name of the package, put it into the name map and add an import
+        let resolved_package_name = resolved_prestream_package?.package_name();
+        let class_package = builder.legacy_package.name_map.store(ResolvedZenImport::CORE_OBJECT_PACKAGE_NAME);
+        let class_name = builder.legacy_package.name_map.store(ResolvedZenImport::PRESTREAM_PACKAGE_CLASS_NAME);
+        let object_name = builder.legacy_package.name_map.store(&resolved_package_name);
+
+        // Log that we have resolved the pre-stream request successfully
+        if builder.package_context.log.verbose_enabled() {
+            log!(builder.package_context.log, "Resolved pre-stream package request {} from package {}",
+                    resolved_package_name.clone(), builder.legacy_package.summary.package_name.clone());
+        }
+
+        builder.legacy_package.imports.push(FObjectImport{
+            class_package, class_name,
+            outer_index: FPackageIndex::create_null(),
+            object_name,
+            is_optional: false,
+        });
+    }
+    Ok({})
+}
+
 fn finalize_asset(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
 
     // Remap import map to the current indices
@@ -916,9 +966,17 @@ fn finalize_asset(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
         while current_import_indices_with_predefined_positions.contains(&current_legacy_asset_import_index) {
             current_legacy_asset_import_index += 1;
         }
-        // We should NEVER end up with less imports than we have to fill the holes, since zen never strips non-upackage exports
+        // We should never end up with fewer imports than we have to fill the holes, since zen never strips non-upackage exports
         if current_legacy_asset_import_index >= builder.legacy_package.imports.len() {
-            bail!("Failed to find import map entry to fill the hole at {} while filling import map up to size {}", final_import_index, import_map_size);
+            // Attempt to handle this case gracefully by emitting a null import map entry. This allows us not to fail on extracting packages that might load fine otherwise (albeit with information loss)
+            // Log the warning regardless though because the information is lost
+            log!(builder.package_context.log, "Failed to find import map entry to fill the hole at {} while filling import map up to size {} for package {}. Null import map entry will be used instead",
+                final_import_index, import_map_size, builder.legacy_package.summary.package_name.clone());
+
+            let null_name = builder.legacy_package.name_map.store("None");
+            let null_import_object = FObjectImport{class_package: null_name, class_name: null_name, outer_index: FPackageIndex::create_null(), object_name: null_name, is_optional: false};
+            new_import_map.push(null_import_object);
+            continue;
         }
 
         // Take the current position and increment it by one
@@ -965,6 +1023,7 @@ pub(crate) fn build_asset_from_zen<'a, 'b>(package_context: &'a FZenPackageConte
     copy_package_sections(&mut asset_builder)?;
     build_import_map(&mut asset_builder)?;
     build_export_map(&mut asset_builder)?;
+    resolve_prestream_package_imports(&mut asset_builder)?;
     resolve_export_dependencies(&mut asset_builder)?;
     finalize_asset(&mut asset_builder)?;
 
