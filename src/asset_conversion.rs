@@ -814,6 +814,8 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
                     // Create the package index from this import and add the dependency to it
                     let from_import_index = FPackageIndex::create_import(import_object_index.unwrap() as u32);
                     add_export_dependency(from_import_index, to_export_index, *from_command_type, to_command_type)?;
+                    // Break, we only need the first dependency from that export bundle
+                    break;
                 }
             }
         }
