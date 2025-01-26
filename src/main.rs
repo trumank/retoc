@@ -802,9 +802,10 @@ fn action_extract_legacy_assets(
                 package_info.id(),
                 &UEPath::new(&path),
                 file_writer,
-            );
+            )
+            .with_context(|| format!("Failed to convert {}", package_path.clone()));
             if let Err(err) = res {
-                log!(log, "{err}");
+                log!(log, "{err:#}");
                 failed_count.fetch_add(1, Ordering::SeqCst);
             }
             prog_ref.inspect(|p| p.inc(1));
