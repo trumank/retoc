@@ -360,6 +360,8 @@ struct LegacyAssetBuilder<'a, 'b> {
     original_import_order: HashMap<usize, usize>,
     // Whenever export data needs to be rebuilt from scratch in the order of the exports
     needs_to_rebuild_exports_data: bool,
+    // True if we have failed to resolve some entries in the import map. Used to avoid some of the logic that assumes that the import map is fully populated
+    has_failed_import_map_entries: bool,
 }
 
 // Lifetime: create_asset_builder -> begin_build_summary -> copy_package_sections -> build_import_map -> build_export_map -> resolve_prestream_package_imports -> resolve_export_dependencies -> finalize_asset -> write_asset
@@ -375,6 +377,7 @@ fn create_asset_builder<'a, 'b>(package_context: &'a FZenPackageContext<'b>, pac
         zen_import_lookup: HashMap::new(),
         original_import_order: HashMap::new(),
         needs_to_rebuild_exports_data: false,
+        has_failed_import_map_entries: false,
     })
 }
 fn begin_build_summary(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
@@ -489,6 +492,8 @@ fn find_or_add_resolved_import(builder: &mut LegacyAssetBuilder, import: &Resolv
 
     new_import_index
 }
+
+// Builds the import map entries for the legacy package. Returns true if some imports failed to resolve
 fn build_import_map(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
     for import_index in 0..builder.zen_package.import_map.len() {
 
@@ -498,12 +503,34 @@ fn build_import_map(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
         if import_object_index.is_null() {
             continue
         }
-        // Resolve the local import reference. We must ALWAYS get an import here, not a null or export
-        let import_map_index = resolve_local_package_object(builder, import_object_index)?;
+        // Resolve the local import reference
+        let result_import_map_index = resolve_local_package_object(builder, import_object_index);
+
+        // Handle potential failure to resolve the import. This is not an unusual situation when specific assets are referenced by the cooked content, but are not cooked themselves
+        let import_map_index = if result_import_map_index.is_err() {
+
+            // TODO: Do not log messages that refer to packages that have failed loading previously not to spam the output. There should be a better way to handle this.
+            let loading_error_message = result_import_map_index.unwrap_err().to_string();
+            if !loading_error_message.contains("failed loading previously") {
+                log!(builder.package_context.log, "Failed to resolve import map object {} for package {}: {}", import_object_index, builder.zen_package.package_name(), loading_error_message);
+            }
+            builder.has_failed_import_map_entries = true;
+
+            // Insert the entry into the import map, and associate this import index with the null import
+            let import_map_index = FPackageIndex::create_import(builder.legacy_package.imports.len() as u32);
+            let null_import_map_entry = create_null_import_map_entry(builder);
+
+            builder.legacy_package.imports.push(null_import_map_entry);
+            builder.zen_import_lookup.insert(import_object_index, import_map_index);
+            import_map_index
+        } else {
+            result_import_map_index?
+        };
+
+        // We must ALWAYS get an import here, not a null or export
         if !import_map_index.is_import() {
             bail!("Import map package object index {} did not resolve into an import for package {}", import_object_index, builder.zen_package.package_name());
         }
-
         // Track the original position of this import in the import map. We will need to re-sort the imports and exports later to stick to it
         builder.original_import_order.insert(import_index, import_map_index.to_import_index() as usize);
     }
@@ -518,7 +545,7 @@ fn build_export_map(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
     for export_index in 0..builder.zen_package.export_map.len() {
         let zen_export: FExportMapEntry = builder.zen_package.as_ref().export_map[export_index].clone();
 
-        // Resolve class, outer, template index
+        // Resolve class, outer, template index. These are required dependencies for the export construction and, as such, package extraction
         let class_index = resolve_local_package_object(builder, zen_export.class_index)?;
         let super_index = resolve_local_package_object(builder, zen_export.super_index)?;
         let template_index = resolve_local_package_object(builder, zen_export.template_index)?;
@@ -675,13 +702,11 @@ fn resolve_legacy_external_package_bundle_dependency(builder: &LegacyAssetBuilde
     from_export_bundle_list.sort_by_key(|x| -x.load_order_index);
 
     // Resolve the first export from that package that exists in the import map of this package
-    let from_import_index: Option<(FPackageIndex, ExternalDependencyBundleExportState)> = from_export_bundle_list.iter().find_map(|x| {
-        builder.zen_package.import_map.iter().position(|import_object_index| {
-            !import_object_index.is_null() && import_object_index == &x.import_index
-        }).map(|local_import_index| {
-            (FPackageIndex::create_import(local_import_index as u32), x.clone())
-        })
-    });
+    let from_import_index: Option<(FPackageIndex, ExternalDependencyBundleExportState)> = from_export_bundle_list.iter()
+        .find_map(|bundle_export_state| {
+            builder.zen_import_lookup.get(&bundle_export_state.import_index)
+                .map(|package_id| (package_id.clone(), bundle_export_state.clone()))
+        } );
 
     // We should always have an import map entry for this dependency, since zen never strips any import map entries or introduces dependencies that did not exist in the original asset
     // Which is why failure of resolving the preload dependency import index is an asset extraction failure and not just a warning as it is when resolving imports
@@ -877,13 +902,19 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
         for external_package_dependency in &builder.zen_package.external_package_dependencies {
 
             let imported_package_id = external_package_dependency.from_package_id.clone();
-            let resolved_import_package = builder.package_context.lookup(imported_package_id.clone())?;
+            let resolved_import_package = builder.package_context.lookup(imported_package_id.clone());
+
+            // Failure to look up the optional dependency on the failed import is not fatal, and in fact should not even be logged, since the relevant package will already be logged during import map resolution
+            if resolved_import_package.is_err() {
+                continue;
+            }
 
             // Link last element from the from export bundle to the first element of to export bundle
             for bundle_to_bundle_dependency_arc in &external_package_dependency.legacy_dependency_arcs {
 
                 let from_bundle_index = bundle_to_bundle_dependency_arc.from_export_bundle_index as usize;
-                let (from_import_index, from_command_type) = resolve_legacy_external_package_bundle_dependency(builder, resolved_import_package.as_ref(), from_bundle_index, allow_blueprint_downgrade)?;
+                let (from_import_index, from_command_type) = resolve_legacy_external_package_bundle_dependency(
+                    builder, resolved_import_package.as_ref().unwrap(), from_bundle_index, allow_blueprint_downgrade)?;
 
                 // Resolve the local bundle to which this import points
                 // Try to find the first Serialize element in the To bundle and not just the first element, since that works better for preventing circular dependencies
@@ -966,6 +997,11 @@ fn resolve_export_dependencies(builder: &mut LegacyAssetBuilder) -> anyhow::Resu
 
 fn resolve_prestream_package_imports(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
 
+    // Do not attempt to resolve pre-stream dependencies if we have failed imports, since the logic we use for them will count missing import packages as false positives
+    if builder.has_failed_import_map_entries {
+        return Ok({})
+    }
+
     // Figure out if we have left some package IDs that were in the imported packages, but are not presently in the import map
     // This is needed to account for PrestreamPackage imports, which are special import map entries that do not have objects, but indicate an intention to pre-stream another package
     let all_imported_package_ids: HashSet<FPackageId> = builder.legacy_package.imports.iter()
@@ -985,13 +1021,13 @@ fn resolve_prestream_package_imports(builder: &mut LegacyAssetBuilder) -> anyhow
         // Failure to resolve a prestream package reference is not critical to the package generation
         let resolved_prestream_package = builder.package_context.lookup(prestream_package_id.clone());
         if resolved_prestream_package.is_err() {
-            log!(builder.package_context.log, "Failed to resolve prestream package request {} from package {}: {}",
-                    prestream_package_id.clone(), builder.legacy_package.summary.package_name.clone(), resolved_prestream_package.unwrap_err().to_string());
+            log!(builder.package_context.log, "Failed to resolve a pre-stream request to the package {} from package {}",
+                prestream_package_id.clone(), builder.zen_package.package_name());
             continue;
         }
 
         // Resolve the name of the package, put it into the name map and add an import
-        let resolved_package_name = resolved_prestream_package?.package_name();
+        let resolved_package_name = resolved_prestream_package.unwrap().package_name();
         let class_package = builder.legacy_package.name_map.store(CORE_OBJECT_PACKAGE_NAME);
         let class_name = builder.legacy_package.name_map.store(PRESTREAM_PACKAGE_CLASS_NAME);
         let object_name = builder.legacy_package.name_map.store(&resolved_package_name);
@@ -1010,6 +1046,11 @@ fn resolve_prestream_package_imports(builder: &mut LegacyAssetBuilder) -> anyhow
         });
     }
     Ok({})
+}
+
+fn create_null_import_map_entry(builder: &mut LegacyAssetBuilder) -> FObjectImport {
+    let null_name = builder.legacy_package.name_map.store("None");
+    FObjectImport{class_package: null_name, class_name: null_name, outer_index: FPackageIndex::create_null(), object_name: null_name, is_optional: false}
 }
 
 fn finalize_asset(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
@@ -1039,12 +1080,12 @@ fn finalize_asset(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
         if current_legacy_asset_import_index >= builder.legacy_package.imports.len() {
             // Attempt to handle this case gracefully by emitting a null import map entry. This allows us not to fail on extracting packages that might load fine otherwise (albeit with information loss)
             // Log the warning regardless though because the information is lost
-            log!(builder.package_context.log, "Failed to find import map entry to fill the hole at {} while filling import map up to size {} for package {}. Null import map entry will be used instead",
-                final_import_index, import_map_size, builder.legacy_package.summary.package_name.clone());
+            if !builder.has_failed_import_map_entries {
+                log!(builder.package_context.log, "Failed to find import map entry to fill the hole at {} while filling import map up to size {} for package {}. Null import map entry will be used instead",
+                    final_import_index, import_map_size, builder.legacy_package.summary.package_name.clone());
+            }
 
-            let null_name = builder.legacy_package.name_map.store("None");
-            let null_import_object = FObjectImport{class_package: null_name, class_name: null_name, outer_index: FPackageIndex::create_null(), object_name: null_name, is_optional: false};
-            new_import_map.push(null_import_object);
+            new_import_map.push(create_null_import_map_entry(builder));
             continue;
         }
 
