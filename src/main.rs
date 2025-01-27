@@ -24,7 +24,7 @@ use compression::{decompress, CompressionMethod};
 use container_header::StoreEntry;
 use file_pool::FilePool;
 use fs_err as fs;
-use iostore::IoStoreTrait;
+use iostore::{IoStoreTrait, PackageInfo};
 use iostore_writer::IoStoreWriter;
 use legacy_asset::FSerializedAssetBundle;
 use logging::Log;
@@ -136,6 +136,9 @@ struct ActionExtractLegacy {
     /// Do not output any file (dry run). Useful for testing conversion
     #[arg(short, long)]
     dry_run: bool,
+    /// Don't run in parallel. Useful for debugging
+    #[arg(long)]
+    no_parallel: bool,
 
     /// Engine version override
     #[arg(long)]
@@ -167,6 +170,9 @@ struct ActionPackZen {
     debug: bool,
     #[arg(short, long)]
     filter: Option<String>,
+    /// Don't run in parallel. Useful for debugging
+    #[arg(long)]
+    no_parallel: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -827,32 +833,37 @@ fn action_extract_legacy_assets(
     log.set_progress(progress.as_ref());
     let prog_ref = progress.as_ref();
 
-    packages_to_extract
-        .par_iter()
-        .try_for_each(|(package_info, package_path)| -> Result<()> {
-            verbose!(log, "{package_path}");
+    let process = |(package_info, package_path): &(PackageInfo, String)| -> Result<()> {
+        verbose!(log, "{package_path}");
 
-            // TODO make configurable
-            let path = package_path
-                .strip_prefix("../../../")
-                .with_context(|| format!("failed to strip mount prefix from {package_path:?}"))?;
+        // TODO make configurable
+        let path = package_path
+            .strip_prefix("../../../")
+            .with_context(|| format!("failed to strip mount prefix from {package_path:?}"))?;
 
-            prog_ref.inspect(|p| p.set_message(path.to_string()));
+        prog_ref.inspect(|p| p.set_message(path.to_string()));
 
-            let res = asset_conversion::build_legacy(
-                &package_context,
-                package_info.id(),
-                &UEPath::new(&path),
-                file_writer,
-            )
-            .with_context(|| format!("Failed to convert {}", package_path.clone()));
-            if let Err(err) = res {
-                log!(log, "{err:#}");
-                failed_count.fetch_add(1, Ordering::SeqCst);
-            }
-            prog_ref.inspect(|p| p.inc(1));
-            Ok(())
-        })?;
+        let res = asset_conversion::build_legacy(
+            &package_context,
+            package_info.id(),
+            &UEPath::new(&path),
+            file_writer,
+        )
+        .with_context(|| format!("Failed to convert {}", package_path.clone()));
+        if let Err(err) = res {
+            log!(log, "{err:#}");
+            failed_count.fetch_add(1, Ordering::SeqCst);
+        }
+        prog_ref.inspect(|p| p.inc(1));
+        Ok(())
+    };
+
+    if args.no_parallel {
+        packages_to_extract.iter().try_for_each(process)?;
+    } else {
+        packages_to_extract.par_iter().try_for_each(process)?;
+    }
+
     prog_ref.inspect(|p| p.finish_with_message(""));
     log.set_progress(None);
 
@@ -995,7 +1006,7 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
     // Convert assets now
     let container_header_version = writer.container_header_version();
     let process_assets = |tx: std::sync::mpsc::SyncSender<ConvertedZenAssetBundle>| -> Result<()> {
-        asset_paths.par_iter().try_for_each(|path| -> Result<()> {
+        let process = |path| -> Result<()> {
             verbose!(&log, "converting asset {path:?}");
 
             let path = UEPath::new(&path);
@@ -1024,7 +1035,13 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
 
             prog_ref.inspect(|p| p.inc(1));
             Ok(())
-        })
+        };
+
+        if args.no_parallel {
+            asset_paths.iter().try_for_each(process)
+        } else {
+            asset_paths.par_iter().try_for_each(process)
+        }
     };
     let mut result = None;
     let result_ref = &mut result;
