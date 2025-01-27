@@ -43,7 +43,10 @@ pub(crate) fn heuristic_zen_package_version(optional_package_version: Option<FPa
 
     // Establish a package file version from the hint or from the provided metadata
     let package_file_version: FPackageFileVersion = optional_package_version.or_else(|| {
-        if container_header_version == EIoContainerHeaderVersion::LocalizedPackages {
+        if container_header_version == EIoContainerHeaderVersion::Initial {
+            // 4.26, 4.27 are Initial. their zen and package file versions are identical
+            Some(FPackageFileVersion::create_ue4(EUnrealEngineObjectUE4Version::CorrectLicenseeFlag))
+        } else if container_header_version == EIoContainerHeaderVersion::LocalizedPackages {
             Some(FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::LargeWorldCoordinates))
         } else if container_header_version == EIoContainerHeaderVersion::OptionalSegmentPackages {
             // 5.1 does not have bulk data, 5.2 does
