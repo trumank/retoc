@@ -908,6 +908,7 @@ fn resolve_prestream_package_imports(builder: &mut LegacyAssetBuilder) -> anyhow
 
     let prestream_package_ids: Vec<FPackageId> = builder.zen_package.imported_packages.iter()
         .filter(|x| !all_imported_package_ids.contains(x))
+        .copied()
         .collect();
 
     // Attempt to resolve prestream package references if we have some
