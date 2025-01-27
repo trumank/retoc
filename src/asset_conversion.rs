@@ -902,19 +902,29 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
         for external_package_dependency in &builder.zen_package.external_package_dependencies {
 
             let imported_package_id = external_package_dependency.from_package_id.clone();
-            let resolved_import_package = builder.package_context.lookup(imported_package_id.clone());
 
-            // Failure to look up the optional dependency on the failed import is not fatal, and in fact should not even be logged, since the relevant package will already be logged during import map resolution
-            if resolved_import_package.is_err() {
+            // Do not attempt to resolve dependencies that map to the localized versions of the imported package. Such dependencies will not be present in the imported package IDs, so skip them
+            if !builder.zen_package.imported_packages.contains(&imported_package_id) {
                 continue;
             }
+            let import_package_result = builder.package_context.lookup(imported_package_id.clone());
+
+            // Failure to look up the optional dependency on the failed import is not fatal, and in fact should not even be logged, since the relevant package will already be logged during import map resolution
+            if import_package_result.is_err() {
+                continue;
+            }
+            let resolved_import_package = import_package_result?;
 
             // Link last element from the from export bundle to the first element of to export bundle
             for bundle_to_bundle_dependency_arc in &external_package_dependency.legacy_dependency_arcs {
 
-                let from_bundle_index = bundle_to_bundle_dependency_arc.from_export_bundle_index as usize;
+                // Handle special case: -1 value as from bundle index means depend on the last bundle present in the from package. This is used for importing base game packages in the DLCs, as well as in mods
+                let from_bundle_index = if bundle_to_bundle_dependency_arc.from_export_bundle_index == -1 {
+                    resolved_import_package.as_ref().export_bundle_headers.len() - 1
+                } else { bundle_to_bundle_dependency_arc.from_export_bundle_index as usize };
+
                 let (from_import_index, from_command_type) = resolve_legacy_external_package_bundle_dependency(
-                    builder, resolved_import_package.as_ref().unwrap(), from_bundle_index, allow_blueprint_downgrade)?;
+                    builder, resolved_import_package.as_ref(), from_bundle_index, allow_blueprint_downgrade)?;
 
                 // Resolve the local bundle to which this import points
                 // Try to find the first Serialize element in the To bundle and not just the first element, since that works better for preventing circular dependencies
