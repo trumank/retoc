@@ -67,6 +67,22 @@ struct ActionInfo {
 struct ActionList {
     #[arg(index = 1)]
     utoc: PathBuf,
+
+    /// By default only unique chunks will be listed. --all will also list chunks overriden by patch containers
+    #[arg(long)]
+    all: bool,
+    /// Show chunk content hash
+    #[arg(long)]
+    hash: bool,
+    /// Show package ID
+    #[arg(long)]
+    package: bool,
+    /// Show chunk path
+    #[arg(long)]
+    path: bool,
+    /// Show package store entry
+    #[arg(long)]
+    store: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -317,31 +333,61 @@ fn action_info(args: ActionInfo, config: Arc<Config>) -> Result<()> {
 fn action_list(args: ActionList, config: Arc<Config>) -> Result<()> {
     let iostore = iostore::open(args.utoc, config)?;
 
-    for chunk in iostore.chunks() {
+    let chunks = if args.all {
+        iostore.chunks()
+    } else {
+        iostore.chunks_all()
+    };
+
+    for chunk in chunks {
         let id = chunk.id();
         let chunk_type = id.get_chunk_type();
-        //let package_store_entry = if chunk_type == EIoChunkType::ExportBundleData {
-        //    let package_id = FPackageId(u64::from_le_bytes(id.id[0..8].try_into().unwrap()));
-        //    let entry = chunk.container().package_store_entry(package_id).unwrap();
-        //    format!("{entry:?}")
-        //} else {
-        //    "-".to_string()
-        //};
 
         let package_id: Cow<str> = if chunk_type == EIoChunkType::ExportBundleData {
             FPackageId(id.get_chunk_id()).0.to_string().into()
         } else {
             "-".into()
         };
-        println!(
-            "{:30}  {}  {:20}  {:20}  {}",
-            chunk.container().container_name(),
-            hex::encode(id.get_raw()),
-            package_id,
-            chunk_type.as_ref(),
-            chunk.path().as_deref().unwrap_or("-"),
-            //package_store_entry,
-        );
+
+        use std::fmt::Write;
+        let mut line = String::new();
+        let mut first = true;
+
+        macro_rules! column {
+            ($($arg:tt)*) => {
+                if !first { write!(&mut line, " ").unwrap(); }
+                #[allow(unused)]
+                { first = false; }
+                write!(&mut line, $($arg)*).unwrap()
+            };
+        }
+
+        column!("{:30}", chunk.container().container_name());
+        column!("{}", hex::encode(id.get_raw()));
+        if args.hash {
+            column!("{}", hex::encode(chunk.hash().0));
+        }
+        if args.package {
+            column!("{:20}", package_id);
+        }
+        column!("{:20}", chunk_type.as_ref());
+        if args.path {
+            column!("{}", chunk.path().as_deref().unwrap_or("-"));
+        }
+        if args.store {
+            let package_store_entry = if chunk_type == EIoChunkType::ExportBundleData {
+                let entry = chunk
+                    .container()
+                    .package_store_entry(id.get_package_id())
+                    .unwrap();
+                format!("{entry:?}")
+            } else {
+                "-".to_string()
+            };
+            column!("{:?}", package_store_entry);
+        }
+
+        println!("{line}");
     }
     Ok(())
 }
@@ -403,7 +449,7 @@ fn action_verify(args: ActionVerify, config: Arc<Config>) -> Result<()> {
             //    meta.flags
             //);
 
-            if meta.chunk_hash.data[..20] != hash.as_bytes()[..20] {
+            if meta.chunk_hash.0[..20] != hash.as_bytes()[..20] {
                 bail!("hash mismatch for chunk #{i}")
             }
 
@@ -1533,9 +1579,9 @@ impl Toc {
         let meta = &self.chunk_metas[toc_entry_index];
         let offset_and_length = &self.chunk_offset_lengths[toc_entry_index];
 
-        let mut hash = FIoChunkHash { data: [0; 32] };
+        let mut hash = FIoChunkHash([0; 32]);
         // copy only first 20 bytes for some reason
-        hash.data[..20].copy_from_slice(&meta.chunk_hash.data[..20]);
+        hash.0[..20].copy_from_slice(&meta.chunk_hash.0[..20]);
 
         let offset = offset_and_length.get_offset();
         let size = offset_and_length.get_length();
@@ -1892,6 +1938,9 @@ mod chunk_id {
             id[11] = self.get_chunk_type().value(is_new);
             FIoChunkIdRaw { id }
         }
+        pub(crate) fn get_package_id(&self) -> FPackageId {
+            FPackageId(u64::from_le_bytes(self.id[0..8].try_into().unwrap()))
+        }
     }
 }
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -2019,20 +2068,18 @@ impl FIoStoreTocCompressedBlockEntry {
         self.data[11] = value;
     }
 }
-struct FIoChunkHash {
-    data: [u8; 32],
-}
+struct FIoChunkHash([u8; 32]);
 impl FIoChunkHash {
     fn from_blake3(hash: &[u8; 32]) -> FIoChunkHash {
         let mut data = [0; 32];
         data[0..20].copy_from_slice(&hash[0..20]);
-        Self { data }
+        Self(data)
     }
 }
 impl std::fmt::Debug for FIoChunkHash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "FIoChunkHash(")?;
-        for b in self.data {
+        for b in self.0 {
             write!(f, "{:02X}", b)?;
         }
         write!(f, ")")
@@ -2040,12 +2087,12 @@ impl std::fmt::Debug for FIoChunkHash {
 }
 impl Readable for FIoChunkHash {
     fn de<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(Self { data: stream.de()? })
+        Ok(Self(stream.de()?))
     }
 }
 impl Writeable for FIoChunkHash {
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
-        s.ser(&self.data)
+        s.ser(&self.0)
     }
 }
 #[derive(Debug)]
