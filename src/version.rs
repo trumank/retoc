@@ -9,6 +9,7 @@ use strum::{IntoStaticStr, VariantArray};
 use EngineVersion::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, IntoStaticStr, VariantArray)]
 pub(crate) enum EngineVersion {
+    UE4_26,
     UE4_27,
     UE5_0,
     UE5_1,
@@ -31,6 +32,7 @@ impl EngineVersion {
     pub(crate) fn toc_version(self) -> EIoStoreTocVersion {
         use EIoStoreTocVersion::*;
         match self {
+            UE4_26 => DirectoryIndex,
             UE4_27 => PartitionSize,
             UE5_0 => PerfectHashWithOverflow,
             UE5_1 => PerfectHashWithOverflow,
@@ -43,6 +45,7 @@ impl EngineVersion {
     pub(crate) fn container_header_version(self) -> EIoContainerHeaderVersion {
         use EIoContainerHeaderVersion::*;
         match self {
+            UE4_26 => Initial,
             UE4_27 => Initial,
             UE5_0 => LocalizedPackages,
             UE5_1 => OptionalSegmentPackages,
@@ -55,6 +58,7 @@ impl EngineVersion {
     pub(crate) fn object_ue4_version(self) -> EUnrealEngineObjectUE4Version {
         use EUnrealEngineObjectUE4Version::*;
         match self {
+            UE4_26 => CorrectLicenseeFlag,
             UE4_27 => CorrectLicenseeFlag,
             _ => unreachable!(),
         }
