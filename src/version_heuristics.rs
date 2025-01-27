@@ -2,7 +2,7 @@ use std::io::{Cursor, Read, Seek, SeekFrom};
 use anyhow::{anyhow, bail};
 use crate::container_header::EIoContainerHeaderVersion;
 use crate::EIoStoreTocVersion;
-use crate::legacy_asset::{EPackageFlags, FLegacyPackageFileSummary, FObjectExport, FObjectImport};
+use crate::legacy_asset::{EPackageFlags, FLegacyPackageFileSummary, FLegacyPackageHeader, FObjectExport, FObjectImport, ENGINE_PACKAGE_NAME};
 use crate::zen::{EUnrealEngineObjectUE4Version, EUnrealEngineObjectUE5Version, EZenPackageVersion, FPackageFileVersion, FZenPackageSummary, FZenPackageVersioningInfo};
 
 // Returns true if given zen package should deserialize bulk data
@@ -203,4 +203,23 @@ pub(crate) fn heuristic_package_version_from_legacy_package<S: Read + Seek>(s: &
     s.seek(SeekFrom::Start(stream_start_position))?;
     // We failed to derive the package version from the summary, return Err
     Err(anyhow!("Failed to derive package file version from the package. Please provide an explicit package version to deserialize this unversioned package"))
+}
+
+// Returns true if the preload dependency on the given import can be downgraded to the Create dependency (from Serialize dependency)
+pub(crate) fn heuristic_can_downgrade_import_preload_dependency(package: &FLegacyPackageHeader, import_index: usize, allow_blueprints: bool) -> bool {
+    let object_import = package.imports[import_index].clone();
+    let class_package = package.name_map.get(object_import.class_package).to_string();
+    let class_name = package.name_map.get(object_import.class_name).to_string();
+
+    // Data Table and Composite Data Table dependencies are never Serialize
+    // Static Meshes, Skeletal Meshes and Texture2D are never Serialize
+    // Anim Sequences and Anim Montages are never Serialize
+    // BlueprintGeneratedClass are Serialize only if they are directly referenced by one of the exports as ClassIndex/TemplateIndex/SuperIndex, which this function does not handle
+    class_package == ENGINE_PACKAGE_NAME && (
+        class_name == "DataTable" || class_name == "CompositeDataTable" ||
+        class_name == "StaticMesh" || class_name == "SkeletalMesh" ||
+        class_name == "Texture2D" || class_name == "Texture2DArray" || class_name == "Texture3D" ||
+        class_name == "AnimSequence" || class_name == "AnimMontage" ||
+        (allow_blueprints && class_name == "BlueprintGeneratedClass")
+    )
 }

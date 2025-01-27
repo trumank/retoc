@@ -1,10 +1,10 @@
 use crate::iostore::IoStoreTrait;
-use crate::legacy_asset::{FLegacyPackageFileSummary, FLegacyPackageHeader, FLegacyPackageVersioningInfo, FObjectDataResource, FObjectExport, FObjectImport, FPackageNameMap, FSerializedAssetBundle};
+use crate::legacy_asset::{FLegacyPackageFileSummary, FLegacyPackageHeader, FLegacyPackageVersioningInfo, FObjectDataResource, FObjectExport, FObjectImport, FPackageNameMap, FSerializedAssetBundle, CLASS_CLASS_NAME, CORE_OBJECT_PACKAGE_NAME, OBJECT_CLASS_NAME, PACKAGE_CLASS_NAME, PRESTREAM_PACKAGE_CLASS_NAME};
 use crate::logging::Log;
 use crate::name_map::FMappedName;
 use crate::script_objects::{FPackageObjectIndex, FPackageObjectIndexType, FScriptObjectEntry, ZenScriptObjects};
 use crate::ser::{ReadExt, WriteExt};
-use crate::zen::{EExportCommandType, EExportFilterFlags, EObjectFlags, FExportMapEntry, FExternalDependencyArc, FInternalDependencyArc, FPackageFileVersion, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo};
+use crate::zen::{EExportCommandType, EExportFilterFlags, EObjectFlags, FExportBundleEntry, FExportMapEntry, FExternalDependencyArc, FInternalDependencyArc, FPackageFileVersion, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo};
 use crate::{EIoChunkType, FGuid, FIoChunkId, FPackageId, FileWriterTrait, UEPath};
 use crate::logging::*;
 use anyhow::{anyhow, bail};
@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Seek, SeekFrom, Write};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 use crate::container_header::EIoContainerHeaderVersion;
+use crate::version_heuristics::{heuristic_can_downgrade_import_preload_dependency};
 
 // Cache that stores the packages that were retrieved for the purpose of dependency resolution, to avoid loading and parsing them multiple times
 pub(crate) struct FZenPackageContext<'a> {
@@ -175,13 +176,6 @@ struct ResolvedZenImport {
     object_name: String,
     outer: Option<Box<ResolvedZenImport>>,
 }
-impl ResolvedZenImport {
-    const CORE_OBJECT_PACKAGE_NAME: &'static str = "/Script/CoreUObject";
-    const OBJECT_CLASS_NAME: &'static str = "Object";
-    const CLASS_CLASS_NAME: &'static str = "Class";
-    const PACKAGE_CLASS_NAME: &'static str = "Package";
-    const PRESTREAM_PACKAGE_CLASS_NAME: &'static str = "PrestreamPackage";
-}
 fn resolve_script_import(package_cache: &FZenPackageContext, import: FPackageObjectIndex) -> anyhow::Result<ResolvedZenImport> {
 
     let script_object = package_cache.find_script_object(import)?;
@@ -191,8 +185,8 @@ fn resolve_script_import(package_cache: &FZenPackageContext, import: FPackageObj
     if script_object.outer_index.is_null() {
 
         return Ok(ResolvedZenImport{
-            class_package: ResolvedZenImport::CORE_OBJECT_PACKAGE_NAME.to_string(),
-            class_name: ResolvedZenImport::PACKAGE_CLASS_NAME.to_string(),
+            class_package: CORE_OBJECT_PACKAGE_NAME.to_string(),
+            class_name: PACKAGE_CLASS_NAME.to_string(),
             outer: None, object_name,
         })
     }
@@ -207,8 +201,8 @@ fn resolve_script_import(package_cache: &FZenPackageContext, import: FPackageObj
     if package_cache.is_script_object_class(import) {
 
         return Ok(ResolvedZenImport{
-            class_package: ResolvedZenImport::CORE_OBJECT_PACKAGE_NAME.to_string(),
-            class_name: ResolvedZenImport::CLASS_CLASS_NAME.to_string(),
+            class_package: CORE_OBJECT_PACKAGE_NAME.to_string(),
+            class_name: CLASS_CLASS_NAME.to_string(),
             outer: Some(Box::new(resolved_outer_import)), object_name,
         })
     }
@@ -236,8 +230,8 @@ fn resolve_script_import(package_cache: &FZenPackageContext, import: FPackageObj
     // The class for import must adhere to the type of the imported object, which Object always does, and in runtime the game does not need that precise of an information
     // of the import class to resolve native imports.
     Ok(ResolvedZenImport{
-        class_package: ResolvedZenImport::CORE_OBJECT_PACKAGE_NAME.to_string(),
-        class_name: ResolvedZenImport::OBJECT_CLASS_NAME.to_string(),
+        class_package: CORE_OBJECT_PACKAGE_NAME.to_string(),
+        class_name: OBJECT_CLASS_NAME.to_string(),
         outer: Some(Box::new(resolved_outer_import)), object_name,
     })
 }
@@ -337,8 +331,8 @@ fn resolve_package_export_internal(package_cache: &FZenPackageContext, package_h
 }
 fn resolve_builder_package_as_import(package_header: &FZenPackageHeader) -> anyhow::Result<ResolvedZenImport> {
     Ok(ResolvedZenImport{
-        class_package: ResolvedZenImport::CORE_OBJECT_PACKAGE_NAME.to_string(),
-        class_name: ResolvedZenImport::PACKAGE_CLASS_NAME.to_string(),
+        class_package: CORE_OBJECT_PACKAGE_NAME.to_string(),
+        class_name: PACKAGE_CLASS_NAME.to_string(),
         object_name: package_header.package_name(),
         outer: None,
     })
@@ -645,6 +639,79 @@ fn resolve_export_dependencies_internal_dependency_bundles(builder: &mut LegacyA
     }
 }
 
+#[derive(Copy, Clone, Default)]
+struct ExternalDependencyBundleExportState {
+    import_index: FPackageObjectIndex,
+    has_been_created: bool,
+    has_been_serialized: bool,
+    load_order_index: i64,
+}
+
+fn resolve_legacy_external_package_bundle_dependency(builder: &LegacyAssetBuilder, from_package: &FZenPackageHeader, from_bundle_index: usize, allow_blueprint_downgrade: bool) -> anyhow::Result<(FPackageIndex, EExportCommandType)> {
+    let from_bundle_header = from_package.export_bundle_headers[from_bundle_index].clone();
+
+    // Resolve indices of all exports contained in the "from" export bundle
+    let mut from_export_bundle_entries: HashMap<FPackageObjectIndex, ExternalDependencyBundleExportState> = HashMap::new();
+
+    for i in 0..from_bundle_header.entry_count {
+        let from_bundle_entry_index = (from_bundle_header.first_entry_index + i) as usize;
+        let from_bundle_entry = from_package.export_bundle_entries[from_bundle_entry_index].clone();
+        let from_export_index = from_package.export_map[from_bundle_entry.local_export_index as usize].legacy_global_import_index();
+
+        // Global import index can be null for non-public exports, so do not add them as potential imports
+        if !from_export_index.is_null() {
+            let from_command_type = from_bundle_entry.command_type;
+            let export_state: &mut ExternalDependencyBundleExportState = from_export_bundle_entries.entry(from_export_index).or_default();
+
+            export_state.import_index = from_export_index;
+            export_state.load_order_index = i as i64;
+            export_state.has_been_created |= from_command_type == EExportCommandType::Create;
+            export_state.has_been_serialized |= from_command_type == EExportCommandType::Serialize;
+        }
+    }
+
+    // Sort the export bundle entries in their reverse load order, so that we evaluate later load entries first
+    let mut from_export_bundle_list: Vec<ExternalDependencyBundleExportState> = from_export_bundle_entries.values().cloned().collect();
+    from_export_bundle_list.sort_by_key(|x| -x.load_order_index);
+
+    // Resolve the first export from that package that exists in the import map of this package
+    let from_import_index: Option<(FPackageIndex, ExternalDependencyBundleExportState)> = from_export_bundle_list.iter().find_map(|x| {
+        builder.zen_package.import_map.iter().position(|import_object_index| {
+            !import_object_index.is_null() && import_object_index == &x.import_index
+        }).map(|local_import_index| {
+            (FPackageIndex::create_import(local_import_index as u32), x.clone())
+        })
+    });
+
+    // We should always have an import map entry for this dependency, since zen never strips any import map entries or introduces dependencies that did not exist in the original asset
+    // Which is why failure of resolving the preload dependency import index is an asset extraction failure and not just a warning as it is when resolving imports
+    if from_import_index.is_none() {
+        bail!("Failed to resolve external dependency on the package {} export bundle {} to package {}", from_package.package_name(), from_bundle_index, builder.zen_package.package_name());
+    }
+    let (import_index, import_data) = from_import_index.unwrap();
+
+    // If this export has not been serialized in this bundle, the dependency would always be Create
+    if !import_data.has_been_serialized {
+        return Ok((import_index, EExportCommandType::Create))
+    }
+    // If export has not been created in this bundle, it has been created in the previous bundle, and as such the dependency would always be Serialize
+    if !import_data.has_been_created {
+        return Ok((import_index, EExportCommandType::Serialize))
+    }
+
+    // Otherwise, it could be either a Create or a Serialize dependency. Use the heuristic to decide if it can be a Create dependency
+    if heuristic_can_downgrade_import_preload_dependency(&builder.legacy_package, import_index.to_import_index() as usize, allow_blueprint_downgrade) {
+        return Ok((import_index, EExportCommandType::Create))
+    }
+    // Conservatively assume Serialize dependency otherwise
+    Ok((import_index, EExportCommandType::Serialize))
+}
+
+#[derive(Clone)]
+struct ExportBundleGroup {
+    export_indices: Vec<usize>,
+    command_type: EExportCommandType,
+}
 fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAssetBuilder, export_dependencies: &mut Vec<FStandaloneExportDependencies>) -> anyhow::Result<()> {
 
     // "to export" is the one that depends on the given state of the "from export/import", e.g. "to export" is the export that has "from export/import" as a dependency
@@ -679,27 +746,67 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
         Ok({})
     };
 
+
+    // Find first export in the export bundle with the Serialize command, or returns the first export in the bundle if it has no Serialize commands
+    fn find_first_serialize_export_in_bundle(zen_package: &FZenPackageHeader, bundle_index: usize) -> FExportBundleEntry {
+        let to_export_bundle = zen_package.export_bundle_headers[bundle_index].clone();
+
+        let first_entry_index = to_export_bundle.first_entry_index as usize;
+        let last_entry_index = (to_export_bundle.first_entry_index + to_export_bundle.entry_count) as usize;
+        let to_export_bundle_entries = &zen_package.export_bundle_entries[first_entry_index..last_entry_index];
+
+        to_export_bundle_entries.iter()
+            .find(|x| x.command_type == EExportCommandType::Serialize)
+            .and(to_export_bundle_entries.first()).unwrap().clone()
+    }
+
     // Process intra-export bundle dependencies. The sequence in which elements are laid out in the export bundle determines their dependencies relative to each other
     // This introduces some additional dependencies to specific objects and forces the linker to load them exactly in the bundle order,
     // but this is how they are supposed to be loaded by Zen Loader anyway
     for bundle_header_index in 0..builder.zen_package.export_bundle_headers.len() {
 
         let bundle_header = builder.zen_package.export_bundle_headers[bundle_header_index].clone();
-        for i in 1..bundle_header.entry_count {
 
-            let from_bundle_entry_index = bundle_header.first_entry_index + i - 1;
-            let from_bundle_entry = builder.zen_package.export_bundle_entries[from_bundle_entry_index as usize].clone();
+        // Batch bundle into groups. Each group depends on the previous group, but all elements inside the same group can be loaded independently
+        let mut bundle_groups: Vec<ExportBundleGroup> = Vec::new();
+        let mut current_bundle_group: Option<ExportBundleGroup> = None;
 
-            let to_bundle_entry_index = bundle_header.first_entry_index + i;
-            let to_bundle_entry = builder.zen_package.export_bundle_entries[to_bundle_entry_index as usize].clone();
+        // Collect individual bundle entries into groups
+        for i in 0..bundle_header.entry_count {
+            let bundle_entry_index = bundle_header.first_entry_index + i;
+            let bundle_entry = builder.zen_package.export_bundle_entries[bundle_entry_index as usize].clone();
 
-            let from_index = FPackageIndex::create_export(from_bundle_entry.local_export_index);
-            let from_command_type = from_bundle_entry.command_type;
+            // If this entry matches the command type of the previous group, append it to the previous group
+            // Note that we only batch Create commands together presently, because batching other commands together is potentially unsafe
+            if current_bundle_group.is_some() && current_bundle_group.as_ref().unwrap().command_type == bundle_entry.command_type && bundle_entry.command_type == EExportCommandType::Create {
+                current_bundle_group.as_mut().unwrap().export_indices.push(bundle_entry.local_export_index as usize);
+            } else {
+                // This is a bundle entry of the different type. Append the previous bundle group and make a new one for this entry
+                // Make sure that the previously bundle actually exists, it might not if this is the first entry
+                if current_bundle_group.is_some() {
+                    bundle_groups.push(current_bundle_group.unwrap());
+                }
+                // Create a new group from the current entry
+                let new_export_indices = vec![bundle_entry.local_export_index as usize];
+                current_bundle_group = Some(ExportBundleGroup { export_indices: new_export_indices, command_type: bundle_entry.command_type });
+            }
+        }
+        // Handle the last bundle group
+        if current_bundle_group.is_some() {
+            bundle_groups.push(current_bundle_group.unwrap());
+        }
 
-            let to_export_index = to_bundle_entry.local_export_index as usize;
-            let to_command_type = to_bundle_entry.command_type;
+        // Chain link adjacent groups together
+        for i in 1..bundle_groups.len() {
+            let from_bundle_group = bundle_groups[i - 1].clone();
+            let to_bundle_group = bundle_groups[i].clone();
 
-            add_export_dependency(from_index, to_export_index, from_command_type, to_command_type)?;
+            // Link each element of the "from" bundle group to each element of the "to" bundle group
+            for from_export_index in &from_bundle_group.export_indices {
+                for to_export_index in &to_bundle_group.export_indices {
+                    add_export_dependency(FPackageIndex::create_export(*from_export_index as u32), *to_export_index, from_bundle_group.command_type, to_bundle_group.command_type)?;
+                }
+            }
         }
     }
 
@@ -720,23 +827,20 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
     }
 
     // Process internal dependencies (export bundle to export bundle, e.g. export to export)
-    // We link first element of the "to" bundle to the last element of the "from" bundle
+    // We link first Serialize element of the "to" bundle to the last element of the "from" bundle
     for internal_arc in internal_dependency_arcs {
 
         let from_export_bundle = builder.zen_package.export_bundle_headers[internal_arc.from_export_bundle_index as usize].clone();
-        let to_export_bundle = builder.zen_package.export_bundle_headers[internal_arc.to_export_bundle_index as usize].clone();
-
         let from_export_bundle_last_element_index = from_export_bundle.first_entry_index + from_export_bundle.entry_count - 1;
         let from_export_bundle_last_element = builder.zen_package.export_bundle_entries[from_export_bundle_last_element_index as usize].clone();
-
-        let to_export_bundle_first_element_index = to_export_bundle.first_entry_index;
-        let to_export_bundle_first_element = builder.zen_package.export_bundle_entries[to_export_bundle_first_element_index as usize].clone();
 
         let from_export_index = FPackageIndex::create_export(from_export_bundle_last_element.local_export_index);
         let from_command_type = from_export_bundle_last_element.command_type;
 
-        let to_export_index = to_export_bundle_first_element.local_export_index as usize;
-        let to_command_type = to_export_bundle_first_element.command_type;
+        // Try to find the first Serialize element in the To bundle and not just the first element, since that works better for preventing circular dependencies
+        let to_export_bundle_entry = find_first_serialize_export_in_bundle(&builder.zen_package, internal_arc.to_export_bundle_index as usize);
+        let to_export_index = to_export_bundle_entry.local_export_index as usize;
+        let to_command_type = to_export_bundle_entry.command_type;
 
         add_export_dependency(from_export_index, to_export_index, from_command_type, to_command_type)?;
     }
@@ -746,12 +850,10 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
     let all_external_arcs: Vec<FExternalDependencyArc> = builder.zen_package.external_package_dependencies.iter().flat_map(|x| { x.external_dependency_arcs.clone() }).collect();
     for external_arc in all_external_arcs {
 
-        let to_export_bundle = builder.zen_package.export_bundle_headers[external_arc.to_export_bundle_index as usize].clone();
-        let to_export_bundle_first_element_index = to_export_bundle.first_entry_index;
-        let to_export_bundle_first_element = builder.zen_package.export_bundle_entries[to_export_bundle_first_element_index as usize].clone();
-
-        let to_export_index = to_export_bundle_first_element.local_export_index as usize;
-        let to_command_type = to_export_bundle_first_element.command_type;
+        // Try to find the first Serialize element in the To bundle and not just the first element, since that works better for preventing circular dependencies
+        let to_export_bundle_entry = find_first_serialize_export_in_bundle(&builder.zen_package, external_arc.to_export_bundle_index as usize);
+        let to_export_index = to_export_bundle_entry.local_export_index as usize;
+        let to_command_type = to_export_bundle_entry.command_type;
 
         let from_original_import_index = external_arc.from_import_index as usize;
         let from_command_type = external_arc.from_command_type;
@@ -769,6 +871,9 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
     // Note that this might result in resolution and loading of new packages, which is why this function can fail
     if builder.zen_package.container_header_version == EIoContainerHeaderVersion::Initial {
 
+        // Allow downgrading blueprint dependencies for all assets for now. If there are any issues spotted in runtime related to this, we could only limit this to BP assets and data tables
+        let allow_blueprint_downgrade = true;
+
         for external_package_dependency in &builder.zen_package.external_package_dependencies {
 
             let imported_package_id = external_package_dependency.from_package_id.clone();
@@ -778,51 +883,15 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
             for bundle_to_bundle_dependency_arc in &external_package_dependency.legacy_dependency_arcs {
 
                 let from_bundle_index = bundle_to_bundle_dependency_arc.from_export_bundle_index as usize;
-                let from_bundle_header = resolved_import_package.export_bundle_headers[from_bundle_index].clone();
+                let (from_import_index, from_command_type) = resolve_legacy_external_package_bundle_dependency(builder, resolved_import_package.as_ref(), from_bundle_index, allow_blueprint_downgrade)?;
 
-                // Resolve indices of all exports contained in the "from" export bundle
-                let mut all_potential_import_indices: Vec<(FPackageObjectIndex, EExportCommandType)> = Vec::new();
-                for i in 0..from_bundle_header.entry_count {
-                    let from_bundle_entry_index = (from_bundle_header.first_entry_index + i) as usize;
-                    let from_bundle_entry = resolved_import_package.export_bundle_entries[from_bundle_entry_index].clone();
+                // Resolve the local bundle to which this import points
+                // Try to find the first Serialize element in the To bundle and not just the first element, since that works better for preventing circular dependencies
+                let to_export_bundle_entry = find_first_serialize_export_in_bundle(&builder.zen_package, bundle_to_bundle_dependency_arc.to_export_bundle_index as usize);
+                let to_export_index = to_export_bundle_entry.local_export_index as usize;
+                let to_command_type = to_export_bundle_entry.command_type;
 
-                    let from_export_index = resolved_import_package.export_map[from_bundle_entry.local_export_index as usize].legacy_global_import_index();
-
-                    // Global import index can be null for non-public exports, so do not add them as potential imports
-                    if !from_export_index.is_null() {
-                        let from_command_type = from_bundle_entry.command_type;
-                        all_potential_import_indices.push((from_export_index, from_command_type));
-                    }
-                }
-                // Reverse the array, because we want to preferably find the dependency to the last export from this export bundle first
-                all_potential_import_indices.reverse();
-
-                // Resolve the dependency from the import map of this package
-                let from_index_and_command_type = all_potential_import_indices.iter().find_map(|(export_object_index, export_command_type)| {
-                    builder.zen_package.import_map.iter().position(|import_object_index| {
-                        !import_object_index.is_null() && import_object_index == export_object_index
-                    }).map(|local_import_index| {
-                        (FPackageIndex::create_import(local_import_index as u32), *export_command_type)
-                    })
-                });
-                let to_bundle_index = bundle_to_bundle_dependency_arc.to_export_bundle_index as usize;
-
-                // We should always have an import map entry for this dependency, since zen never strips any import map entries or introduces dependencies that did not exist in the original asset
-                if from_index_and_command_type.is_none() {
-                    bail!("Failed to resolve external dependency on the package {} export bundle {} from package {} export bundle {}", imported_package_id,
-                        from_bundle_index, builder.package_id, to_bundle_index);
-                }
-                // Resolve the export in this package that depends on the other export
-                let to_bundle_header = builder.zen_package.export_bundle_headers[to_bundle_index].clone();
-
-                let to_bundle_first_entry_index = to_bundle_header.first_entry_index as usize;
-                let to_bundle_first_entry = builder.zen_package.export_bundle_entries[to_bundle_first_entry_index].clone();
-
-                let to_export_index = to_bundle_first_entry.local_export_index as usize;
-                let to_command_type = to_bundle_first_entry.command_type;
-
-                let (from_package_index, from_command_type) = from_index_and_command_type.unwrap();
-                add_export_dependency(from_package_index, to_export_index, from_command_type, to_command_type)?;
+                add_export_dependency(from_import_index, to_export_index, from_command_type, to_command_type)?;
             }
         }
     }
@@ -906,7 +975,7 @@ fn resolve_prestream_package_imports(builder: &mut LegacyAssetBuilder) -> anyhow
         .map(|x| FPackageId::from_name(&x))
         .collect();
 
-    let prestream_package_ids: Vec<FPackageId> = builder.zen_package.imported_packages.iter()
+    let prestream_package_ids: Vec<FPackageId> = builder.zen_package.imported_packages.iter().cloned()
         .filter(|x| !all_imported_package_ids.contains(x))
         .collect();
 
@@ -923,8 +992,8 @@ fn resolve_prestream_package_imports(builder: &mut LegacyAssetBuilder) -> anyhow
 
         // Resolve the name of the package, put it into the name map and add an import
         let resolved_package_name = resolved_prestream_package?.package_name();
-        let class_package = builder.legacy_package.name_map.store(ResolvedZenImport::CORE_OBJECT_PACKAGE_NAME);
-        let class_name = builder.legacy_package.name_map.store(ResolvedZenImport::PRESTREAM_PACKAGE_CLASS_NAME);
+        let class_package = builder.legacy_package.name_map.store(CORE_OBJECT_PACKAGE_NAME);
+        let class_name = builder.legacy_package.name_map.store(PRESTREAM_PACKAGE_CLASS_NAME);
         let object_name = builder.legacy_package.name_map.store(&resolved_package_name);
 
         // Log that we have resolved the pre-stream request successfully

@@ -951,6 +951,70 @@ impl FLegacyPackageHeader {
     }
 }
 
+// Returns package name and package-relative path to the object
+pub(crate) fn get_package_object_full_name(package: &FLegacyPackageHeader, object_index: FPackageIndex, path_separator: char, lowercase_path: bool) -> (String, String) {
+
+    // From the outermost to the innermost, e.g. SubObject;Asset;PackageName
+    let mut package_object_outer_chain: Vec<FPackageIndex> = Vec::with_capacity(4);
+    let mut current_object_index = object_index;
+
+    // Walk the import chain to resolve this import
+    while !current_object_index.is_null() {
+        package_object_outer_chain.push(current_object_index);
+
+        if current_object_index.is_import() {
+            let current_import_index = current_object_index.to_import_index() as usize;
+            current_object_index = package.imports[current_import_index].outer_index;
+
+        } else if current_object_index.is_export() {
+            let current_export_index = current_object_index.to_export_index() as usize;
+            current_object_index = package.exports[current_export_index].outer_index;
+        }
+    }
+    // Reserve the outer chain now
+    package_object_outer_chain.reverse();
+
+    let mut package_name: String;
+    let mut start_object_index: usize;
+
+    if package_object_outer_chain[0].is_import() {
+        let package_import_index = package_object_outer_chain[0].to_import_index() as usize;
+
+        // If the innermost package index is an import, it's a package name. Otherwise, this package name is the package name
+        package_name = package.name_map.get(package.imports[package_import_index].object_name).to_string();
+        start_object_index = 1;
+
+    } else {
+        // This is an export, package name is this package name and we should start path building at index 0
+        package_name = package.summary.package_name.clone();
+        start_object_index = 0;
+    };
+
+    // Build full object name now. We append all elements and use / as a path separator
+    let mut full_object_name: String = package_name.clone();
+    for i in start_object_index..package_object_outer_chain.len() {
+
+        // Append object path separator
+        full_object_name.push(path_separator);
+
+        // Append the name of the object if it's an import
+        if package_object_outer_chain[i].is_import() {
+            let import_index = package_object_outer_chain[i].to_import_index() as usize;
+            full_object_name.push_str(&package.name_map.get(package.imports[import_index].object_name));
+
+            // Append the name of the object if it's an import
+        } else if package_object_outer_chain[i].is_export() {
+            let export_index = package_object_outer_chain[i].to_export_index() as usize;
+            full_object_name.push_str(&package.name_map.get(package.exports[export_index].object_name));
+        }
+    }
+    // Make sure the entire path is lowercase. This is a requirement for GetPublicExportHash
+    if lowercase_path {
+        full_object_name.make_ascii_lowercase();
+    }
+    (package_name, full_object_name)
+}
+
 #[derive(Default, Clone)]
 pub(crate) struct FSerializedAssetBundle {
     pub(crate) asset_file_buffer: Vec<u8>, // uasset
@@ -959,3 +1023,11 @@ pub(crate) struct FSerializedAssetBundle {
     pub(crate) optional_bulk_data_buffer: Option<Vec<u8>>, // .uptnl
     pub(crate) memory_mapped_bulk_data_buffer: Option<Vec<u8>>, // .m.ubulk
 }
+
+// Constants for use by asset conversion
+pub(crate) const CORE_OBJECT_PACKAGE_NAME: &str = "/Script/CoreUObject";
+pub(crate) const ENGINE_PACKAGE_NAME: &str = "/Script/Engine";
+pub(crate) const OBJECT_CLASS_NAME: &str = "Object";
+pub(crate) const CLASS_CLASS_NAME: &str = "Class";
+pub(crate) const PACKAGE_CLASS_NAME: &str = "Package";
+pub(crate) const PRESTREAM_PACKAGE_CLASS_NAME: &str = "PrestreamPackage";

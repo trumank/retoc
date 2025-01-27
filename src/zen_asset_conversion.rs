@@ -1,6 +1,6 @@
 use std::cmp::{max, Ordering};
 use crate::container_header::{EIoContainerHeaderVersion, StoreEntry};
-use crate::legacy_asset::{EPackageFlags, FLegacyPackageFileSummary, FLegacyPackageHeader, FSerializedAssetBundle};
+use crate::legacy_asset::{get_package_object_full_name, EPackageFlags, FLegacyPackageFileSummary, FLegacyPackageHeader, FSerializedAssetBundle};
 use crate::name_map::{EMappedNameType, FNameMap};
 use crate::script_objects::{FPackageImportReference, FPackageObjectIndex, FPackageObjectIndexType};
 use crate::version_heuristics::heuristic_zen_version_from_package_file_version;
@@ -124,65 +124,8 @@ fn resolve_zen_package_import(builder: &mut ZenPackageBuilder, package_id: FPack
 
 // Returns package name and package-relative export path. Package-relative export path is lowercased and is prefixed with /, and uses / as a separator
 fn resolve_legacy_package_object(package: &FLegacyPackageHeader, object_index: FPackageIndex) -> anyhow::Result<(String, String)> {
-
-    // From the outermost to the innermost, e.g. SubObject;Asset;PackageName
-    let mut package_object_outer_chain: Vec<FPackageIndex> = Vec::with_capacity(4);
-    let mut current_object_index = object_index;
-
-    // Walk the import chain to resolve this import
-    while !current_object_index.is_null() {
-        package_object_outer_chain.push(current_object_index);
-
-        if current_object_index.is_import() {
-            let current_import_index = current_object_index.to_import_index() as usize;
-            current_object_index = package.imports[current_import_index].outer_index;
-
-        } else if current_object_index.is_export() {
-            let current_export_index = current_object_index.to_export_index() as usize;
-            current_object_index = package.exports[current_export_index].outer_index;
-        }
-    }
-    // Reserve the outer chain now
-    package_object_outer_chain.reverse();
-
-    let mut package_name: String;
-    let mut start_object_index: usize;
-
-    if package_object_outer_chain[0].is_import() {
-        let package_import_index = package_object_outer_chain[0].to_import_index() as usize;
-
-        // If the innermost package index is an import, it's a package name. Otherwise, this package name is the package name
-        package_name = package.name_map.get(package.imports[package_import_index].object_name).to_string();
-        start_object_index = 1;
-
-    } else {
-         // This is an export, package name is this package name and we should start path building at index 0
-        package_name = package.summary.package_name.clone();
-        start_object_index = 0;
-    };
-
-    // Build full object name now. We append all elements and use / as a path separator
-    let mut full_object_name: String = package_name.clone();
-    for i in start_object_index..package_object_outer_chain.len() {
-
-        // Append object path separator
-        full_object_name.push('/');
-
-        // Append the name of the object if it's an import
-        if package_object_outer_chain[i].is_import() {
-            let import_index = package_object_outer_chain[i].to_import_index() as usize;
-            full_object_name.push_str(&package.name_map.get(package.imports[import_index].object_name));
-
-            // Append the name of the object if it's an import
-        } else if package_object_outer_chain[i].is_export() {
-            let export_index = package_object_outer_chain[i].to_export_index() as usize;
-            full_object_name.push_str(&package.name_map.get(package.exports[export_index].object_name));
-        }
-    }
-    // Make sure the entire path is lowercase. This is a requirement for GetPublicExportHash
-    full_object_name.make_ascii_lowercase();
-
-    Ok((package_name, full_object_name))
+    // Zen uses / as path separator, and always lowercases the package relative object path
+    Ok(get_package_object_full_name(package, object_index, '/', true))
 }
 
 fn convert_legacy_import_to_object_index(builder: &mut ZenPackageBuilder, import_index: usize) -> anyhow::Result<FPackageObjectIndex> {
