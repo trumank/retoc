@@ -782,7 +782,7 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
 
         to_export_bundle_entries.iter()
             .find(|x| x.command_type == EExportCommandType::Serialize)
-            .and(to_export_bundle_entries.first()).unwrap().clone()
+            .or(to_export_bundle_entries.first()).unwrap().clone()
     }
 
     // Process intra-export bundle dependencies. The sequence in which elements are laid out in the export bundle determines their dependencies relative to each other
