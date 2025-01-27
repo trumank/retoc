@@ -91,6 +91,10 @@ pub(crate) fn read_name_batch_parts(names_buffer: &[u8]) -> Result<Vec<String>> 
     while s.position() < names_buffer.len() as u64 {
         let l = i16::from_be_bytes(s.de()?);
         let l = if l < 0 { i16::MIN - l } else { l };
+        if l < 0 && s.position() & 1 != 0 {
+            // UTF16 strings aligned to 2 bytes so read one byte to reach alignment
+            s.de::<u8>()?;
+        }
         names.push(read_string(l as i32, &mut s)?);
     }
     Ok(names)
