@@ -855,12 +855,7 @@ fn action_extract_legacy_shaders(
 
         let shader_asset_info_path = get_shader_asset_info_filename_from_library_filename(path)?;
         let (shader_library_buffer, shader_asset_info_buffer) =
-            rebuild_shader_library_from_io_store(
-                chunk_info.container(),
-                chunk_info.id(),
-                log,
-                compress_shaders,
-            )?;
+            rebuild_shader_library_from_io_store(iostore, chunk_info.id(), log, compress_shaders)?;
         file_writer.write_file(path.to_string(), false, shader_library_buffer)?;
         file_writer.write_file(
             shader_asset_info_path,
