@@ -254,8 +254,7 @@ fn action_manifest(args: ActionManifest, config: Arc<Config>) -> Result<()> {
             let chunk_id =
                 FIoChunkId::from_package_id(package_info.id(), 0, EIoChunkType::ExportBundleData)
                     .with_version(toc_version);
-            let package_path = package_info
-                .container()
+            let package_path = iostore
                 .chunk_path(chunk_id)
                 .with_context(|| format!("{:?} has no path name entry", package_info.id()))?;
             let data = package_info.container().read(chunk_id)?;
@@ -756,15 +755,12 @@ fn action_extract_legacy_assets(
     for package_info in iostore.packages() {
         let chunk_id =
             FIoChunkId::from_package_id(package_info.id(), 0, EIoChunkType::ExportBundleData);
-        let package_path = package_info
-            .container()
-            .chunk_path(chunk_id)
-            .with_context(|| {
-                format!(
-                    "{:?} has no path name entry. Cannot extract",
-                    package_info.id()
-                )
-            })?;
+        let package_path = iostore.chunk_path(chunk_id).with_context(|| {
+            format!(
+                "{:?} has no path name entry. Cannot extract",
+                package_info.id()
+            )
+        })?;
 
         if let Some(filter) = &args.filter {
             if !package_path.contains(filter) {
