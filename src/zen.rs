@@ -365,11 +365,15 @@ impl Writeable for FExportMapEntry {
 }
 
 impl FExportMapEntry {
-    // Returns true if this is a public export. This is only valid for new (UE5.0+) zen packages
-    pub(crate) fn is_public_export(&self) -> bool { self.public_export_hash != 0 }
     // Reinterprets public export hash as global import index. Only valid for legacy zen packages before UE5.0
     pub(crate) fn legacy_global_import_index(&self) -> FPackageObjectIndex {
         FPackageObjectIndex::create_from_raw(self.public_export_hash)
+    }
+    // Returns true if this is a public export
+    pub(crate) fn is_public_export(&self) -> bool {
+        // Even if this is a new style export, the risk of collision here is so low that we can check both the new style hash and the old style global import index
+        // FPackageObjectIndex::create_null() returns u64 that has all bits set, and the chances of the export hash having ALL of its bits set are the same as the chances of it having none of its bits set(e.g. being 0)
+        self.public_export_hash != 0 && self.legacy_global_import_index() != FPackageObjectIndex::create_null()
     }
 }
 
@@ -708,6 +712,16 @@ pub(crate) struct FZenPackageHeader {
 impl FZenPackageHeader {
     pub(crate) fn package_name(&self) -> String {
         self.name_map.get(self.summary.name).to_string()
+    }
+    // Returns source package name for this package if it is present, or it's normal package name otherwise
+    pub(crate) fn source_package_name(&self) -> String {
+        if self.container_header_version == EIoContainerHeaderVersion::Initial {
+            let source_package_name = self.name_map.get(self.summary.source_name).to_string();
+            if source_package_name != "None" {
+                return source_package_name;
+            }
+        }
+        self.package_name()
     }
 
     // Retrieves the package name from the package. Does the bare minimum of package reading to get the name out
@@ -1099,10 +1113,13 @@ impl FZenPackageHeader {
                 }
             } else {
                 // Serialize old style package references
-                let referenced_package_count: i32 = self.external_package_dependencies.len() as i32;
+                let non_empty_dependencies: Vec<&ExternalPackageDependency> = self.external_package_dependencies.iter()
+                    .filter(|x| !x.legacy_dependency_arcs.is_empty())
+                    .collect();
+                let referenced_package_count: i32 = non_empty_dependencies.len() as i32;
                 s.ser(&referenced_package_count)?;
                 
-                for package_dependency in &self.external_package_dependencies {
+                for package_dependency in non_empty_dependencies {
                     s.ser(&package_dependency.from_package_id)?;
                     s.ser(&package_dependency.legacy_dependency_arcs)?;
                 }

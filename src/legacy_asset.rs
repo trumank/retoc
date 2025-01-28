@@ -986,6 +986,7 @@ pub(crate) fn get_package_object_full_name(package: &FLegacyPackageHeader, objec
 
     } else {
         // This is an export, package name is this package name and we should start path building at index 0
+        // TODO @Nick: This results in the wrong name for localized packages. Export full names resolved from them must use source package name (non-culture-specific one), and not the actual name of this package
         package_name = package.summary.package_name.clone();
         start_object_index = 0;
     };

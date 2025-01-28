@@ -275,7 +275,7 @@ fn resolve_package_import_internal_new(package_cache: &FZenPackageContext, packa
     }
 
     // Resolve the export that we are interested in. Note that the package passed to the resolve_package_export_internal must be the imported package, not this package
-    let imported_export = resolved_import_package.export_map.iter().find(|x| { x.public_export_hash != 0 && x.public_export_hash == public_export_hash })
+    let imported_export = resolved_import_package.export_map.iter().find(|x| { x.is_public_export() && x.public_export_hash == public_export_hash })
         .ok_or_else(|| { anyhow!("Failed to resolve public export with hash {} on package {} (imported by {})",  public_export_hash, resolved_import_package.package_name(), package_header.package_name()) })?;
 
     resolve_package_export_internal(package_cache, resolved_import_package.as_ref(), imported_export)
@@ -333,7 +333,7 @@ fn resolve_builder_package_as_import(package_header: &FZenPackageHeader) -> anyh
     Ok(ResolvedZenImport{
         class_package: CORE_OBJECT_PACKAGE_NAME.to_string(),
         class_name: PACKAGE_CLASS_NAME.to_string(),
-        object_name: package_header.package_name(),
+        object_name: package_header.source_package_name(),
         outer: None,
     })
 }
@@ -578,7 +578,7 @@ fn build_export_map(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
         // This is false for all objects in the engine presently, but we can infer if it should be true: If export is not marked as RF_Public still has an export hash, generate_public_hash must be true
         // Note that this property did not exist before UE5.0, so it is always false on earlier versions
         let generate_public_hash = builder.zen_package.container_header_version >= EIoContainerHeaderVersion::LocalizedPackages &&
-            (object_flags & (EObjectFlags::Public as u32)) != 0 && zen_export.public_export_hash != 0;
+            (object_flags & (EObjectFlags::Public as u32)) == 0 && zen_export.is_public_export();
 
         // There is no real way to safely infer these from the zen package. They are only used in the editor for loading assets of undefined types to try and salvage as much data out of them as possible when using versioned serialization
         // Providing incorrect values here will crash the editor in such a case because of the serial size mismatch. However, we can make an assumption that the entire export is only script properties, and nothing else
@@ -1037,7 +1037,7 @@ fn resolve_prestream_package_imports(builder: &mut LegacyAssetBuilder) -> anyhow
         }
 
         // Resolve the name of the package, put it into the name map and add an import
-        let resolved_package_name = resolved_prestream_package.unwrap().package_name();
+        let resolved_package_name = resolved_prestream_package.unwrap().source_package_name();
         let class_package = builder.legacy_package.name_map.store(CORE_OBJECT_PACKAGE_NAME);
         let class_name = builder.legacy_package.name_map.store(PRESTREAM_PACKAGE_CLASS_NAME);
         let object_name = builder.legacy_package.name_map.store(&resolved_package_name);

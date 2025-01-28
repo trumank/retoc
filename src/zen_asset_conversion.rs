@@ -28,6 +28,7 @@ struct ZenPackageBuilder {
     zen_package: FZenPackageHeader,
     container_header_version: EIoContainerHeaderVersion,
     package_import_lookup: HashMap<FPackageId, u32>,
+    import_to_package_id_lookup: HashMap<FPackageObjectIndex, FPackageId>,
     export_hash_lookup: HashMap<u64, u32>,
 }
 
@@ -39,6 +40,7 @@ fn create_asset_builder(package: FLegacyPackageHeader, container_header_version:
         zen_package: FZenPackageHeader{container_header_version, ..FZenPackageHeader::default()},
         container_header_version,
         package_import_lookup: HashMap::new(),
+        import_to_package_id_lookup: HashMap::new(),
         export_hash_lookup: HashMap::new(),
     }
 }
@@ -81,6 +83,12 @@ fn setup_zen_package_summary(builder: &mut ZenPackageBuilder) -> anyhow::Result<
     builder.zen_package.summary.name = builder.zen_package.name_map.store(&builder.legacy_package.summary.package_name);
     // Copy size of the cooked header from the legacy package
     builder.zen_package.summary.cooked_header_size = builder.legacy_package.summary.total_header_size as u32;
+
+    // Setup source package name for the UE4 zen packages
+    if builder.container_header_version == EIoContainerHeaderVersion::Initial {
+        // TODO @Nick: Determine if the package is a localized package here and handle it correctly
+        builder.zen_package.summary.source_name = builder.zen_package.name_map.store("None");
+    }
 
     // Copy bulk resources from the legacy package without modifications
     builder.zen_package.bulk_data = builder.legacy_package.data_resources.iter().map(|x| {
@@ -144,14 +152,33 @@ fn convert_legacy_import_to_object_index(builder: &mut ZenPackageBuilder, import
     if is_package_import {
         return Ok(FPackageObjectIndex::create_null());
     }
-
-    // This is a normal import of the export of another package otherwise. Create FPackageId from package ID and public export hash from package relative path
     let package_id = FPackageId::from_name(&package_name);
-    let public_export_hash = get_public_export_hash(&full_import_name[package_name.len() + 1..]);
 
-    // Resolve import reference now, and convert it to object index
-    let import_reference = resolve_zen_package_import(builder, package_id, &package_name, public_export_hash);
-    Ok(FPackageObjectIndex::create_package_import(import_reference))
+    // New style imports with export hashes and package IDs
+    let result_package_import = if builder.container_header_version > EIoContainerHeaderVersion::Initial {
+        // This is a normal import of the export of another package otherwise. Create FPackageId from package ID and public export hash from package relative path
+        let public_export_hash = get_public_export_hash(&full_import_name[package_name.len() + 1..]);
+
+        // Resolve import reference now, and convert it to object index
+        let import_reference = resolve_zen_package_import(builder, package_id, &package_name, public_export_hash);
+        FPackageObjectIndex::create_package_import(import_reference)
+    } else {
+        // Old style (UE4.27) imports with full name of the export just converted into FPackageObjectIndex
+        let global_import_index = FPackageObjectIndex::create_legacy_package_import_from_path(&full_import_name);
+        
+        // Note that we still have to track this package ID in our imported packages, even if we are not indexing into it
+        if !builder.package_import_lookup.contains_key(&package_id) {
+            
+            let package_import_index = builder.zen_package.imported_packages.len() as u32;
+            builder.zen_package.imported_packages.push(package_id.clone());
+            builder.package_import_lookup.insert(package_id.clone(), package_import_index);
+        }
+        global_import_index
+    };
+    
+    // Map the resulting import to the original package ID it came from. This is necessary to resolve legacy UE4 imports into package ID
+    builder.import_to_package_id_lookup.insert(result_package_import.clone(), package_id.clone());
+    Ok(result_package_import)
 }
 
 fn build_zen_import_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
@@ -198,7 +225,13 @@ fn build_zen_export_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
         let should_have_public_export_hash = (object_export.object_flags & EObjectFlags::Public as u32) != 0 || object_export.generate_public_hash;
         let public_export_hash: u64 = if should_have_public_export_hash {
             let (export_package_name, full_export_name) = resolve_legacy_package_object(&builder.legacy_package, FPackageIndex::create_export(export_index as u32))?;
-            get_public_export_hash(&full_export_name[export_package_name.len() + 1..])
+            
+            // Use global import index converted to the raw representation for legacy packages, and get_public_export_hash otherwise
+            if builder.container_header_version > EIoContainerHeaderVersion::Initial {
+                get_public_export_hash(&full_export_name[export_package_name.len() + 1..])
+            } else {
+                FPackageObjectIndex::create_legacy_package_import_from_path(&full_export_name).raw_index()
+            }
         } else { 0 };
 
         let filter_flags: EExportFilterFlags = if object_export.is_not_for_server {
@@ -277,7 +310,7 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
         }
 
         // Export bundles end at a public export with an export hash. So if this is a public export, close the current bundle
-        let is_public_export = builder.zen_package.export_map[export_index].public_export_hash != 0;
+        let is_public_export = builder.zen_package.export_map[export_index].is_public_export();
         if is_public_export {
             current_export_bundle_header_index = -1;
         }
@@ -286,6 +319,7 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
     // Used to avoid adding duplicate dependencies between export bundles and other export bundles/imports
     let mut internal_dependency_arcs: HashSet<FInternalDependencyArc> = HashSet::new();
     let mut external_dependency_arcs: HashSet<FExternalDependencyArc> = HashSet::new();
+    let mut legacy_dependency_arcs: HashSet<(FPackageId, FInternalDependencyArc)> = HashSet::new();
 
     // Function to create export dependency arcs to the export's export bundle from another export's export bundle, or from an entry in the import map
     let mut create_dependency_arc_from_node = |to_export_bundle_index: i32, dependency_node: &ZenDependencyGraphNode, mut_builder: &mut ZenPackageBuilder| {
@@ -302,6 +336,8 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
                 if !internal_dependency_arcs.contains(&internal_dependency_arc) {
 
                     internal_dependency_arcs.insert(internal_dependency_arc.clone());
+                    // Note that internal dependency arcs are discarded in UE4.27, and export bundle N always has an implicit internal dependency arc to bundle N-1
+                    // Since we create bundles in the export load order, such an implicit ordering works well and does not need to be represented by the internal dependency arc
                     mut_builder.zen_package.internal_dependency_arcs.push(internal_dependency_arc);
                 }
             }
@@ -316,15 +352,32 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
             // Do not add external arcs for script imports and removed package imports (represented as Null in the zen import map)
             if package_object_import.kind() == FPackageObjectIndexType::PackageImport {
 
-                let imported_package_index = package_object_import.package_import().unwrap().imported_package_index as usize;
-                let external_dependency_arc = FExternalDependencyArc{from_import_index, from_command_type, to_export_bundle_index};
+                // New graph data will map a specific import to the specific export bundle for UE5.0+ zen assets
+                if mut_builder.container_header_version > EIoContainerHeaderVersion::Initial {
+                    let imported_package_index = package_object_import.package_import().unwrap().imported_package_index as usize;
+                    let external_dependency_arc = FExternalDependencyArc{from_import_index, from_command_type, to_export_bundle_index};
 
-                // Only add the dependency arc if we have not previously created in
-                if !external_dependency_arcs.contains(&external_dependency_arc) {
+                    // Only add the dependency arc if we have not previously created in
+                    if !external_dependency_arcs.contains(&external_dependency_arc) {
 
-                    external_dependency_arcs.insert(external_dependency_arc.clone());
-                    // We layout external package dependencies to match imported package indices, so this is always safe
-                    mut_builder.zen_package.external_package_dependencies[imported_package_index].external_dependency_arcs.push(external_dependency_arc);
+                        external_dependency_arcs.insert(external_dependency_arc.clone());
+                        // We lay out external package dependencies to match imported package indices, so this is always safe
+                        mut_builder.zen_package.external_package_dependencies[imported_package_index].external_dependency_arcs.push(external_dependency_arc);
+                    }
+                } else {
+                    // Legacy UE4 graph data will only map the export bundle index in this package to export bundle index in the imported package
+                    // This requires knowledge of the export bundle layout of another package, which we do not have. So just use -1 as a placeholder
+                    // TODO: This will absolutely cause circular dependencies, but we do not have enough context to know the bundle layout of the imported package here
+                    let imported_package_id = mut_builder.import_to_package_id_lookup.get(&package_object_import).unwrap().clone();
+                    let imported_package_index = mut_builder.package_import_lookup.get(&imported_package_id).unwrap().clone() as usize;
+                    let legacy_dependency_arc = FInternalDependencyArc{from_export_bundle_index: -1, to_export_bundle_index};
+                    
+                    // Prevent adding duplicate dependencies on the packages
+                    if !legacy_dependency_arcs.contains(&(imported_package_id, legacy_dependency_arc)) {
+                        
+                        legacy_dependency_arcs.insert((imported_package_id.clone(), legacy_dependency_arc.clone()));
+                        mut_builder.zen_package.external_package_dependencies[imported_package_index].legacy_dependency_arcs.push(legacy_dependency_arc);
+                    }
                 }
             }
         }

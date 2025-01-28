@@ -119,6 +119,11 @@ impl FPackageObjectIndex {
             | ((import_ref.imported_package_index as u64) << 32);
         Self::create(FPackageObjectIndexType::PackageImport, import_value)
     }
+    // Function to create a legacy UE4 zen package import from the full, lower-case name of the imported/exported object using / as a separator
+    pub(crate) fn create_legacy_package_import_from_path(object_path: &str) -> Self {
+        let import_hash = Self::generate_import_hash_from_object_path(object_path);
+        Self::create(FPackageObjectIndexType::PackageImport, import_hash)
+    }
     pub(crate) fn raw_index(self) -> u64 {
         self.type_and_id & Self::INDEX_MASK
     }
@@ -141,6 +146,7 @@ impl FPackageObjectIndex {
     pub(crate) fn is_null(self) -> bool {
         self.kind() == FPackageObjectIndexType::Null
     }
+    pub(crate) fn to_raw(self) -> u64 { self.type_and_id } 
 
     fn generate_import_hash_from_object_path(object_path: &str) -> u64 {
         let lower_slash_path = object_path
