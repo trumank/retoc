@@ -785,6 +785,7 @@ dependencies = [
  "indexmap 2.7.0",
  "indicatif",
  "key-mutex",
+ "lz4_flex",
  "oodle_loader",
  "pariter",
  "pretty_assertions",
