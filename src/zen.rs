@@ -16,52 +16,6 @@ pub(crate) fn get_package_name(data: &[u8], container_header_version: EIoContain
     FZenPackageHeader::get_package_name(&mut Cursor::new(data), container_header_version)
 }
 
-// just enough to get PackageName
-pub(crate) struct FPackageFileSummary {
-    pub(crate) tag: u32,
-    pub(crate) file_version_ue4: u32,
-    pub(crate) file_version_ue5: Option<u32>,
-    pub(crate) total_header_size: u32,
-    pub(crate) package_name: String,
-}
-impl Readable for FPackageFileSummary {
-    #[instrument(skip_all, name = "FPackageFileSummary")]
-    fn de<S: Read>(s: &mut S) -> Result<Self> {
-        let tag = s.de()?;
-        assert_eq!(tag, 0x9e2a83c1);
-
-        let legacy_file_version: i32 = s.de()?;
-
-        if legacy_file_version != -4 {
-            let _legacy_ue3_version: i32 = s.de()?;
-        }
-        let file_version_ue4 = s.de()?;
-        assert_eq!(file_version_ue4, 0);
-        let file_version_ue5 = if legacy_file_version <= -8 {
-            Some(s.de()?)
-        } else {
-            None
-        };
-        assert_eq!(file_version_ue5, Some(0));
-        let _file_version_licensee_ue: u32 = s.de()?;
-        if legacy_file_version <= -2 {
-            let custom_versions: u32 = s.de()?; // empty (unversioned)
-            assert_eq!(custom_versions, 0);
-        }
-
-        let total_header_size = s.de()?;
-        let package_name = s.de()?;
-
-        Ok(Self {
-            tag,
-            file_version_ue4,
-            file_version_ue5,
-            total_header_size,
-            package_name,
-        })
-    }
-}
-
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub(crate) struct FZenPackageSummary {
     pub(crate) has_versioning_info: u32,
