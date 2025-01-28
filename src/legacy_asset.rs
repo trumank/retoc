@@ -952,7 +952,7 @@ impl FLegacyPackageHeader {
 }
 
 // Returns package name and package-relative path to the object
-pub(crate) fn get_package_object_full_name(package: &FLegacyPackageHeader, object_index: FPackageIndex, path_separator: char, lowercase_path: bool) -> (String, String) {
+pub(crate) fn get_package_object_full_name(package: &FLegacyPackageHeader, object_index: FPackageIndex, path_separator: char, lowercase_path: bool, package_name_override: Option<&str>) -> (String, String) {
 
     // From the outermost to the innermost, e.g. SubObject;Asset;PackageName
     let mut package_object_outer_chain: Vec<FPackageIndex> = Vec::with_capacity(4);
@@ -985,9 +985,9 @@ pub(crate) fn get_package_object_full_name(package: &FLegacyPackageHeader, objec
         start_object_index = 1;
 
     } else {
-        // This is an export, package name is this package name and we should start path building at index 0
-        // TODO @Nick: This results in the wrong name for localized packages. Export full names resolved from them must use source package name (non-culture-specific one), and not the actual name of this package
-        package_name = package.summary.package_name.clone();
+        // This is an export, package name is this package name, and we should start path building at index 0
+        // Use the provided package name override if it is available instead of the actual package name. This is necessary to produce correct global import index for exports on legacy UE4 zen assets
+        package_name = package_name_override.unwrap_or(&package.summary.package_name).to_string();
         start_object_index = 0;
     };
 
@@ -1014,6 +1014,28 @@ pub(crate) fn get_package_object_full_name(package: &FLegacyPackageHeader, objec
         full_object_name.make_ascii_lowercase();
     }
     (package_name, full_object_name)
+}
+
+// Attempts to resolve an original package name from a localized package name. Returns None if the provided package name is not a localized package name. Returns source package name and culture name otherwise
+pub(crate) fn convert_localized_package_name_to_source(package_name: &str) -> Option<(String, String)> {
+    // If the first character is not a /, this is not a localized package (or a valid package name, for that matter)
+    if package_name.chars().nth(0) != Some('/') {
+        return None;
+    }
+    // Split package name into Mount Point, L10N and the actual package name. We skip the first slash to keep the logic simpler and append it later
+    let package_name_splits: Vec<&str> = package_name[1..].splitn(4, '/').collect();
+    
+    // If we have less than 3 parts, or the second part is not localization sub-folder, this package is not a localized package
+    if package_name_splits.len() != 4 || package_name_splits[1] != "L10N" {
+        return None
+    }
+    // This is a localized package otherwise. Full path to it is part1 + part3
+    let mount_point = package_name_splits[0];
+    let culture_name = package_name_splits[2].to_string();
+    let package_path = package_name_splits[3];
+    let source_package_name = format!("/{mount_point}/{package_path}");
+    
+    Some((source_package_name, culture_name))
 }
 
 #[derive(Default, Clone)]

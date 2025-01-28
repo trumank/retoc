@@ -1151,6 +1151,7 @@ mod test {
     use anyhow::Context as _;
     use fs_err as fs;
     use std::{io::BufReader, path::Path};
+    use crate::legacy_asset::convert_localized_package_name_to_source;
 
     #[test]
     fn test_zen_asset_parsing() -> Result<()> {
@@ -1179,7 +1180,9 @@ mod test {
         //assert_eq!(package_name, "/Game/Billiards/Blueprints/BP_Russian_pool_table");
         //assert_eq!(header.name_map.get(header.export_map[5].object_name), "SCS_Node_10");
 
-        dbg!(package_name);
+        dbg!(package_name.clone());
+        dbg!(convert_localized_package_name_to_source(&package_name));
+        dbg!(header.source_package_name());
         //dbg!(header);
         Ok(())
     }

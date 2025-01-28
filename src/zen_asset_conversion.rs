@@ -1,6 +1,6 @@
 use std::cmp::{max, Ordering};
 use crate::container_header::{EIoContainerHeaderVersion, StoreEntry};
-use crate::legacy_asset::{get_package_object_full_name, EPackageFlags, FLegacyPackageFileSummary, FLegacyPackageHeader, FSerializedAssetBundle};
+use crate::legacy_asset::{convert_localized_package_name_to_source, get_package_object_full_name, EPackageFlags, FLegacyPackageFileSummary, FLegacyPackageHeader, FSerializedAssetBundle};
 use crate::name_map::{EMappedNameType, FNameMap};
 use crate::script_objects::{FPackageImportReference, FPackageObjectIndex, FPackageObjectIndexType};
 use crate::version_heuristics::heuristic_zen_version_from_package_file_version;
@@ -30,6 +30,10 @@ struct ZenPackageBuilder {
     package_import_lookup: HashMap<FPackageId, u32>,
     import_to_package_id_lookup: HashMap<FPackageObjectIndex, FPackageId>,
     export_hash_lookup: HashMap<u64, u32>,
+    // If this is a localized package, name of the culture for which this package is localized
+    localized_package_culture: Option<String>,
+    // If this package is a redirect target from another package (including by localization), this is the name of the original package that should get redirected to this package
+    source_package_name: Option<String>,
 }
 
 // Flow is create_asset_builder -> setup_zen_package_summary -> build_zen_import_map -> build_zen_export_map -> build_zen_preload_dependencies -> serialize_zen_asset
@@ -42,6 +46,8 @@ fn create_asset_builder(package: FLegacyPackageHeader, container_header_version:
         package_import_lookup: HashMap::new(),
         import_to_package_id_lookup: HashMap::new(),
         export_hash_lookup: HashMap::new(),
+        localized_package_culture: None,
+        source_package_name: None,
     }
 }
 
@@ -84,10 +90,20 @@ fn setup_zen_package_summary(builder: &mut ZenPackageBuilder) -> anyhow::Result<
     // Copy size of the cooked header from the legacy package
     builder.zen_package.summary.cooked_header_size = builder.legacy_package.summary.total_header_size as u32;
 
-    // Setup source package name for the UE4 zen packages
+    // Check if this is a localized package, and track the culture and source package name if it is
+    if let Some((source_package_name, culture_name)) = convert_localized_package_name_to_source(&builder.legacy_package.summary.package_name) {
+
+        // Store source package name and the culture name for which this package is localized
+        builder.source_package_name = Some(source_package_name);
+        builder.localized_package_culture = Some(culture_name);
+    }
+
+    // Setup source package name for the UE4 zen packages. UE5.0+ zen packages do not internally track source package name, it is a part of the container header only
     if builder.container_header_version == EIoContainerHeaderVersion::Initial {
-        // TODO @Nick: Determine if the package is a localized package here and handle it correctly
-        builder.zen_package.summary.source_name = builder.zen_package.name_map.store("None");
+        
+        // If this package is not a localized package, write None as the source package name. It has to always point to a valid name in the name map
+        let source_package_name = builder.source_package_name.as_ref().map(|x| x.as_str()).unwrap_or("None");
+        builder.zen_package.summary.source_name = builder.zen_package.name_map.store(source_package_name);
     }
 
     // Copy bulk resources from the legacy package without modifications
@@ -131,14 +147,18 @@ fn resolve_zen_package_import(builder: &mut ZenPackageBuilder, package_id: FPack
 }
 
 // Returns package name and package-relative export path. Package-relative export path is lowercased and is prefixed with /, and uses / as a separator
-fn resolve_legacy_package_object(package: &FLegacyPackageHeader, object_index: FPackageIndex) -> anyhow::Result<(String, String)> {
+fn resolve_legacy_package_object(package: &ZenPackageBuilder, object_index: FPackageIndex) -> anyhow::Result<(String, String)> {
+    // If this package is a redirect or a localized package, we want to use the name of the source package when resolving exports from it, not it's original name
+    // This does not actually matter for UE5.0+ packages because their export hashes are package relative, but for UE4 this is important for being able to resolve references to localized package exports
+    let package_name_override = package.source_package_name.as_ref().map(|x| x.as_str());
+
     // Zen uses / as path separator, and always lowercases the package relative object path
-    Ok(get_package_object_full_name(package, object_index, '/', true))
+    Ok(get_package_object_full_name(&package.legacy_package, object_index, '/', true, package_name_override))
 }
 
 fn convert_legacy_import_to_object_index(builder: &mut ZenPackageBuilder, import_index: usize) -> anyhow::Result<FPackageObjectIndex> {
 
-    let (package_name, full_import_name) = resolve_legacy_package_object(&builder.legacy_package, FPackageIndex::create_import(import_index as u32))?;
+    let (package_name, full_import_name) = resolve_legacy_package_object(builder, FPackageIndex::create_import(import_index as u32))?;
 
     // If this is a script import, just resolve it directly using the full import name as an index into script objects
     let is_script_import = package_name.starts_with("/Script/");
@@ -224,7 +244,7 @@ fn build_zen_export_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
 
         let should_have_public_export_hash = (object_export.object_flags & EObjectFlags::Public as u32) != 0 || object_export.generate_public_hash;
         let public_export_hash: u64 = if should_have_public_export_hash {
-            let (export_package_name, full_export_name) = resolve_legacy_package_object(&builder.legacy_package, FPackageIndex::create_export(export_index as u32))?;
+            let (export_package_name, full_export_name) = resolve_legacy_package_object(builder, FPackageIndex::create_export(export_index as u32))?;
             
             // Use global import index converted to the raw representation for legacy packages, and get_public_export_hash otherwise
             if builder.container_header_version > EIoContainerHeaderVersion::Initial {
@@ -758,6 +778,8 @@ fn build_converted_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: F
         bulk_data_buffer: legacy_asset_bundle.bulk_data_buffer,
         optional_bulk_data_buffer: legacy_asset_bundle.optional_bulk_data_buffer,
         memory_mapped_bulk_data_buffer: legacy_asset_bundle.memory_mapped_bulk_data_buffer,
+        source_package_name: builder.source_package_name.clone(),
+        localized_package_culture_name: builder.localized_package_culture.clone(),
     })
 }
 
@@ -769,11 +791,22 @@ pub(crate) struct ConvertedZenAssetBundle {
     bulk_data_buffer: Option<Vec<u8>>,
     optional_bulk_data_buffer: Option<Vec<u8>>,
     memory_mapped_bulk_data_buffer: Option<Vec<u8>>,
+    source_package_name: Option<String>,
+    localized_package_culture_name: Option<String>,
 }
 impl ConvertedZenAssetBundle {
     pub(crate) fn write(&self, writer: &mut IoStoreWriter) -> anyhow::Result<()> {
         let package_chunk_id = FIoChunkId::from_package_id(self.package_id, 0, EIoChunkType::ExportBundleData);
         writer.write_package_chunk(package_chunk_id, Some(&self.path), &self.package_buffer, &self.store_entry)?;
+        
+        // Add the localized package entry if this is a localized package
+        if let Some(package_culture_name) = &self.localized_package_culture_name {
+            writer.add_localized_package(package_culture_name, self.source_package_name.as_ref().unwrap(), self.package_id)?;
+        }
+        // If this is a redirected package, add the redirect to the redirect map
+        else if let Some(source_package_name) = &self.source_package_name {
+            writer.add_package_redirect(source_package_name, self.package_id)?;
+        }
 
         // Write bulk data chunk if it is present
         if let Some(bulk_data_buffer) = &self.bulk_data_buffer {

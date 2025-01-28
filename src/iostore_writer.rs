@@ -13,7 +13,7 @@ use crate::{
     ser::*, EIoStoreTocVersion, FIoChunkHash, FIoChunkId, FIoContainerId, FIoOffsetAndLength,
     FIoStoreTocCompressedBlockEntry, FIoStoreTocEntryMeta, FIoStoreTocEntryMetaFlags, Toc,
 };
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use fs_err as fs;
 
 pub(crate) struct IoStoreWriter {
@@ -137,6 +137,20 @@ impl IoStoreWriter {
             .expect("FIoContainerHeader is required to write package chunks");
         container_header.add_package(FPackageId(chunk_id.get_chunk_id()), store_entry.clone());
         self.write_chunk(chunk_id, path, data)
+    }
+    pub(crate) fn add_localized_package(&mut self, package_culture: &str, source_package_name: &str, localized_package_id: FPackageId) -> Result<()> {
+        let container_header = self
+            .container_header
+            .as_mut()
+            .expect("FIoContainerHeader is required to add localized packages");
+        container_header.add_localized_package(package_culture, source_package_name, localized_package_id)
+    }
+    pub(crate) fn add_package_redirect(&mut self, source_package_name: &str, redirect_package_id: FPackageId) -> Result<()> {
+        let container_header = self
+            .container_header
+            .as_mut()
+            .expect("FIoContainerHeader is required to add package redirects");
+        container_header.add_package_redirect(source_package_name, redirect_package_id)
     }
     pub(crate) fn container_version(&self) -> EIoStoreTocVersion {
         self.toc.version

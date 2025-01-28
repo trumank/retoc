@@ -99,7 +99,7 @@ impl<'a> FZenPackageContext<'a> {
         let script_objects_resolved_as_classes = &script_objects_lock.as_ref().unwrap().script_objects_resolved_as_classes;
         script_objects_resolved_as_classes.contains(&script_object_index)
     }
-    /// perform lookup but do not actually load package if does not exist
+    /// perform lookup but do not actually load package if it does not exist
     fn try_lookup(&self, package_id: FPackageId) -> anyhow::Result<Option<Arc<FZenPackageHeader>>> {
         let read_lock = self.inner_state.read().unwrap();
 
@@ -126,11 +126,13 @@ impl<'a> FZenPackageContext<'a> {
         if let Some(package) = self.try_lookup(package_id)? {
             return Ok(package)
         }
+        // Lookup redirect package ID first before trying the provided package ID
+        let redirected_package_id = self.store_access.lookup_package_redirect(package_id).unwrap_or(package_id);
 
         // Optional package segments cannot be imported from other packages, and optional segments are also not supported outside of editor. So ChunkIndex is always 0
-        let package_chunk_id = FIoChunkId::from_package_id(package_id, 0, EIoChunkType::ExportBundleData);
+        let package_chunk_id = FIoChunkId::from_package_id(redirected_package_id, 0, EIoChunkType::ExportBundleData);
         let package_data = self.store_access.read(package_chunk_id);
-        let package_store_entry_ref = self.store_access.package_store_entry(package_id);
+        let package_store_entry_ref = self.store_access.package_store_entry(redirected_package_id);
 
         // Mark the package as failed load if it's chunk failed to load
         if let Err(read_error) = package_data {
@@ -164,7 +166,10 @@ impl<'a> FZenPackageContext<'a> {
         Ok(shared_package_header)
     }
     fn read_full_package_data(&self, package_id: FPackageId) -> anyhow::Result<Vec<u8>> {
-        let package_chunk_id = FIoChunkId::from_package_id(package_id, 0, EIoChunkType::ExportBundleData);
+        // Lookup redirect package ID first before trying the provided package ID
+        let redirected_package_id = self.store_access.lookup_package_redirect(package_id).unwrap_or(package_id);
+
+        let package_chunk_id = FIoChunkId::from_package_id(redirected_package_id, 0, EIoChunkType::ExportBundleData);
         self.store_access.read(package_chunk_id)
     }
 }

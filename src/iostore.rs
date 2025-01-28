@@ -105,6 +105,7 @@ pub trait IoStoreTrait: Send + Sync {
     /// Get absolute path (including mount point) if it has one
     fn chunk_path(&self, chunk_id: FIoChunkId) -> Option<String>;
     fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntry>;
+    fn lookup_package_redirect(&self, source_package_id: FPackageId) -> Option<FPackageId>;
 
     fn load_script_objects(&self) -> Result<ZenScriptObjects> {
         if self.container_file_version().unwrap() > EIoStoreTocVersion::PerfectHash {
@@ -313,6 +314,11 @@ impl IoStoreTrait for IoStoreBackend {
             .iter()
             .find_map(|c| c.package_store_entry(package_id))
     }
+    fn lookup_package_redirect(&self, source_package_id: FPackageId) -> Option<FPackageId> {
+        self.containers
+            .iter()
+            .find_map(|c| c.lookup_package_redirect(source_package_id))
+    }
 }
 
 pub struct IoStoreContainer {
@@ -449,6 +455,11 @@ impl IoStoreTrait for IoStoreContainer {
         self.container_header
             .as_ref()
             .and_then(|header| header.get_store_entry(package_id))
+    }
+    fn lookup_package_redirect(&self, source_package_id: FPackageId) -> Option<FPackageId> {
+        self.container_header
+            .as_ref()
+            .and_then(|header| header.lookup_package_redirect(source_package_id))
     }
 }
 
