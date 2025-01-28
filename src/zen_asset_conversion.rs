@@ -12,6 +12,7 @@ use std::io::{Cursor, Seek, SeekFrom, Write};
 use std::sync::{Arc, RwLock};
 use byteorder::{ReadBytesExt, LE};
 use crate::iostore_writer::IoStoreWriter;
+use crate::logging::{log, Log};
 use crate::ser::{ReadExt, WriteExt};
 
 /// NOTE: assumes leading slash is already stripped
@@ -103,9 +104,17 @@ fn setup_zen_package_summary(builder: &mut ZenPackageBuilder) -> anyhow::Result<
     builder.zen_package.name_map = FNameMap::create_from_names(EMappedNameType::Package, name_map_slice);
 
     // Make sure not to attempt to put uncooked packages into zen
-    if (builder.legacy_package.summary.package_flags & (EPackageFlags::Cooked as u32)) == 0 {
-        bail!("Detected absent PKG_Cooked flag in legacy package summary. Uncooked assets cannot be converted to Zen. Are you sure the asset has been Cooked?");
+    // PKG_Cooked is only present in UE5.0+ packages. For earlier versions, check for FilterEditorOnlyData instead
+    if builder.legacy_package.summary.versioning_info.package_file_version.is_ue5() {
+        if (builder.legacy_package.summary.package_flags & (EPackageFlags::Cooked as u32)) == 0 {
+            bail!("Detected absent PKG_Cooked flag in legacy package summary. Uncooked assets cannot be converted to Zen. Are you sure the asset has been Cooked?");
+        }
+    } else {
+        if (builder.legacy_package.summary.package_flags & (EPackageFlags::FilterEditorOnly as u32)) == 0 {
+            bail!("Detected absent PKG_FilterEditorOnly flag in legacy package summary. Assets with editor data cannot be converted to Zen. Are you sure the asset has been Cooked?");
+        }
     }
+
     // Make sure we do not have any soft object paths serialized in the header. These cannot be represented in zen packages and should never be written when cooking
     if builder.legacy_package.summary.soft_object_paths.count > 0 {
         bail!("Detected soft object paths serialized as a part of the package header. Such paths cannot be represented in Zen packages and should never be written for cooked packages. Are you sure the package is cooked?");
@@ -854,7 +863,7 @@ pub(crate) struct ConvertedZenAssetBundle {
     legacy_export_bundle_mapping_data: Vec<ZenLegacyPackageExportBundleMapping>,
 }
 impl ConvertedZenAssetBundle {
-    pub(crate) fn fixup_legacy_external_arcs(&mut self, global_package_lookup: &HashMap<FPackageId, Arc<RwLock<ConvertedZenAssetBundle>>>) -> anyhow::Result<()> {
+    pub(crate) fn fixup_legacy_external_arcs(&mut self, global_package_lookup: &HashMap<FPackageId, Arc<RwLock<ConvertedZenAssetBundle>>>, log: &Log) -> anyhow::Result<()> {
         
         for legacy_serialized_offset in &self.legacy_external_arc_serialized_offsets {
 
@@ -879,6 +888,11 @@ impl ConvertedZenAssetBundle {
                     .find(|x| x.export_index == fixup_data.from_import_index && x.export_command_type == fixup_data.from_command_type)
                     .cloned().ok_or_else(|| { anyhow!("Failed to find export in the package {} mapping to the import in package {}", referenced_asset_bundle.package_id, self.package_id) })?;
                 
+                //if log.verbose_enabled() {
+                    log!(log, "Applying fixup to package {} for import of package {} export {} command {:?}. Resolved export bundle for the export: {}",
+                        self.package_id.clone(), fixup_data.from_package_id.clone(), fixup_data.from_import_index, fixup_data.from_command_type, export_bundle_mapping.export_bundle_index);
+                //}
+                
                 // We found the export bundle this dependency maps to
                 export_bundle_mapping.export_bundle_index
             } else {
@@ -894,10 +908,18 @@ impl ConvertedZenAssetBundle {
         Ok({})
     }
     
-    pub(crate) fn write(&self, writer: &mut IoStoreWriter) -> anyhow::Result<()> {
+    // Writes both the package data and the bulk data in one go
+    pub(crate) fn write(&mut self, writer: &mut IoStoreWriter) -> anyhow::Result<()> {
+        self.write_package_data(writer)?;
+        self.write_and_release_bulk_data(writer)?;
+        Ok(())
+    }
+    
+    // Writes package data into the container, and releases the reference to it
+    pub(crate) fn write_package_data(&mut self, writer: &mut IoStoreWriter) -> anyhow::Result<()> {
         let package_chunk_id = FIoChunkId::from_package_id(self.package_id, 0, EIoChunkType::ExportBundleData);
         writer.write_package_chunk(package_chunk_id, Some(&self.path), &self.package_buffer, &self.store_entry)?;
-        
+
         // Add the localized package entry if this is a localized package
         if let Some(package_culture_name) = &self.localized_package_culture_name {
             writer.add_localized_package(package_culture_name, self.source_package_name.as_ref().unwrap(), self.package_id)?;
@@ -906,7 +928,13 @@ impl ConvertedZenAssetBundle {
         else if let Some(source_package_name) = &self.source_package_name {
             writer.add_package_redirect(source_package_name, self.package_id)?;
         }
-
+        
+        self.package_buffer = Vec::new();
+        Ok({})
+    }
+    
+    // Writes bulk data into the container, and releases the reference to it so that it is no longer stored in memory. Needed for two-stage processing of legacy UE4.27 zen assets
+    pub(crate) fn write_and_release_bulk_data(&mut self, writer: &mut IoStoreWriter) -> anyhow::Result<()> {
         // Write bulk data chunk if it is present
         if let Some(bulk_data_buffer) = &self.bulk_data_buffer {
             let bulk_data_chunk_id = FIoChunkId::from_package_id(self.package_id, 0, EIoChunkType::BulkData);
@@ -922,7 +950,12 @@ impl ConvertedZenAssetBundle {
             let memory_mapped_bulk_data_chunk_id = FIoChunkId::from_package_id(self.package_id, 0, EIoChunkType::MemoryMappedBulkData);
             writer.write_chunk(memory_mapped_bulk_data_chunk_id, Some(UEPath::new(&self.path).with_extension("m.ubulk").as_str()), memory_mapped_bulk_data_buffer)?;
         }
-        Ok(())
+        
+        // Release the buffers to free the memory taken by them
+        self.bulk_data_buffer = None;
+        self.optional_bulk_data_buffer = None;
+        self.memory_mapped_bulk_data_buffer = None;
+        Ok({})
     }
 }
 

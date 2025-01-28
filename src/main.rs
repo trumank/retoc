@@ -1067,24 +1067,35 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
             let mut all_converted: Vec<Arc<RwLock<ConvertedZenAssetBundle>>> = Vec::new();
 
             // Collect all assets into the lookup map first, and also into the processing list
-            for converted in rx {
+            for mut converted in rx {
+                // Write and release bulk data immediately, we do not have enough RAM to keep all the bulk data for all the packages in memory at the same time
+                converted.write_and_release_bulk_data(&mut writer)?;
+                
+                // Add the package data and the metadata necessary for the import fixup into the list
                 let converted_arc = Arc::new(RwLock::new(converted));
                 converted_lookup.insert(converted_arc.read().unwrap().package_id, converted_arc.clone());
                 all_converted.push(converted_arc);
             }
+
+            log!(log, "Applying import fix-ups to the converted assets");
+            prog_ref.inspect(|x| x.set_position(0));
             
             // Process fixups on all the assets in their original processing order
             for converted in &all_converted {
-                converted.write().unwrap().fixup_legacy_external_arcs(&converted_lookup)?;
+                converted.write().unwrap().fixup_legacy_external_arcs(&converted_lookup, &log)?;
+                prog_ref.inspect(|x| x.inc(1));
             }
+            log!(log, "Writing converted assets");
+            prog_ref.inspect(|x| x.set_position(0));
             
-            // Write all the assets once fixups are complete
+            // Write all the package data for each asset once fixups are complete
             for converted in &all_converted {
-                converted.write().unwrap().write(&mut writer)?;
+                converted.write().unwrap().write_package_data(&mut writer)?;
+                prog_ref.inspect(|x| x.set_position(1));
             }
         } else {
             // Write the assets immediately otherwise as they are processed
-            for converted in rx {
+            for mut converted in rx {
                 converted.write(&mut writer)?;
             }
         }
