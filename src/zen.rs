@@ -126,12 +126,28 @@ impl FZenPackageSummary {
     #[instrument(skip_all, name = "FZenPackageSummary")]
     fn serialize<S: Write>(&self, s: &mut S, container_header_version: EIoContainerHeaderVersion) -> Result<()> {
 
-        s.ser(&self.has_versioning_info)?;
-        s.ser(&self.header_size)?;
+        if container_header_version > EIoContainerHeaderVersion::Initial {
+            s.ser(&self.has_versioning_info)?;
+            s.ser(&self.header_size)?;
+        }
+        
         s.ser(&self.name)?;
+        if container_header_version == EIoContainerHeaderVersion::Initial {
+            s.ser(&self.source_name)?;
+        }
+        
         s.ser(&self.package_flags)?;
         s.ser(&self.cooked_header_size)?;
-        s.ser(&self.imported_public_export_hashes_offset)?;
+
+        if container_header_version == EIoContainerHeaderVersion::Initial {
+            s.ser(&self.name_map_names_offset)?;
+            s.ser(&self.name_map_names_size)?;
+            s.ser(&self.name_map_hashes_offset)?;
+            s.ser(&self.name_map_hashes_size)?;
+        } else {
+            s.ser(&self.imported_public_export_hashes_offset)?;
+        }
+
         s.ser(&self.import_map_offset)?;
         s.ser(&self.export_map_offset)?;
         s.ser(&self.export_bundle_entries_offset)?;
