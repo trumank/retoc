@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use byteorder::{WriteBytesExt, BE};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -98,6 +98,11 @@ pub(crate) fn read_name_batch_parts(names_buffer: &[u8]) -> Result<Vec<String>> 
         names.push(read_string(l as i32, &mut s)?);
     }
     Ok(names)
+}
+
+pub(crate) fn write_name_batch_parts(_names: &[String]) -> Result<(Vec<u8>, Vec<u8>)> {
+    // TODO @trumank: Implement this
+    bail!("Truman send help")
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

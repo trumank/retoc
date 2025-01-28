@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use strum::FromRepr;
 use tracing::instrument;
 
-use crate::name_map::{read_name_batch, read_name_batch_parts, write_name_batch, EMappedNameType};
+use crate::name_map::{read_name_batch, read_name_batch_parts, write_name_batch, write_name_batch_parts, EMappedNameType};
 use crate::script_objects::FPackageObjectIndex;
 use crate::ser::{WriteExt, Writeable};
 use crate::{align_u64, align_usize, break_down_name_string, name_map::{FMappedName, FNameMap}, EIoStoreTocVersion, FGuid, FPackageId, FSHAHash, ReadExt, Readable};
@@ -363,6 +363,7 @@ impl Writeable for FExportMapEntry {
         Ok({})
     }
 }
+
 impl FExportMapEntry {
     // Returns true if this is a public export. This is only valid for new (UE5.0+) zen packages
     pub(crate) fn is_public_export(&self) -> bool { self.public_export_hash != 0 }
@@ -578,14 +579,32 @@ pub(crate) struct FExportBundleHeader
     // Number of entries in this export bundle
     pub(crate) entry_count: u32,
 }
-impl Readable for FExportBundleHeader {
+impl FExportBundleHeader {
     #[instrument(skip_all, name = "FExportBundleHeader")]
-    fn de<S: Read>(s: &mut S) -> Result<Self> {
+    pub(crate) fn deserialize<S: Read>(s: &mut S, container_header_version: EIoContainerHeaderVersion) -> Result<Self> {
+        // For legacy UE4 packages, serial offset of the bundle is not written, it is implied because bundles are always laid out sequentially
+        let serial_offset = if container_header_version > EIoContainerHeaderVersion::Initial {
+            s.de()?
+        } else { 
+            u64::MAX 
+        };
+        
         Ok(Self{
-            serial_offset: s.de()?,
+            serial_offset,
             first_entry_index: s.de()?,
             entry_count: s.de()?,
         })
+    }
+
+    #[instrument(skip_all, name = "FExportBundleHeader")]
+    pub(crate) fn serialize<S: Write>(&self, s: &mut S, container_header_version: EIoContainerHeaderVersion) -> Result<()> {
+      
+        if container_header_version > EIoContainerHeaderVersion::Initial {
+            s.ser(&self.serial_offset)?;
+        }
+        s.ser(&self.first_entry_index)?;
+        s.ser(&self.entry_count)?;
+        Ok({})
     }
 }
 impl Writeable for FExportBundleHeader {
@@ -795,12 +814,10 @@ impl FZenPackageHeader {
             let store_entry = optional_store_entry.as_ref()
                 .ok_or_else(|| { anyhow!("Zen package versions before ImportedPackageNames cannot be parsed without their associated package store entry") })?;
 
-            // In 4.27 there is no cooked serial offset, it is implicit, so we cannot use de_ctx here
+            // In 4.27 there is no cooked serial offset, and export bundle headers are serialized before export bundle data
             export_bundle_headers.reserve(store_entry.export_bundle_count as usize);
             for _ in 0..store_entry.export_bundle_count {
-                let first_entry_index: u32 = s.de()?;
-                let entry_count: u32 = s.de()?;
-                export_bundle_headers.push(FExportBundleHeader{serial_offset: u64::MAX, first_entry_index, entry_count});
+                export_bundle_headers.push(FExportBundleHeader::deserialize(s, header_version)?);
             }
             export_bundle_entries_count = export_bundle_headers.iter().map(|x| x.entry_count as usize).sum();
         }
@@ -843,7 +860,11 @@ impl FZenPackageHeader {
             if header_version >= EIoContainerHeaderVersion::LocalizedPackages {
 
                 let export_bundles_count = store_entry.export_bundle_count as usize;
-                export_bundle_headers = s.de_ctx(export_bundles_count)?;
+                export_bundle_headers.reserve(export_bundles_count);
+                for _ in 0..export_bundles_count {
+                    export_bundle_headers.push(FExportBundleHeader::deserialize(s, header_version)?);
+                }
+
                 internal_dependency_arcs = s.de()?;
 
                 for imported_package_id in &store_entry.imported_packages {
@@ -928,12 +949,28 @@ impl FZenPackageHeader {
         let package_summary_offset = s.stream_position()?;
         FZenPackageSummary::serialize(&package_summary, s, container_header_version)?;
 
-        // Write versioning info if this package is not unversioned
-        if package_summary.has_versioning_info != 0 {
-            s.ser(&self.versioning_info)?;
-        }
+        if container_header_version > EIoContainerHeaderVersion::Initial {
+            // Write versioning info if this package is not unversioned
+            if package_summary.has_versioning_info != 0 {
+                s.ser(&self.versioning_info)?;
+            }
+            
+            // Serialize name map directly after the package
+            self.name_map.serialize(s)?;
+        } else {
+            // Serialize name map parts separately for legacy packages
+            let (names_buffer, hashes_buffer) = write_name_batch_parts(&self.name_map.copy_raw_names())?;
 
-        self.name_map.serialize(s)?;
+            // Serialize name map names
+            package_summary.name_map_names_offset = (s.stream_position()? - package_summary_offset) as i32;
+            package_summary.name_map_names_size = names_buffer.len() as i32;
+            s.write_all(&names_buffer)?;
+
+            // Serialize name map hashes
+            package_summary.name_map_hashes_offset = (s.stream_position()? - package_summary_offset) as i32;
+            package_summary.name_map_hashes_size = hashes_buffer.len() as i32;
+            s.write_all(&hashes_buffer)?;
+        }
 
         // Bulk data is only serialized in UE5.2+ packages
         if self.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::DataResources as i32 {
@@ -972,10 +1009,12 @@ impl FZenPackageHeader {
             s.seek(SeekFrom::Start(post_bulk_data_map_position))?;
         }
 
-        // Imported public export hashes start directly after bulk data
-        package_summary.imported_public_export_hashes_offset = (s.stream_position()? - package_summary_offset) as i32;
-        for public_export_hash in &self.imported_public_export_hashes {
-            s.ser(public_export_hash)?;
+        if container_header_version > EIoContainerHeaderVersion::Initial {
+            // Imported public export hashes start directly after bulk data
+            package_summary.imported_public_export_hashes_offset = (s.stream_position()? - package_summary_offset) as i32;
+            for public_export_hash in &self.imported_public_export_hashes {
+                s.ser(public_export_hash)?;
+            }
         }
 
         // Import map starts directly after imported public hashes
@@ -992,6 +1031,15 @@ impl FZenPackageHeader {
 
         // Export bundle entries start directly after export map
         package_summary.export_bundle_entries_offset = (s.stream_position()? - package_summary_offset) as i32;
+
+        // For legacy UE4 packages, export bundle headers are written as a part of export bundle entries
+        if container_header_version == EIoContainerHeaderVersion::Initial {
+            store_entry.export_bundle_count = self.export_bundle_headers.len() as i32;
+            for export_bundle_header in &self.export_bundle_headers {
+                FExportBundleHeader::serialize(export_bundle_header, s, self.container_header_version)?;
+            }
+        }
+        // Serialize actual export bundle entries
         for export_bundle_entry in &self.export_bundle_entries {
             s.ser(export_bundle_entry)?;
         }
@@ -1028,24 +1076,41 @@ impl FZenPackageHeader {
             // Graph data starts directly after export bundle entries
             package_summary.graph_data_offset = (s.stream_position()? - package_summary_offset) as i32;
 
-            // Write export bundle count into the package store entry, and then write export bundle header for each of them
-            store_entry.export_bundle_count = self.export_bundle_headers.len() as i32;
-            for export_bundle_header in &self.export_bundle_headers {
-                s.ser(export_bundle_header)?;
+            // Write dependency arcs in the new style, starting from UE5.0
+            if container_header_version > EIoContainerHeaderVersion::Initial {
+               
+                // Write export bundle count into the package store entry, and then write export bundle header for each of them
+                store_entry.export_bundle_count = self.export_bundle_headers.len() as i32;
+                for export_bundle_header in &self.export_bundle_headers {
+                    s.ser(export_bundle_header)?;
+                }
+
+                // Write internal dependency arcs after export bundle headers
+                s.ser(&self.internal_dependency_arcs)?;
+
+                for imported_package_id in &self.imported_packages {
+
+                    // Find all arcs that map to this specific package, and write them
+                    let imported_package_arcs: Vec<FExternalDependencyArc> = self.external_package_dependencies.iter()
+                        .filter(|x| &x.from_package_id == imported_package_id)
+                        .flat_map(|x| x.external_dependency_arcs.iter().cloned())
+                        .collect();
+                    s.ser(&imported_package_arcs)?;
+                }
+            } else {
+                // Serialize old style package references
+                let referenced_package_count: i32 = self.external_package_dependencies.len() as i32;
+                s.ser(&referenced_package_count)?;
+                
+                for package_dependency in &self.external_package_dependencies {
+                    s.ser(&package_dependency.from_package_id)?;
+                    s.ser(&package_dependency.legacy_dependency_arcs)?;
+                }
             }
-
-            // Write internal dependency arcs after export bundle headers
-            s.ser(&self.internal_dependency_arcs)?;
-
-            for imported_package_id in &self.imported_packages {
-
-                // Find all arcs that map to this specific package, and write them
-                let imported_package_arcs: Vec<FExternalDependencyArc> = self.external_package_dependencies.iter()
-                    .filter(|x| &x.from_package_id == imported_package_id)
-                    .flat_map(|x| x.external_dependency_arcs.iter().cloned())
-                    .collect();
-                s.ser(&imported_package_arcs)?;
-            }
+            
+            // Track the end of the graph data for this package. This is only used and written for legacy UE4 zen packages
+            let graph_data_end_offset = (s.stream_position()? - package_summary_offset) as i32;
+            package_summary.graph_data_size = graph_data_end_offset - package_summary.graph_data_offset;
         }
 
         // We know the total size of the zen package header now
