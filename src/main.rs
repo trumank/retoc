@@ -34,7 +34,6 @@ use ser::*;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_with::serde_as;
 use std::borrow::Cow;
-use std::ffi::OsStr;
 use std::fmt::{Debug, Display, Formatter};
 use std::io::BufWriter;
 use std::path::Path;
@@ -148,7 +147,7 @@ struct ActionExtractLegacy {
     #[arg(long, default_value = "false")]
     debug: bool,
     #[arg(short, long)]
-    filter: Option<String>,
+    filter: Vec<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -169,7 +168,7 @@ struct ActionPackZen {
     #[arg(long, default_value = "false")]
     debug: bool,
     #[arg(short, long)]
-    filter: Option<String>,
+    filter: Vec<String>,
     /// Don't run in parallel. Useful for debugging
     #[arg(long)]
     no_parallel: bool,
@@ -814,8 +813,8 @@ fn action_extract_legacy_assets(
             )
         })?;
 
-        if let Some(filter) = &args.filter {
-            if !package_path.contains(filter) {
+        if !args.filter.is_empty() {
+            if !args.filter.iter().any(|f| package_path.contains(f)) {
                 continue;
             }
         }
@@ -897,8 +896,8 @@ fn action_extract_legacy_shaders(
             )
         })?;
 
-        if let Some(filter) = &args.filter {
-            if !shader_library_path.contains(filter) {
+        if !args.filter.is_empty() {
+            if !args.filter.iter().any(|f| shader_library_path.contains(f)) {
                 continue;
             }
         }
@@ -952,7 +951,13 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
     let mut asset_paths = vec![];
     let mut shader_lib_paths = vec![];
 
-    let check_path = |path: &str| !args.filter.as_ref().is_some_and(|f| !path.contains(f));
+    let check_path = |path: &str| {
+        if args.filter.is_empty() {
+            true
+        } else {
+            args.filter.iter().any(|f| path.contains(f))
+        }
+    };
 
     for path in input.list_files()? {
         let ext = UEPath::new(&path).extension();
