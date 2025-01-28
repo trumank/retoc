@@ -1,5 +1,4 @@
-use anyhow::{bail, Result};
-use byteorder::{WriteBytesExt, BE};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Cursor, Write};
@@ -10,6 +9,29 @@ use tracing::instrument;
 use crate::{break_down_name_string, read_array, read_string, ser::*};
 
 const FNAME_HASH_ALGORITHM_ID: u64 = 0xC1640000;
+
+fn name_hash(name: &str) -> u64 {
+    let lower = name.to_ascii_lowercase();
+    if lower.is_ascii() {
+        cityhasher::hash(lower.as_bytes())
+    } else {
+        cityhasher::hash(
+            lower
+                .encode_utf16()
+                .flat_map(|s| s.to_le_bytes())
+                .collect::<Vec<u8>>(),
+        )
+    }
+}
+
+fn name_header(name: &str) -> [u8; 2] {
+    let len = if name.is_ascii() {
+        name.as_bytes().len() as i16
+    } else {
+        name.encode_utf16().count() as i16 + i16::MIN
+    };
+    len.to_be_bytes()
+}
 
 pub(crate) fn read_name_batch<S: Read>(s: &mut S) -> Result<Vec<String>> {
     let num: u32 = s.de()?;
@@ -50,27 +72,11 @@ pub(crate) fn write_name_batch<S: Write>(s: &mut S, names: &[String]) -> Result<
     s.ser(&FNAME_HASH_ALGORITHM_ID)?;
 
     for name in names {
-        let lower = name.to_ascii_lowercase();
-        let hash: u64 = if lower.is_ascii() {
-            cityhasher::hash(lower.as_bytes())
-        } else {
-            cityhasher::hash(
-                lower
-                    .encode_utf16()
-                    .flat_map(|s| s.to_le_bytes())
-                    .collect::<Vec<u8>>(),
-            )
-        };
-        s.ser(&hash)?;
+        s.ser(&name_hash(name))?;
     }
 
     for name in names {
-        let len = if name.is_ascii() {
-            name.as_bytes().len() as i16
-        } else {
-            name.encode_utf16().count() as i16 + i16::MIN
-        };
-        s.write_i16::<BE>(len)?;
+        s.ser(&name_header(&name))?;
     }
 
     for name in names {
@@ -100,9 +106,26 @@ pub(crate) fn read_name_batch_parts(names_buffer: &[u8]) -> Result<Vec<String>> 
     Ok(names)
 }
 
-pub(crate) fn write_name_batch_parts(_names: &[String]) -> Result<(Vec<u8>, Vec<u8>)> {
-    // TODO @trumank: Implement this
-    bail!("Truman send help")
+pub(crate) fn write_name_batch_parts(names: &[String]) -> Result<(Vec<u8>, Vec<u8>)> {
+    let mut cur_names = Cursor::new(vec![]);
+    let mut cur_hashes = Cursor::new(vec![]);
+
+    for name in names {
+        cur_names.ser(&name_header(&name))?;
+        if name.is_ascii() {
+            cur_names.write_all(name.as_bytes())?;
+        } else {
+            if cur_names.position() & 1 != 0 {
+                cur_names.ser(&0u8)?;
+            }
+            for c in name.encode_utf16() {
+                cur_names.ser(&c)?;
+            }
+        }
+        cur_hashes.ser(&name_hash(&name))?;
+    }
+
+    Ok((cur_names.into_inner(), cur_hashes.into_inner()))
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
