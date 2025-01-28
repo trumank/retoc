@@ -401,7 +401,7 @@ impl IoStoreTrait for IoStoreContainer {
         let mut file_lock = self.cas.acquire()?;
         self.toc
             .read(&mut file_lock.file(), index)
-            .with_context(|| "Failed to read chunk {chunk_id:?}")
+            .with_context(|| format!("Failed to read chunk {chunk_id:?}"))
     }
     fn read_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> Result<Vec<u8>> {
         self.read(FIoChunkId::from_raw(chunk_id_raw, self.toc.version))
