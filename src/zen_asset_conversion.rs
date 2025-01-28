@@ -6,11 +6,13 @@ use crate::script_objects::{FPackageImportReference, FPackageObjectIndex, FPacka
 use crate::version_heuristics::heuristic_zen_version_from_package_file_version;
 use crate::zen::{EExportCommandType, EExportFilterFlags, EObjectFlags, EZenPackageVersion, ExternalPackageDependency, FBulkDataMapEntry, FDependencyBundleEntry, FDependencyBundleHeader, FExportBundleEntry, FExportBundleHeader, FExportMapEntry, FExternalDependencyArc, FInternalDependencyArc, FPackageFileVersion, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo};
 use crate::{EIoChunkType, FIoChunkId, FPackageId, FSHAHash, UEPath};
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use std::collections::{BinaryHeap, HashMap, HashSet};
-use std::io::{Cursor, Write};
+use std::io::{Cursor, Seek, SeekFrom, Write};
+use std::sync::{Arc, RwLock};
 use byteorder::{ReadBytesExt, LE};
 use crate::iostore_writer::IoStoreWriter;
+use crate::ser::{ReadExt, WriteExt};
 
 /// NOTE: assumes leading slash is already stripped
 fn get_public_export_hash(package_relative_export_path: &str) -> u64 {
@@ -20,6 +22,20 @@ fn get_public_export_hash(package_relative_export_path: &str) -> u64 {
             .flat_map(u16::to_le_bytes)
             .collect::<Vec<u8>>()
     )
+}
+
+#[derive(Debug, Copy, Clone, Default)]
+struct ZenLegacyPackageExternalArcFixupData {
+    fixup_from_bundle_id: i32,
+    from_package_id: FPackageId,
+    from_import_index: FPackageObjectIndex,
+    from_command_type: EExportCommandType,
+}
+#[derive(Debug, Copy, Clone, Default)]
+struct ZenLegacyPackageExportBundleMapping {
+    export_index: FPackageObjectIndex,
+    export_command_type: EExportCommandType,
+    export_bundle_index: i32,
 }
 
 struct ZenPackageBuilder {
@@ -34,10 +50,16 @@ struct ZenPackageBuilder {
     localized_package_culture: Option<String>,
     // If this package is a redirect target from another package (including by localization), this is the name of the original package that should get redirected to this package
     source_package_name: Option<String>,
+    // True if we should write placeholder legacy external arc values for UE4 external arcs. We will then need a fix-up pass after the initial serialization to fix them up with real from bundle indices
+    fixup_legacy_external_arcs: bool,
+    // Information necessary for the fixup of the legacy external dependency arcs
+    legacy_external_arc_fixup_data: Vec<ZenLegacyPackageExternalArcFixupData>,
+    legacy_external_arc_counter: i32,
+    legacy_export_bundle_mapping: Vec<ZenLegacyPackageExportBundleMapping>,
 }
 
 // Flow is create_asset_builder -> setup_zen_package_summary -> build_zen_import_map -> build_zen_export_map -> build_zen_preload_dependencies -> serialize_zen_asset
-fn create_asset_builder(package: FLegacyPackageHeader, container_header_version: EIoContainerHeaderVersion) -> ZenPackageBuilder {
+fn create_asset_builder(package: FLegacyPackageHeader, container_header_version: EIoContainerHeaderVersion, fixup_legacy_external_arcs: bool) -> ZenPackageBuilder {
     ZenPackageBuilder{
         package_id: FPackageId::from_name(&package.summary.package_name),
         legacy_package: package,
@@ -48,6 +70,10 @@ fn create_asset_builder(package: FLegacyPackageHeader, container_header_version:
         export_hash_lookup: HashMap::new(),
         localized_package_culture: None,
         source_package_name: None,
+        fixup_legacy_external_arcs,
+        legacy_external_arc_fixup_data: Vec::new(),
+        legacy_external_arc_counter: 0,
+        legacy_export_bundle_mapping: Vec::new(),
     }
 }
 
@@ -328,9 +354,20 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
         if export_command_type == EExportCommandType::Serialize {
             current_export_offset += builder.zen_package.export_map[export_index].cooked_serial_size;
         }
+        let is_public_export = builder.zen_package.export_map[export_index].is_public_export();
+
+        // If we perform the fix-up on the serialized package data later, store the information necessary to perform the fixup of another package imports
+        if is_public_export && builder.fixup_legacy_external_arcs && builder.container_header_version == EIoContainerHeaderVersion::Initial {
+            let export_global_index = builder.zen_package.export_map[export_index].legacy_global_import_index();
+
+            builder.legacy_export_bundle_mapping.push(ZenLegacyPackageExportBundleMapping{
+                export_index: export_global_index,
+                export_command_type,
+                export_bundle_index: current_export_bundle_header_index as i32,
+            });
+        }
 
         // Export bundles end at a public export with an export hash. So if this is a public export, close the current bundle
-        let is_public_export = builder.zen_package.export_map[export_index].is_public_export();
         if is_public_export {
             current_export_bundle_header_index = -1;
         }
@@ -385,14 +422,29 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
                         mut_builder.zen_package.external_package_dependencies[imported_package_index].external_dependency_arcs.push(external_dependency_arc);
                     }
                 } else {
-                    // Legacy UE4 graph data will only map the export bundle index in this package to export bundle index in the imported package
-                    // This requires knowledge of the export bundle layout of another package, which we do not have. So just use -1 as a placeholder
-                    // TODO: This will absolutely cause circular dependencies, but we do not have enough context to know the bundle layout of the imported package here
                     let imported_package_id = mut_builder.import_to_package_id_lookup.get(&package_object_import).unwrap().clone();
                     let imported_package_index = mut_builder.package_import_lookup.get(&imported_package_id).unwrap().clone() as usize;
-                    let legacy_dependency_arc = FInternalDependencyArc{from_export_bundle_index: -1, to_export_bundle_index};
                     
+                    // Legacy UE4 graph data will only map the export bundle index in this package to export bundle index in the imported package
+                    // This requires knowledge of the export bundle layout of another package, which we do not have if fix-up is not possible. So just use -1 as a placeholder
+                    // If we are intending to fix up the serialized data later though, write a placeholder value and emit the information necessary for the fixup
+                    let from_export_bundle_index: i32 = if mut_builder.fixup_legacy_external_arcs {
+                        
+                        let current_fixup_id = mut_builder.legacy_external_arc_counter;
+                        let fixup_data = ZenLegacyPackageExternalArcFixupData{
+                            fixup_from_bundle_id: current_fixup_id,
+                            from_package_id: imported_package_id,
+                            from_import_index: package_object_import,
+                            from_command_type,
+                        };
+                        // Add the fixup data to the hash map and increment the counter, and write current fixup ID as the bundle index
+                        mut_builder.legacy_external_arc_fixup_data.push(fixup_data);
+                        mut_builder.legacy_external_arc_counter += 1;
+                        current_fixup_id
+                    } else { -1 };
+
                     // Prevent adding duplicate dependencies on the packages
+                    let legacy_dependency_arc = FInternalDependencyArc{from_export_bundle_index, to_export_bundle_index};
                     if !legacy_dependency_arcs.contains(&(imported_package_id, legacy_dependency_arc)) {
                         
                         legacy_dependency_arcs.insert((imported_package_id.clone(), legacy_dependency_arc.clone()));
@@ -742,14 +794,14 @@ fn write_exports_in_bundle_order<S: Write>(writer: &mut S, builder: &ZenPackageB
     Ok({})
 }
 
-fn serialize_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: &FSerializedAssetBundle) -> anyhow::Result<(StoreEntry, Vec<u8>)> {
+fn serialize_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: &FSerializedAssetBundle) -> anyhow::Result<(StoreEntry, Vec<u8>, Vec<u64>)> {
 
     let mut result_package_buffer: Vec<u8> = Vec::new();
     let mut result_package_writer = Cursor::new(&mut result_package_buffer);
     let mut result_store_entry: StoreEntry = StoreEntry::default();
 
     // Serialize package header
-    FZenPackageHeader::serialize(&builder.zen_package, &mut result_package_writer, &mut result_store_entry, builder.container_header_version)?;
+    let legacy_external_arcs_serialized_offsets = FZenPackageHeader::serialize(&builder.zen_package, &mut result_package_writer, &mut result_store_entry, builder.container_header_version)?;
 
     if builder.container_header_version >= EIoContainerHeaderVersion::NoExportInfo {
         // Write export buffer without any changes if we are following cooked offsets
@@ -758,12 +810,12 @@ fn serialize_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: &FSeria
         // Write export buffer in bundle order otherwise, moving exports around to follow bundle serialization order
         write_exports_in_bundle_order(&mut result_package_writer, builder, &legacy_asset_bundle.exports_file_buffer)?;
     }
-    Ok((result_store_entry, result_package_buffer))
+    Ok((result_store_entry, result_package_buffer, legacy_external_arcs_serialized_offsets))
 }
 
 fn build_converted_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: FSerializedAssetBundle, path: &str, package_name_to_referenced_shader_maps: &HashMap<String, Vec<FSHAHash>>) -> anyhow::Result<ConvertedZenAssetBundle> {
 
-    let (mut result_store_entry, result_package_buffer) = serialize_zen_asset(builder, &legacy_asset_bundle)?;
+    let (mut result_store_entry, result_package_buffer, legacy_external_arc_serialized_offsets) = serialize_zen_asset(builder, &legacy_asset_bundle)?;
 
     // Append shader map hashes to the store entry from the package name to shader maps lookup
     if let Some(referenced_shader_maps) = package_name_to_referenced_shader_maps.get(&builder.legacy_package.summary.package_name) {
@@ -780,11 +832,14 @@ fn build_converted_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: F
         memory_mapped_bulk_data_buffer: legacy_asset_bundle.memory_mapped_bulk_data_buffer,
         source_package_name: builder.source_package_name.clone(),
         localized_package_culture_name: builder.localized_package_culture.clone(),
+        legacy_external_arc_serialized_offsets,
+        legacy_external_arc_fixup_data: builder.legacy_external_arc_fixup_data.clone(),
+        legacy_export_bundle_mapping_data: builder.legacy_export_bundle_mapping.clone(),
     })
 }
 
 pub(crate) struct ConvertedZenAssetBundle {
-    package_id: FPackageId,
+    pub(crate) package_id: FPackageId,
     path: String,
     store_entry: StoreEntry,
     package_buffer: Vec<u8>,
@@ -793,8 +848,52 @@ pub(crate) struct ConvertedZenAssetBundle {
     memory_mapped_bulk_data_buffer: Option<Vec<u8>>,
     source_package_name: Option<String>,
     localized_package_culture_name: Option<String>,
+    // Offsets into the package buffer at which legacy external arcs have been serialized. Needed for UE4 external arc fixup that requires knowing the layout of imported assets
+    legacy_external_arc_serialized_offsets: Vec<u64>,
+    legacy_external_arc_fixup_data: Vec<ZenLegacyPackageExternalArcFixupData>,
+    legacy_export_bundle_mapping_data: Vec<ZenLegacyPackageExportBundleMapping>,
 }
 impl ConvertedZenAssetBundle {
+    pub(crate) fn fixup_legacy_external_arcs(&mut self, global_package_lookup: &HashMap<FPackageId, Arc<RwLock<ConvertedZenAssetBundle>>>) -> anyhow::Result<()> {
+        
+        for legacy_serialized_offset in &self.legacy_external_arc_serialized_offsets {
+
+            // Seek to the relevant position and read the ID of the placeholder from bundle index
+            let placeholder_from_bundle_index: i32 = {
+                let mut package_buffer_reader = Cursor::new(&self.package_buffer);
+                package_buffer_reader.seek(SeekFrom::Start(*legacy_serialized_offset))?;
+                package_buffer_reader.de()?
+            };
+            
+            // Resolve the fixup data for this arc
+            let fixup_data = self.legacy_external_arc_fixup_data.iter()
+                .find(|x| x.fixup_from_bundle_id == placeholder_from_bundle_index)
+                .cloned().ok_or_else(|| { anyhow!("Failed to find fixup data for placeholder ID {}", placeholder_from_bundle_index) })?;
+            
+            // Attempt to find the package in the lookup to which this import maps
+            let result_from_bundle_index: i32 = if let Some(referenced_asset_bundle_lock) = global_package_lookup.get(&fixup_data.from_package_id) {
+                
+                // Resolve the export this reference is mapping to
+                let referenced_asset_bundle = referenced_asset_bundle_lock.read().unwrap();
+                let export_bundle_mapping = referenced_asset_bundle.legacy_export_bundle_mapping_data.iter()
+                    .find(|x| x.export_index == fixup_data.from_import_index && x.export_command_type == fixup_data.from_command_type)
+                    .cloned().ok_or_else(|| { anyhow!("Failed to find export in the package {} mapping to the import in package {}", referenced_asset_bundle.package_id, self.package_id) })?;
+                
+                // We found the export bundle this dependency maps to
+                export_bundle_mapping.export_bundle_index
+            } else {
+                // This import is not found in the global package lookup, so assume it is external and use -1 as a value meaning "last export bundle in the package"
+                -1
+            };
+            
+            // Write the fixed-up from export bundle index to the correct position
+            let mut package_buffer_writer = Cursor::new(&mut self.package_buffer);
+            package_buffer_writer.seek(SeekFrom::Start(*legacy_serialized_offset))?;
+            package_buffer_writer.ser(&result_from_bundle_index)?;
+        }
+        Ok({})
+    }
+    
     pub(crate) fn write(&self, writer: &mut IoStoreWriter) -> anyhow::Result<()> {
         let package_chunk_id = FIoChunkId::from_package_id(self.package_id, 0, EIoChunkType::ExportBundleData);
         writer.write_package_chunk(package_chunk_id, Some(&self.path), &self.package_buffer, &self.store_entry)?;
@@ -827,14 +926,14 @@ impl ConvertedZenAssetBundle {
     }
 }
 
-fn build_zen_asset_internal(legacy_asset: &FSerializedAssetBundle, container_header_version: EIoContainerHeaderVersion, package_version_fallback: Option<FPackageFileVersion>) -> anyhow::Result<ZenPackageBuilder> {
+fn build_zen_asset_internal(legacy_asset: &FSerializedAssetBundle, container_header_version: EIoContainerHeaderVersion, package_version_fallback: Option<FPackageFileVersion>, fixup_legacy_external_arcs: bool) -> anyhow::Result<ZenPackageBuilder> {
 
     // Read legacy package header
     let mut asset_header_reader = Cursor::new(&legacy_asset.asset_file_buffer);
     let legacy_package_header = FLegacyPackageHeader::deserialize(&mut asset_header_reader, package_version_fallback)?;
 
     // Construct zen asset from the package header
-    let mut builder = create_asset_builder(legacy_package_header, container_header_version);
+    let mut builder = create_asset_builder(legacy_package_header, container_header_version, fixup_legacy_external_arcs);
 
     // Build zen asset data
     setup_zen_package_summary(&mut builder)?;
@@ -848,16 +947,19 @@ fn build_zen_asset_internal(legacy_asset: &FSerializedAssetBundle, container_hea
 // Builds zen asset and returns the resulting package ID, chunk data buffer, and it's store entry. Zen package conversion does not modify bulk data in any way.
 pub(crate) fn build_serialize_zen_asset(legacy_asset: &FSerializedAssetBundle, container_header_version: EIoContainerHeaderVersion, package_version_fallback: Option<FPackageFileVersion>) -> anyhow::Result<(FPackageId, StoreEntry, Vec<u8>)> {
 
-    let builder = build_zen_asset_internal(legacy_asset, container_header_version, package_version_fallback)?;
+    // Do not allow legacy external arc fixup, just emit the asset that does not require fixup immediately using only the information available from this asset
+    let builder = build_zen_asset_internal(legacy_asset, container_header_version, package_version_fallback, false)?;
 
-    let (store_entry, package_data) = serialize_zen_asset(&builder, legacy_asset)?;
+    let (store_entry, package_data, _) = serialize_zen_asset(&builder, legacy_asset)?;
     Ok((builder.package_id, store_entry, package_data))
 }
 
 // Builds zen asset and writes it into the container using the provided serialized legacy asset and package version
-pub(crate) fn build_zen_asset(legacy_asset: FSerializedAssetBundle, package_name_to_referenced_shader_maps: &HashMap<String, Vec<FSHAHash>>, path: &str, package_version_fallback: Option<FPackageFileVersion>, container_header_version: EIoContainerHeaderVersion) -> anyhow::Result<ConvertedZenAssetBundle> {
+pub(crate) fn build_zen_asset(legacy_asset: FSerializedAssetBundle, package_name_to_referenced_shader_maps: &HashMap<String, Vec<FSHAHash>>, path: &str, package_version_fallback: Option<FPackageFileVersion>, container_header_version: EIoContainerHeaderVersion, allow_fixup: bool) -> anyhow::Result<ConvertedZenAssetBundle> {
 
-    let builder = build_zen_asset_internal(&legacy_asset, container_header_version, package_version_fallback)?;
+    // We want to fixup this asset once we have converted all the packages
+    let final_allow_fixup = container_header_version == EIoContainerHeaderVersion::Initial && allow_fixup;
+    let builder = build_zen_asset_internal(&legacy_asset, container_header_version, package_version_fallback, final_allow_fixup)?;
 
     // Serialize the resulting asset into the container writer
     build_converted_zen_asset(&builder, legacy_asset, path, package_name_to_referenced_shader_maps)

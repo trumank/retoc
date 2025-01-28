@@ -45,6 +45,7 @@ use std::{
     str::FromStr,
     sync::{Arc, Mutex},
 };
+use std::sync::RwLock;
 use strum::{AsRefStr, FromRepr};
 use tracing::instrument;
 use version::EngineVersion;
@@ -1010,6 +1011,9 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
 
     // Convert assets now
     let container_header_version = writer.container_header_version();
+    // Decide whenever we need all packages to be in memory at the same time to perform the fixup or not
+    let needs_asset_import_fixup = container_header_version == EIoContainerHeaderVersion::Initial;
+    
     let process_assets = |tx: std::sync::mpsc::SyncSender<ConvertedZenAssetBundle>| -> Result<()> {
         let process = |path| -> Result<()> {
             verbose!(&log, "converting asset {path:?}");
@@ -1034,6 +1038,7 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
                 UEPath::new(mount_point).join(path).as_str(),
                 Some(args.version.package_file_version()),
                 container_header_version,
+                needs_asset_import_fixup,
             )?;
 
             tx.send(converted)?;
@@ -1056,9 +1061,32 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
         scope.spawn(|_| {
             *result_ref = Some(process_assets(tx));
         });
+        
+        if needs_asset_import_fixup {
+            let mut converted_lookup: HashMap<FPackageId, Arc<RwLock<ConvertedZenAssetBundle>>> = HashMap::new();
+            let mut all_converted: Vec<Arc<RwLock<ConvertedZenAssetBundle>>> = Vec::new();
 
-        for converted in rx {
-            converted.write(&mut writer)?;
+            // Collect all assets into the lookup map first, and also into the processing list
+            for converted in rx {
+                let converted_arc = Arc::new(RwLock::new(converted));
+                converted_lookup.insert(converted_arc.read().unwrap().package_id, converted_arc.clone());
+                all_converted.push(converted_arc);
+            }
+            
+            // Process fixups on all the assets in their original processing order
+            for converted in &all_converted {
+                converted.write().unwrap().fixup_legacy_external_arcs(&converted_lookup)?;
+            }
+            
+            // Write all the assets once fixups are complete
+            for converted in &all_converted {
+                converted.write().unwrap().write(&mut writer)?;
+            }
+        } else {
+            // Write the assets immediately otherwise as they are processed
+            for converted in rx {
+                converted.write(&mut writer)?;
+            }
         }
         Ok(())
     })?;

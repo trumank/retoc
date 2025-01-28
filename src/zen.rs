@@ -130,12 +130,12 @@ impl FZenPackageSummary {
             s.ser(&self.has_versioning_info)?;
             s.ser(&self.header_size)?;
         }
-        
+
         s.ser(&self.name)?;
         if container_header_version == EIoContainerHeaderVersion::Initial {
             s.ser(&self.source_name)?;
         }
-        
+
         s.ser(&self.package_flags)?;
         s.ser(&self.cooked_header_size)?;
 
@@ -589,10 +589,10 @@ impl FExportBundleHeader {
         // For legacy UE4 packages, serial offset of the bundle is not written, it is implied because bundles are always laid out sequentially
         let serial_offset = if container_header_version > EIoContainerHeaderVersion::Initial {
             s.de()?
-        } else { 
-            u64::MAX 
+        } else {
+            u64::MAX
         };
-        
+
         Ok(Self{
             serial_offset,
             first_entry_index: s.de()?,
@@ -602,7 +602,7 @@ impl FExportBundleHeader {
 
     #[instrument(skip_all, name = "FExportBundleHeader")]
     pub(crate) fn serialize<S: Write>(&self, s: &mut S, container_header_version: EIoContainerHeaderVersion) -> Result<()> {
-      
+
         if container_header_version > EIoContainerHeaderVersion::Initial {
             s.ser(&self.serial_offset)?;
         }
@@ -954,7 +954,7 @@ impl FZenPackageHeader {
     }
 
     #[instrument(skip_all, name = "FZenPackageHeader")]
-    pub(crate) fn serialize<S: Write + Seek>(&self, s: &mut S, store_entry: &mut StoreEntry, container_header_version: EIoContainerHeaderVersion) -> Result<()> {
+    pub(crate) fn serialize<S: Write + Seek>(&self, s: &mut S, store_entry: &mut StoreEntry, container_header_version: EIoContainerHeaderVersion) -> Result<Vec<u64>> {
 
         let mut package_summary = self.summary.clone();
         package_summary.has_versioning_info = if self.is_unversioned { 0 } else { 1 };
@@ -968,7 +968,7 @@ impl FZenPackageHeader {
             if package_summary.has_versioning_info != 0 {
                 s.ser(&self.versioning_info)?;
             }
-            
+
             // Serialize name map directly after the package
             self.name_map.serialize(s)?;
         } else {
@@ -1061,6 +1061,8 @@ impl FZenPackageHeader {
         // Write imported package IDs and shader map IDs into the store entry
         store_entry.imported_packages = self.imported_packages.clone();
         store_entry.shader_map_hashes = self.shader_map_hashes.clone();
+        
+        let mut legacy_external_arcs_serialized_offsets: Vec<u64> = Vec::new();
 
         // Write dependency bundles and imported package names in UE5.3+ zen packages
         if container_header_version >= EIoContainerHeaderVersion::NoExportInfo {
@@ -1092,7 +1094,7 @@ impl FZenPackageHeader {
 
             // Write dependency arcs in the new style, starting from UE5.0
             if container_header_version > EIoContainerHeaderVersion::Initial {
-               
+
                 // Write export bundle count into the package store entry, and then write export bundle header for each of them
                 store_entry.export_bundle_count = self.export_bundle_headers.len() as i32;
                 for export_bundle_header in &self.export_bundle_headers {
@@ -1118,13 +1120,25 @@ impl FZenPackageHeader {
                     .collect();
                 let referenced_package_count: i32 = non_empty_dependencies.len() as i32;
                 s.ser(&referenced_package_count)?;
-                
+
                 for package_dependency in non_empty_dependencies {
                     s.ser(&package_dependency.from_package_id)?;
-                    s.ser(&package_dependency.legacy_dependency_arcs)?;
+                    
+                    // Serialize number of dependency arcs to this package
+                    let num_legacy_dependency_arcs: i32 = package_dependency.legacy_dependency_arcs.len() as i32;
+                    s.ser(&num_legacy_dependency_arcs)?;
+                    
+                    // Serialize each individual dependency arc. Track it's serialized position so we can patch it up later
+                    for dependency_arc in &package_dependency.legacy_dependency_arcs {
+                        let dependency_arc_offset = (s.stream_position()? - package_summary_offset);
+                        legacy_external_arcs_serialized_offsets.push(dependency_arc_offset);
+
+                        s.ser(&dependency_arc.from_export_bundle_index)?;
+                        s.ser(&dependency_arc.to_export_bundle_index)?;
+                    }
                 }
             }
-            
+
             // Track the end of the graph data for this package. This is only used and written for legacy UE4 zen packages
             let graph_data_end_offset = (s.stream_position()? - package_summary_offset) as i32;
             package_summary.graph_data_size = graph_data_end_offset - package_summary.graph_data_offset;
@@ -1139,7 +1153,7 @@ impl FZenPackageHeader {
         FZenPackageSummary::serialize(&package_summary, s, container_header_version)?;
         s.seek(SeekFrom::Start(package_header_end_offset))?;
 
-        Ok({})
+        Ok(legacy_external_arcs_serialized_offsets)
     }
 }
 
