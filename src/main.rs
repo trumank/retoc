@@ -340,9 +340,9 @@ fn action_list(args: ActionList, config: Arc<Config>) -> Result<()> {
     let iostore = iostore::open(args.utoc, config)?;
 
     let chunks = if args.all {
-        iostore.chunks()
-    } else {
         iostore.chunks_all()
+    } else {
+        iostore.chunks()
     };
 
     for chunk in chunks {
