@@ -1065,11 +1065,13 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
         if needs_asset_import_fixup {
             let mut converted_lookup: HashMap<FPackageId, Arc<RwLock<ConvertedZenAssetBundle>>> = HashMap::new();
             let mut all_converted: Vec<Arc<RwLock<ConvertedZenAssetBundle>>> = Vec::new();
+            let mut total_package_data_size: usize = 0;
 
             // Collect all assets into the lookup map first, and also into the processing list
             for mut converted in rx {
                 // Write and release bulk data immediately, we do not have enough RAM to keep all the bulk data for all the packages in memory at the same time
                 converted.write_and_release_bulk_data(&mut writer)?;
+                total_package_data_size += converted.package_data_size();
                 
                 // Add the package data and the metadata necessary for the import fixup into the list
                 let converted_arc = Arc::new(RwLock::new(converted));
@@ -1077,7 +1079,7 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
                 all_converted.push(converted_arc);
             }
 
-            log!(log, "Applying import fix-ups to the converted assets");
+            log!(log, "Applying import fix-ups to the converted assets. Package data in memory: {}MB", total_package_data_size / 1024 / 1024);
             prog_ref.inspect(|x| x.set_position(0));
             
             // Process fixups on all the assets in their original processing order

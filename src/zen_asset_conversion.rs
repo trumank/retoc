@@ -25,18 +25,20 @@ fn get_public_export_hash(package_relative_export_path: &str) -> u64 {
     )
 }
 
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Clone, Default)]
 struct ZenLegacyPackageExternalArcFixupData {
     fixup_from_bundle_id: i32,
     from_package_id: FPackageId,
     from_import_index: FPackageObjectIndex,
     from_command_type: EExportCommandType,
+    debug_full_import_name: Option<String>,
 }
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Clone, Default)]
 struct ZenLegacyPackageExportBundleMapping {
     export_index: FPackageObjectIndex,
     export_command_type: EExportCommandType,
     export_bundle_index: i32,
+    debug_full_export_name: Option<String>,
 }
 
 struct ZenPackageBuilder {
@@ -57,6 +59,8 @@ struct ZenPackageBuilder {
     legacy_external_arc_fixup_data: Vec<ZenLegacyPackageExternalArcFixupData>,
     legacy_external_arc_counter: i32,
     legacy_export_bundle_mapping: Vec<ZenLegacyPackageExportBundleMapping>,
+    // full names of package objects by their index, useful for debugging
+    debug_full_package_object_names: HashMap<FPackageIndex, String>,
 }
 
 // Flow is create_asset_builder -> setup_zen_package_summary -> build_zen_import_map -> build_zen_export_map -> build_zen_preload_dependencies -> serialize_zen_asset
@@ -75,6 +79,7 @@ fn create_asset_builder(package: FLegacyPackageHeader, container_header_version:
         legacy_external_arc_fixup_data: Vec::new(),
         legacy_external_arc_counter: 0,
         legacy_export_bundle_mapping: Vec::new(),
+        debug_full_package_object_names: HashMap::new(),
     }
 }
 
@@ -209,6 +214,9 @@ fn convert_legacy_import_to_object_index(builder: &mut ZenPackageBuilder, import
     }
     let package_id = FPackageId::from_name(&package_name);
 
+    // Store the debug mapping of the ID of this import to the full name of it
+    builder.debug_full_package_object_names.insert(FPackageIndex::create_import(import_index as u32), full_import_name.clone());
+
     // New style imports with export hashes and package IDs
     let result_package_import = if builder.container_header_version > EIoContainerHeaderVersion::Initial {
         // This is a normal import of the export of another package otherwise. Create FPackageId from package ID and public export hash from package relative path
@@ -233,6 +241,7 @@ fn convert_legacy_import_to_object_index(builder: &mut ZenPackageBuilder, import
     
     // Map the resulting import to the original package ID it came from. This is necessary to resolve legacy UE4 imports into package ID
     builder.import_to_package_id_lookup.insert(result_package_import.clone(), package_id.clone());
+
     Ok(result_package_import)
 }
 
@@ -278,14 +287,14 @@ fn build_zen_export_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
         let template_index = remap_package_index_reference(builder, object_export.template_index);
 
         let should_have_public_export_hash = (object_export.object_flags & EObjectFlags::Public as u32) != 0 || object_export.generate_public_hash;
+        let (export_package_name, full_export_name) = resolve_legacy_package_object(builder, FPackageIndex::create_export(export_index as u32))?;
+        
         let public_export_hash: u64 = if should_have_public_export_hash {
-            let (export_package_name, full_export_name) = resolve_legacy_package_object(builder, FPackageIndex::create_export(export_index as u32))?;
-            
             // Use global import index converted to the raw representation for legacy packages, and get_public_export_hash otherwise
             if builder.container_header_version > EIoContainerHeaderVersion::Initial {
                 get_public_export_hash(&full_export_name[export_package_name.len() + 1..])
             } else {
-                FPackageObjectIndex::create_legacy_package_import_from_path(&full_export_name).raw_index()
+                FPackageObjectIndex::create_legacy_package_import_from_path(&full_export_name).to_raw()
             }
         } else { 0 };
 
@@ -296,6 +305,9 @@ fn build_zen_export_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
         } else {
             EExportFilterFlags::None
         };
+
+        // Store the debug mapping of the ID of this import to the full name of it
+        builder.debug_full_package_object_names.insert(FPackageIndex::create_export(export_index as u32), full_export_name.clone());
 
         let zen_export = FExportMapEntry{
             cooked_serial_offset,
@@ -368,11 +380,13 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
         // If we perform the fix-up on the serialized package data later, store the information necessary to perform the fixup of another package imports
         if is_public_export && builder.fixup_legacy_external_arcs && builder.container_header_version == EIoContainerHeaderVersion::Initial {
             let export_global_index = builder.zen_package.export_map[export_index].legacy_global_import_index();
+            let full_export_name = builder.debug_full_package_object_names.get(&FPackageIndex::create_export(export_index as u32)).cloned();
 
             builder.legacy_export_bundle_mapping.push(ZenLegacyPackageExportBundleMapping{
                 export_index: export_global_index,
                 export_command_type,
                 export_bundle_index: current_export_bundle_header_index as i32,
+                debug_full_export_name: full_export_name,
             });
         }
 
@@ -440,11 +454,14 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
                     let from_export_bundle_index: i32 = if mut_builder.fixup_legacy_external_arcs {
                         
                         let current_fixup_id = mut_builder.legacy_external_arc_counter;
+                        let full_import_name = mut_builder.debug_full_package_object_names.get(&dependency_node.package_index).cloned();
+
                         let fixup_data = ZenLegacyPackageExternalArcFixupData{
                             fixup_from_bundle_id: current_fixup_id,
                             from_package_id: imported_package_id,
                             from_import_index: package_object_import,
                             from_command_type,
+                            debug_full_import_name: full_import_name,
                         };
                         // Add the fixup data to the hash map and increment the counter, and write current fixup ID as the bundle index
                         mut_builder.legacy_external_arc_fixup_data.push(fixup_data);
@@ -833,6 +850,7 @@ fn build_converted_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: F
 
     Ok(ConvertedZenAssetBundle {
         package_id: builder.package_id,
+        package_name: builder.legacy_package.summary.package_name.clone(),
         path: path.to_string(),
         store_entry: result_store_entry,
         package_buffer: result_package_buffer,
@@ -849,6 +867,7 @@ fn build_converted_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: F
 
 pub(crate) struct ConvertedZenAssetBundle {
     pub(crate) package_id: FPackageId,
+    pub(crate) package_name: String,
     path: String,
     store_entry: StoreEntry,
     package_buffer: Vec<u8>,
@@ -863,6 +882,9 @@ pub(crate) struct ConvertedZenAssetBundle {
     legacy_export_bundle_mapping_data: Vec<ZenLegacyPackageExportBundleMapping>,
 }
 impl ConvertedZenAssetBundle {
+    pub(crate) fn package_data_size(&self) -> usize {
+        self.package_buffer.len()
+    }
     pub(crate) fn fixup_legacy_external_arcs(&mut self, global_package_lookup: &HashMap<FPackageId, Arc<RwLock<ConvertedZenAssetBundle>>>, log: &Log) -> anyhow::Result<()> {
         
         for legacy_serialized_offset in &self.legacy_external_arc_serialized_offsets {
@@ -886,12 +908,18 @@ impl ConvertedZenAssetBundle {
                 let referenced_asset_bundle = referenced_asset_bundle_lock.read().unwrap();
                 let export_bundle_mapping = referenced_asset_bundle.legacy_export_bundle_mapping_data.iter()
                     .find(|x| x.export_index == fixup_data.from_import_index && x.export_command_type == fixup_data.from_command_type)
-                    .cloned().ok_or_else(|| { anyhow!("Failed to find export in the package {} mapping to the import in package {}", referenced_asset_bundle.package_id, self.package_id) })?;
+                    .cloned().ok_or_else(|| {
+                        dbg!(referenced_asset_bundle.legacy_export_bundle_mapping_data.clone());
+                        anyhow!("Failed to find export in the package {} ({}) mapping to the import {} (full name: {}) dependency {:?} in package {} ({})",
+                            referenced_asset_bundle.package_name.clone(), referenced_asset_bundle.package_id,
+                            fixup_data.from_import_index, fixup_data.debug_full_import_name.clone().unwrap_or(String::from("unknown")), fixup_data.from_command_type,
+                            self.package_name.clone(), self.package_id) 
+                    })?;
                 
-                //if log.verbose_enabled() {
+                if log.debug_enabled() {
                     log!(log, "Applying fixup to package {} for import of package {} export {} command {:?}. Resolved export bundle for the export: {}",
                         self.package_id.clone(), fixup_data.from_package_id.clone(), fixup_data.from_import_index, fixup_data.from_command_type, export_bundle_mapping.export_bundle_index);
-                //}
+                }
                 
                 // We found the export bundle this dependency maps to
                 export_bundle_mapping.export_bundle_index
@@ -1069,4 +1097,3 @@ mod test {
         Ok(())
     }
 }
-
