@@ -703,7 +703,7 @@ fn resolve_legacy_external_package_bundle_dependency(builder: &LegacyAssetBuilde
 
     // Sort the export bundle entries in their load order
     let mut from_export_bundle_list: Vec<ExternalDependencyBundleExportState> = from_export_bundle_entries.values().cloned().collect();
-    from_export_bundle_list.sort_by_key(|x| x.load_order_index);
+    from_export_bundle_list.sort_by_key(|x| -x.load_order_index);
 
     // Resolve the first export from that package that exists in the import map of this package
     let from_import_index: Option<(FPackageIndex, ExternalDependencyBundleExportState)> = from_export_bundle_list.iter()
@@ -727,8 +727,8 @@ fn resolve_legacy_external_package_bundle_dependency(builder: &LegacyAssetBuilde
     if !import_data.has_been_created {
         return Ok((import_index, EExportCommandType::Serialize))
     }
-    // Package has been both created and serialized in the same bundle. Assume create dependency
-    Ok((import_index, EExportCommandType::Create))
+    // Package has been both created and serialized in the same bundle. Assume Serialize dependency
+    Ok((import_index, EExportCommandType::Serialize))
 }
 
 #[derive(Clone)]
@@ -883,7 +883,7 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
 
                 let to_export_bundle = builder.zen_package.export_bundle_headers[bundle_to_bundle_dependency_arc.to_export_bundle_index as usize].clone();
                 let to_export_bundle_entry = builder.zen_package.export_bundle_entries[to_export_bundle.first_entry_index as usize].clone();
-                
+
                 let to_export_index = to_export_bundle_entry.local_export_index as usize;
                 let to_command_type = to_export_bundle_entry.command_type;
 
