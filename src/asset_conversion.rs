@@ -831,7 +831,7 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
     }
 
     // Process internal dependencies (export bundle to export bundle, e.g. export to export)
-    // We link first Serialize element of the "to" bundle to the last element of the "from" bundle
+    // We link first element of the "to" bundle to the last element of the "from" bundle
     for internal_arc in internal_dependency_arcs {
 
         let from_export_bundle = builder.zen_package.export_bundle_headers[internal_arc.from_export_bundle_index as usize].clone();
@@ -842,9 +842,10 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
         let from_command_type = from_export_bundle_last_element.command_type;
 
         // Try to find the first Serialize element in the To bundle and not just the first element, since that works better for preventing circular dependencies
-        let to_export_bundle_entry = find_first_serialize_export_in_bundle(&builder.zen_package, internal_arc.to_export_bundle_index as usize);
-        let to_export_index = to_export_bundle_entry.local_export_index as usize;
-        let to_command_type = to_export_bundle_entry.command_type;
+        let to_export_bundle = builder.zen_package.export_bundle_headers[internal_arc.to_export_bundle_index as usize].clone();
+        let to_export_bundle_first_element = builder.zen_package.export_bundle_entries[to_export_bundle.first_entry_index as usize].clone();
+        let to_export_index = to_export_bundle_first_element.local_export_index as usize;
+        let to_command_type = to_export_bundle_first_element.command_type;
 
         add_export_dependency(from_export_index, to_export_index, from_command_type, to_command_type)?;
     }
