@@ -796,47 +796,21 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
     for bundle_header_index in 0..builder.zen_package.export_bundle_headers.len() {
 
         let bundle_header = builder.zen_package.export_bundle_headers[bundle_header_index].clone();
+        for i in 1..bundle_header.entry_count {
 
-        // Batch bundle into groups. Each group depends on the previous group, but all elements inside the same group can be loaded independently
-        let mut bundle_groups: Vec<ExportBundleGroup> = Vec::new();
-        let mut current_bundle_group: Option<ExportBundleGroup> = None;
+            let from_bundle_entry_index = bundle_header.first_entry_index + i - 1;
+            let from_bundle_entry = builder.zen_package.export_bundle_entries[from_bundle_entry_index as usize].clone();
 
-        // Collect individual bundle entries into groups
-        for i in 0..bundle_header.entry_count {
-            let bundle_entry_index = bundle_header.first_entry_index + i;
-            let bundle_entry = builder.zen_package.export_bundle_entries[bundle_entry_index as usize].clone();
+            let to_bundle_entry_index = bundle_header.first_entry_index + i;
+            let to_bundle_entry = builder.zen_package.export_bundle_entries[to_bundle_entry_index as usize].clone();
 
-            // If this entry matches the command type of the previous group, append it to the previous group
-            // Note that we only batch Create commands together presently, because batching other commands together is potentially unsafe
-            if current_bundle_group.is_some() && current_bundle_group.as_ref().unwrap().command_type == bundle_entry.command_type && bundle_entry.command_type == EExportCommandType::Create {
-                current_bundle_group.as_mut().unwrap().export_indices.push(bundle_entry.local_export_index as usize);
-            } else {
-                // This is a bundle entry of the different type. Append the previous bundle group and make a new one for this entry
-                // Make sure that the previously bundle actually exists, it might not if this is the first entry
-                if current_bundle_group.is_some() {
-                    bundle_groups.push(current_bundle_group.unwrap());
-                }
-                // Create a new group from the current entry
-                let new_export_indices = vec![bundle_entry.local_export_index as usize];
-                current_bundle_group = Some(ExportBundleGroup { export_indices: new_export_indices, command_type: bundle_entry.command_type });
-            }
-        }
-        // Handle the last bundle group
-        if current_bundle_group.is_some() {
-            bundle_groups.push(current_bundle_group.unwrap());
-        }
+            let from_index = FPackageIndex::create_export(from_bundle_entry.local_export_index);
+            let from_command_type = from_bundle_entry.command_type;
 
-        // Chain link adjacent groups together
-        for i in 1..bundle_groups.len() {
-            let from_bundle_group = bundle_groups[i - 1].clone();
-            let to_bundle_group = bundle_groups[i].clone();
+            let to_export_index = to_bundle_entry.local_export_index as usize;
+            let to_command_type = to_bundle_entry.command_type;
 
-            // Link each element of the "from" bundle group to each element of the "to" bundle group
-            for from_export_index in &from_bundle_group.export_indices {
-                for to_export_index in &to_bundle_group.export_indices {
-                    add_export_dependency(FPackageIndex::create_export(*from_export_index as u32), *to_export_index, from_bundle_group.command_type, to_bundle_group.command_type)?;
-                }
-            }
+            add_export_dependency(from_index, to_export_index, from_command_type, to_command_type)?;
         }
     }
 
