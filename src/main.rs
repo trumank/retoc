@@ -1093,7 +1093,7 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
             // Write all the package data for each asset once fixups are complete
             for converted in &all_converted {
                 converted.write().unwrap().write_package_data(&mut writer)?;
-                prog_ref.inspect(|x| x.set_position(1));
+                prog_ref.inspect(|x| x.inc(1));
             }
         } else {
             // Write the assets immediately otherwise as they are processed
