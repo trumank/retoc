@@ -3,7 +3,7 @@ use patternsleuth::{
         ensure_one,
         futures::future::join_all,
         impl_collector, impl_resolver_singleton, impl_try_collector,
-        unreal::{fname::FNameToString, util},
+        unreal::{engine_version::EngineVersion, fname::FNameToString, util},
     },
     scanner::Pattern,
 };
@@ -11,6 +11,7 @@ use patternsleuth::{
 impl_try_collector! {
     #[derive(Debug, PartialEq)]
     pub struct ResolutionCore {
+        pub engine_version: EngineVersion,
         pub fname_to_string: FNameToString,
         pub hooks: ResolutionHooks,
     }
