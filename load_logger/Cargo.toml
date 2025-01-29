@@ -1,0 +1,16 @@
+[package]
+name = "load_logger"
+edition = "2021"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = "1.0.95"
+patternsleuth = { git = "https://github.com/trumank/patternsleuth", version = "0.1.0", features = ["image-pe", "process-internal"] }
+proxy_dll = { git = "https://github.com/trumank/proxy_dll.git", version = "0.1.0" }
+retour = { git = "https://github.com/Hpmason/retour-rs", version = "0.4.0-alpha.3", features = ["static-detour"] }
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
