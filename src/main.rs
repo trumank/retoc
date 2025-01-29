@@ -973,7 +973,7 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
             if files_set.contains(uexp.as_str()) {
                 asset_paths.push(path);
             } else {
-                log!(&log, "Skipping {path:?} as it has no .uexp");
+                log!(&log, "Skipping {path:?} because it does not have a split exports file. Are you sure the package is cooked?");
             }
         }
         let is_shader_lib = Some("ushaderbytecode") == ext;
