@@ -971,7 +971,7 @@ checksum = "1261fe7e33c73b354eab43b1273a57c8f967d0391e80353e51f764ac02cf6775"
 [[package]]
 name = "oodle_loader"
 version = "0.2.2"
-source = "git+https://github.com/trumank/repak.git#29bf6e785952e3969fa3abe170b095ee7f5bf46a"
+source = "git+https://github.com/trumank/repak.git#cff54acadb20f5c0f86c4bfaf05bb66cd6adbb21"
 dependencies = [
  "hex",
  "libloading",
@@ -1100,7 +1100,7 @@ dependencies = [
 [[package]]
 name = "repak"
 version = "0.2.2"
-source = "git+https://github.com/trumank/repak.git#29bf6e785952e3969fa3abe170b095ee7f5bf46a"
+source = "git+https://github.com/trumank/repak.git#cff54acadb20f5c0f86c4bfaf05bb66cd6adbb21"
 dependencies = [
  "aes",
  "byteorder",
