@@ -851,12 +851,13 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
     }
 
     // Process external dependencies (import to export bundle, e.g. import to export)
-    // We link all the external arcs to the first element of the "to" export bundle. This is not technically correct, but since we enforce the bundle dependency initialization order, this works
+    // We link all the external arcs to the first element of the "to" export bundle
     let all_external_arcs: Vec<FExternalDependencyArc> = builder.zen_package.external_package_dependencies.iter().flat_map(|x| { x.external_dependency_arcs.clone() }).collect();
     for external_arc in all_external_arcs {
 
         // Try to find the first Serialize element in the To bundle and not just the first element, since that works better for preventing circular dependencies
-        let to_export_bundle_entry = find_first_serialize_export_in_bundle(&builder.zen_package, external_arc.to_export_bundle_index as usize);
+        let to_export_bundle = builder.zen_package.export_bundle_headers[external_arc.to_export_bundle_index as usize].clone();
+        let to_export_bundle_entry = builder.zen_package.export_bundle_entries[to_export_bundle.first_entry_index as usize].clone();
         let to_export_index = to_export_bundle_entry.local_export_index as usize;
         let to_command_type = to_export_bundle_entry.command_type;
 
