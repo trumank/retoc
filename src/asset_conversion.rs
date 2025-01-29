@@ -14,7 +14,6 @@ use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Seek, SeekFrom, Write};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 use crate::container_header::EIoContainerHeaderVersion;
-use crate::version_heuristics::{heuristic_can_downgrade_import_preload_dependency};
 
 // Cache that stores the packages that were retrieved for the purpose of dependency resolution, to avoid loading and parsing them multiple times
 pub(crate) struct FZenPackageContext<'a> {
@@ -679,7 +678,7 @@ struct ExternalDependencyBundleExportState {
     load_order_index: i64,
 }
 
-fn resolve_legacy_external_package_bundle_dependency(builder: &LegacyAssetBuilder, from_package: &FZenPackageHeader, from_bundle_index: usize, allow_blueprint_downgrade: bool) -> anyhow::Result<(FPackageIndex, EExportCommandType)> {
+fn resolve_legacy_external_package_bundle_dependency(builder: &LegacyAssetBuilder, from_package: &FZenPackageHeader, from_bundle_index: usize) -> anyhow::Result<(FPackageIndex, EExportCommandType)> {
     let from_bundle_header = from_package.export_bundle_headers[from_bundle_index].clone();
 
     // Resolve indices of all exports contained in the "from" export bundle
@@ -702,9 +701,9 @@ fn resolve_legacy_external_package_bundle_dependency(builder: &LegacyAssetBuilde
         }
     }
 
-    // Sort the export bundle entries in their reverse load order, so that we evaluate later load entries first
+    // Sort the export bundle entries in their load order
     let mut from_export_bundle_list: Vec<ExternalDependencyBundleExportState> = from_export_bundle_entries.values().cloned().collect();
-    from_export_bundle_list.sort_by_key(|x| -x.load_order_index);
+    from_export_bundle_list.sort_by_key(|x| x.load_order_index);
 
     // Resolve the first export from that package that exists in the import map of this package
     let from_import_index: Option<(FPackageIndex, ExternalDependencyBundleExportState)> = from_export_bundle_list.iter()
@@ -728,13 +727,8 @@ fn resolve_legacy_external_package_bundle_dependency(builder: &LegacyAssetBuilde
     if !import_data.has_been_created {
         return Ok((import_index, EExportCommandType::Serialize))
     }
-
-    // Otherwise, it could be either a Create or a Serialize dependency. Use the heuristic to decide if it can be a Create dependency
-    if heuristic_can_downgrade_import_preload_dependency(&builder.legacy_package, import_index.to_import_index() as usize, allow_blueprint_downgrade) {
-        return Ok((import_index, EExportCommandType::Create))
-    }
-    // Conservatively assume Serialize dependency otherwise
-    Ok((import_index, EExportCommandType::Serialize))
+    // Package has been both created and serialized in the same bundle. Assume create dependency
+    Ok((import_index, EExportCommandType::Create))
 }
 
 #[derive(Clone)]
@@ -775,20 +769,6 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
         }
         Ok({})
     };
-
-
-    // Find first export in the export bundle with the Serialize command, or returns the first export in the bundle if it has no Serialize commands
-    fn find_first_serialize_export_in_bundle(zen_package: &FZenPackageHeader, bundle_index: usize) -> FExportBundleEntry {
-        let to_export_bundle = zen_package.export_bundle_headers[bundle_index].clone();
-
-        let first_entry_index = to_export_bundle.first_entry_index as usize;
-        let last_entry_index = (to_export_bundle.first_entry_index + to_export_bundle.entry_count) as usize;
-        let to_export_bundle_entries = &zen_package.export_bundle_entries[first_entry_index..last_entry_index];
-
-        to_export_bundle_entries.iter()
-            .find(|x| x.command_type == EExportCommandType::Serialize)
-            .or(to_export_bundle_entries.first()).unwrap().clone()
-    }
 
     // Process intra-export bundle dependencies. The sequence in which elements are laid out in the export bundle determines their dependencies relative to each other
     // This introduces some additional dependencies to specific objects and forces the linker to load them exactly in the bundle order,
@@ -877,9 +857,6 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
     // Note that this might result in resolution and loading of new packages, which is why this function can fail
     if builder.zen_package.container_header_version == EIoContainerHeaderVersion::Initial {
 
-        // Allow downgrading blueprint dependencies for all assets for now. If there are any issues spotted in runtime related to this, we could only limit this to BP assets and data tables
-        let allow_blueprint_downgrade = true;
-
         for external_package_dependency in &builder.zen_package.external_package_dependencies {
 
             let imported_package_id = external_package_dependency.from_package_id.clone();
@@ -904,14 +881,13 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
                     resolved_import_package.as_ref().export_bundle_headers.len() - 1
                 } else { bundle_to_bundle_dependency_arc.from_export_bundle_index as usize };
 
-                let (from_import_index, from_command_type) = resolve_legacy_external_package_bundle_dependency(
-                    builder, resolved_import_package.as_ref(), from_bundle_index, allow_blueprint_downgrade)?;
-
-                // Resolve the local bundle to which this import points
-                // Try to find the first Serialize element in the To bundle and not just the first element, since that works better for preventing circular dependencies
-                let to_export_bundle_entry = find_first_serialize_export_in_bundle(&builder.zen_package, bundle_to_bundle_dependency_arc.to_export_bundle_index as usize);
+                let to_export_bundle = builder.zen_package.export_bundle_headers[bundle_to_bundle_dependency_arc.to_export_bundle_index as usize].clone();
+                let to_export_bundle_entry = builder.zen_package.export_bundle_entries[to_export_bundle.first_entry_index as usize].clone();
+                
                 let to_export_index = to_export_bundle_entry.local_export_index as usize;
                 let to_command_type = to_export_bundle_entry.command_type;
+
+                let (from_import_index, from_command_type) = resolve_legacy_external_package_bundle_dependency(builder, resolved_import_package.as_ref(), from_bundle_index)?;
 
                 add_export_dependency(from_import_index, to_export_index, from_command_type, to_command_type)?;
             }
