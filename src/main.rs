@@ -34,6 +34,7 @@ use ser::*;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_with::serde_as;
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::fmt::{Debug, Display, Formatter};
 use std::io::BufWriter;
 use std::path::Path;
@@ -960,11 +961,20 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
         }
     };
 
-    for path in input.list_files()? {
-        let ext = UEPath::new(&path).extension();
+    let files = input.list_files()?;
+    let files_set: HashSet<&str> = HashSet::from_iter(files.iter().map(String::as_str));
+
+    for path in &files {
+        let ue_path = UEPath::new(&path);
+        let ext = ue_path.extension();
         let is_asset = [Some("uasset"), Some("umap")].contains(&ext);
         if is_asset && check_path(&path) {
-            asset_paths.push(path.to_string());
+            let uexp = ue_path.with_extension("uexp");
+            if files_set.contains(uexp.as_str()) {
+                asset_paths.push(path);
+            } else {
+                log!(&log, "Skipping {path:?} as it has no .uexp");
+            }
         }
         let is_shader_lib = Some("ushaderbytecode") == ext;
         if is_shader_lib && check_path(&path) {
