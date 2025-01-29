@@ -1040,8 +1040,13 @@ fn resolve_prestream_package_imports(builder: &mut LegacyAssetBuilder) -> anyhow
 }
 
 fn create_null_import_map_entry(builder: &mut LegacyAssetBuilder) -> FObjectImport {
-    let null_name = builder.legacy_package.name_map.store("None");
-    FObjectImport{class_package: null_name, class_name: null_name, outer_index: FPackageIndex::create_null(), object_name: null_name, is_optional: false}
+    let class_package = builder.legacy_package.name_map.store(CORE_OBJECT_PACKAGE_NAME);
+    let class_name = builder.legacy_package.name_map.store(PACKAGE_CLASS_NAME);
+    // Emit reference to the /Engine/Transient package (GetTransientPackage()). This will still resolve into a real package, resulting in no warning
+    let object_name = builder.legacy_package.name_map.store("/Engine/Transient");
+
+    // Since this import has no outer index, it has to be a Package import, otherwise it triggers a check in AsyncLoading.cpp
+    FObjectImport{class_package, class_name, outer_index: FPackageIndex::create_null(), object_name, is_optional: false}
 }
 
 fn finalize_asset(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
