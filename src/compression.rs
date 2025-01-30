@@ -5,8 +5,9 @@ use strum::{AsRefStr, EnumString, VariantArray};
 #[derive(Debug, Clone, Copy, EnumString, AsRefStr, VariantArray)]
 pub enum CompressionMethod {
     Zlib,
-    Oodle,
+    Zstd,
     LZ4,
+    Oodle,
 }
 impl CompressionMethod {
     pub(crate) fn from_str_ignore_case(value: &str) -> Option<Self> {
@@ -28,6 +29,10 @@ pub fn compress<S: Write>(
             encoder.write_all(input)?;
             encoder.finish()?;
         }
+        CompressionMethod::Zstd => {
+            let buf = zstd::stream::encode_all(input, 0)?;
+            output.write_all(&buf)?;
+        }
         CompressionMethod::LZ4 => {
             let buf = lz4_flex::block::compress(input);
             output.write_all(&buf)?;
@@ -48,6 +53,9 @@ pub fn decompress(compression: CompressionMethod, input: &[u8], output: &mut [u8
     match compression {
         CompressionMethod::Zlib => {
             flate2::read::ZlibDecoder::new(input).read_exact(output)?;
+        }
+        CompressionMethod::Zstd => {
+            zstd::bulk::decompress_to_buffer(input, output)?;
         }
         CompressionMethod::LZ4 => {
             lz4_flex::block::decompress_into(input, output).unwrap();

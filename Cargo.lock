@@ -1122,6 +1122,7 @@ dependencies = [
  "strum",
  "tracing",
  "typed-path",
+ "zstd",
 ]
 
 [[package]]
