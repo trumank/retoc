@@ -768,41 +768,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "iostore"
-version = "0.0.0"
-dependencies = [
- "aes",
- "anyhow",
- "base64",
- "bitflags",
- "blake3",
- "byteorder",
- "cityhasher",
- "clap",
- "flate2",
- "fs-err",
- "hex",
- "indexmap 2.7.0",
- "indicatif",
- "itertools",
- "key-mutex",
- "lz4_flex",
- "oodle_loader",
- "pariter",
- "pretty_assertions",
- "rayon",
- "repak",
- "ser-hex",
- "serde",
- "serde_json",
- "serde_with",
- "sha1",
- "strum",
- "tracing",
- "typed-path",
-]
-
-[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1122,6 +1087,41 @@ dependencies = [
  "strum",
  "thiserror",
  "zstd",
+]
+
+[[package]]
+name = "retoc"
+version = "0.0.0"
+dependencies = [
+ "aes",
+ "anyhow",
+ "base64",
+ "bitflags",
+ "blake3",
+ "byteorder",
+ "cityhasher",
+ "clap",
+ "flate2",
+ "fs-err",
+ "hex",
+ "indexmap 2.7.0",
+ "indicatif",
+ "itertools",
+ "key-mutex",
+ "lz4_flex",
+ "oodle_loader",
+ "pariter",
+ "pretty_assertions",
+ "rayon",
+ "repak",
+ "ser-hex",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "sha1",
+ "strum",
+ "tracing",
+ "typed-path",
 ]
 
 [[package]]

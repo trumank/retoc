@@ -1,5 +1,5 @@
 [package]
-name = "iostore"
+name = "retoc"
 edition = "2021"
 
 [workspace]
