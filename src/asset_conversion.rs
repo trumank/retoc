@@ -680,59 +680,6 @@ struct ExternalDependencyBundleExportState {
     load_order_index: i64,
 }
 
-fn resolve_legacy_external_package_bundle_dependency(builder: &LegacyAssetBuilder, from_package: &FZenPackageHeader, from_bundle_index: usize) -> anyhow::Result<(FPackageIndex, EExportCommandType)> {
-    let from_bundle_header = from_package.export_bundle_headers[from_bundle_index].clone();
-
-    // Resolve indices of all exports contained in the "from" export bundle
-    let mut from_export_bundle_entries: HashMap<FPackageObjectIndex, ExternalDependencyBundleExportState> = HashMap::new();
-
-    for i in 0..from_bundle_header.entry_count {
-        let from_bundle_entry_index = (from_bundle_header.first_entry_index + i) as usize;
-        let from_bundle_entry = from_package.export_bundle_entries[from_bundle_entry_index].clone();
-        let from_export_index = from_package.export_map[from_bundle_entry.local_export_index as usize].legacy_global_import_index();
-
-        // Global import index can be null for non-public exports, so do not add them as potential imports
-        if !from_export_index.is_null() {
-            let from_command_type = from_bundle_entry.command_type;
-            let export_state: &mut ExternalDependencyBundleExportState = from_export_bundle_entries.entry(from_export_index).or_default();
-
-            export_state.import_index = from_export_index;
-            export_state.load_order_index = i as i64;
-            export_state.has_been_created |= from_command_type == EExportCommandType::Create;
-            export_state.has_been_serialized |= from_command_type == EExportCommandType::Serialize;
-        }
-    }
-
-    // Sort the export bundle entries in their load order
-    let mut from_export_bundle_list: Vec<ExternalDependencyBundleExportState> = from_export_bundle_entries.values().cloned().collect();
-    from_export_bundle_list.sort_by_key(|x| -x.load_order_index);
-
-    // Resolve the first export from that package that exists in the import map of this package
-    let from_import_index: Option<(FPackageIndex, ExternalDependencyBundleExportState)> = from_export_bundle_list.iter()
-        .find_map(|bundle_export_state| {
-            builder.zen_import_lookup.get(&bundle_export_state.import_index)
-                .map(|package_id| (package_id.clone(), bundle_export_state.clone()))
-        } );
-
-    // We should always have an import map entry for this dependency, since zen never strips any import map entries or introduces dependencies that did not exist in the original asset
-    // Which is why failure of resolving the preload dependency import index is an asset extraction failure and not just a warning as it is when resolving imports
-    if from_import_index.is_none() {
-        bail!("Failed to resolve external dependency on the package {} export bundle {} to package {}", from_package.package_name(), from_bundle_index, builder.zen_package.package_name());
-    }
-    let (import_index, import_data) = from_import_index.unwrap();
-
-    // If this export has not been serialized in this bundle, the dependency would always be Create
-    if !import_data.has_been_serialized {
-        return Ok((import_index, EExportCommandType::Create))
-    }
-    // If export has not been created in this bundle, it has been created in the previous bundle, and as such the dependency would always be Serialize
-    if !import_data.has_been_created {
-        return Ok((import_index, EExportCommandType::Serialize))
-    }
-    // Package has been both created and serialized in the same bundle. Assume Serialize dependency
-    Ok((import_index, EExportCommandType::Serialize))
-}
-
 #[derive(Clone)]
 struct ExportBundleGroup {
     export_indices: Vec<usize>,
@@ -859,38 +806,60 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
     // Note that this might result in resolution and loading of new packages, which is why this function can fail
     if builder.zen_package.container_header_version == EIoContainerHeaderVersion::Initial {
 
-        for external_package_dependency in &builder.zen_package.external_package_dependencies {
+        for external_package_dependency in builder.zen_package.external_package_dependencies.clone() {
 
             let imported_package_id = external_package_dependency.from_package_id.clone();
-
-            // Do not attempt to resolve dependencies that map to the localized versions of the imported package. Such dependencies will not be present in the imported package IDs, so skip them
-            if !builder.zen_package.imported_packages.contains(&imported_package_id) {
-                continue;
-            }
             let import_package_result = builder.package_context.lookup(imported_package_id.clone());
 
-            // Failure to look up the optional dependency on the failed import is not fatal, and in fact should not even be logged, since the relevant package will already be logged during import map resolution
+            // If we failed to look up a preload dependency, it is pretty bad for the global order, but should not stop us from attempting to load the package
             if import_package_result.is_err() {
+                let loading_error_message = import_package_result.unwrap_err().to_string();
+                if !loading_error_message.contains("failed loading previously") {
+                    log!(builder.package_context.log, "Failed to resolve a preload dependency on package {} for package {} ({}): {}", 
+                       imported_package_id, builder.package_id, builder.zen_package.package_name(), loading_error_message);
+                }
                 continue;
             }
             let resolved_import_package = import_package_result?;
 
-            // Link last element from the from export bundle to the first element of to export bundle
+            // Link the last element from the "from" export bundle to the first element of the "to" export bundle
             for bundle_to_bundle_dependency_arc in &external_package_dependency.legacy_dependency_arcs {
 
                 // Handle special case: -1 value as from bundle index means depend on the last bundle present in the from package. This is used for importing base game packages in the DLCs, as well as in mods
                 let from_bundle_index = if bundle_to_bundle_dependency_arc.from_export_bundle_index == -1 {
                     resolved_import_package.as_ref().export_bundle_headers.len() - 1
                 } else { bundle_to_bundle_dependency_arc.from_export_bundle_index as usize };
-
+                
+                // Resolve the last element of the from export bundle
+                let from_export_bundle = resolved_import_package.export_bundle_headers[from_bundle_index].clone();
+                let from_export_bundle_last_element_index = (from_export_bundle.first_entry_index + from_export_bundle.entry_count - 1) as usize;
+                let from_export_bundle_entry = resolved_import_package.export_bundle_entries[from_export_bundle_last_element_index].clone();
+                
+                // Create fully resolved zen import from that export
+                let resolved_from_export_entry = resolved_import_package.export_map[from_export_bundle_entry.local_export_index as usize].clone();
+                let resolved_from_import_result = resolve_package_export_internal(&builder.package_context, &resolved_import_package, &resolved_from_export_entry);
+                
+                // Failure to create a full zen import is pretty bad here as well, but could still potentially be recovered from
+                if resolved_from_import_result.is_err() {
+                    let resolution_error_message = resolved_from_import_result.unwrap_err().to_string();
+                    log!(builder.package_context.log, "Failed to resolve a preload dependency on package {} ({}) export {} for package {} ({}): {}", 
+                            imported_package_id, resolved_import_package.package_name(), from_export_bundle_entry.local_export_index,
+                            builder.package_id, builder.zen_package.package_name(), resolution_error_message);
+                    continue;
+                }
+                
+                // Add the entry into the import table if it does not exist there yet to get the resulting import index
+                let from_import_index = find_or_add_resolved_import(builder, &resolved_from_import_result?);
+                let from_command_type = from_export_bundle_entry.command_type;
+                
+                // Resolve the first element of the to export bundle
                 let to_export_bundle = builder.zen_package.export_bundle_headers[bundle_to_bundle_dependency_arc.to_export_bundle_index as usize].clone();
                 let to_export_bundle_entry = builder.zen_package.export_bundle_entries[to_export_bundle.first_entry_index as usize].clone();
 
                 let to_export_index = to_export_bundle_entry.local_export_index as usize;
                 let to_command_type = to_export_bundle_entry.command_type;
 
-                let (from_import_index, from_command_type) = resolve_legacy_external_package_bundle_dependency(builder, resolved_import_package.as_ref(), from_bundle_index)?;
-
+                // Add the resulting preload dependency
                 add_export_dependency(from_import_index, to_export_index, from_command_type, to_command_type)?;
             }
         }
