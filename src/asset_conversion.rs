@@ -1018,9 +1018,8 @@ fn resolve_prestream_package_imports(builder: &mut LegacyAssetBuilder) -> anyhow
 fn create_null_import_map_entry(builder: &mut LegacyAssetBuilder) -> FObjectImport {
     let class_package = builder.legacy_package.name_map.store(CORE_OBJECT_PACKAGE_NAME);
     let class_name = builder.legacy_package.name_map.store(PACKAGE_CLASS_NAME);
-    // Use None as the package name to make sure such a package will never exist and this import will always resolve to nullptr
-    // We could make it resolve into /Engine/Transient, but this could cause issues because import class would not match the class expected by the serialization code
-    let object_name = builder.legacy_package.name_map.store("None");
+    // Use /Engine/Transient as a package name, because it is expected to be a valid package name by the serialization code
+    let object_name = builder.legacy_package.name_map.store("/Engine/Transient");
 
     // Since this import has no outer index, it has to be a Package import, otherwise it triggers a check in AsyncLoading.cpp
     FObjectImport{class_package, class_name, outer_index: FPackageIndex::create_null(), object_name, is_optional: false}
