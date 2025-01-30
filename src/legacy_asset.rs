@@ -914,7 +914,7 @@ impl FLegacyPackageHeader {
         let data_total_header_size = (s.stream_position()? - package_summary_offset) as usize;
         if desired_header_size.is_some() && desired_header_size.unwrap() > data_total_header_size {
             let extra_null_padding_bytes = desired_header_size.unwrap() - data_total_header_size;
-            s.write(&vec![0; extra_null_padding_bytes])?;
+            s.write_all(&vec![0; extra_null_padding_bytes])?;
         }
 
         // Set total size of the serialized header. The rest of the data is not considered the part of it

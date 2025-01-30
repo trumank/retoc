@@ -1153,7 +1153,7 @@ fn rebuild_asset_export_data_internal(builder: &LegacyAssetBuilder, raw_exports_
 
                 // Write the blob for the current export and skip past it's data
                 exports_data_writer.seek(SeekFrom::Start(export_target_serial_offset))?;
-                exports_data_writer.write(&raw_exports_data[export_data_start_offset..export_data_end_offset])?;
+                exports_data_writer.write_all(&raw_exports_data[export_data_start_offset..export_data_end_offset])?;
                 current_serial_offset += export_serial_size;
             }
         }
@@ -1168,7 +1168,7 @@ fn rebuild_asset_export_data_internal(builder: &LegacyAssetBuilder, raw_exports_
     // This should generally never happen for legacy zen assets, but still nice to handle this just in case
     let additional_data_post_exports_length = raw_exports_data.len() - end_of_last_export_bundle;
     if additional_data_post_exports_length != 0 {
-        exports_data_writer.write(&raw_exports_data[end_of_last_export_bundle..])?;
+        exports_data_writer.write_all(&raw_exports_data[end_of_last_export_bundle..])?;
     }
 
     // Append the package footer at the end

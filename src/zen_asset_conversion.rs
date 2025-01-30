@@ -796,7 +796,7 @@ fn write_exports_in_bundle_order<S: Write>(writer: &mut S, builder: &ZenPackageB
 
                 // Serialize the export at this position and increment the current position
                 largest_exports_buffer_export_end_offset = max(largest_exports_buffer_export_end_offset, export_end_serial_offset);
-                writer.write(&exports_buffer[export_serial_offset..export_end_serial_offset])?;
+                writer.write_all(&exports_buffer[export_serial_offset..export_end_serial_offset])?;
                 current_export_offset += export_serial_size as u64;
             }
         }
@@ -815,7 +815,7 @@ fn write_exports_in_bundle_order<S: Write>(writer: &mut S, builder: &ZenPackageB
     // If we have any actual extra data, write it to the zen asset
     if extra_data_length > 0 {
         let extra_data_end_offset = extra_data_start_offset + extra_data_length;
-        writer.write(&exports_buffer[extra_data_start_offset..extra_data_end_offset])?;
+        writer.write_all(&exports_buffer[extra_data_start_offset..extra_data_end_offset])?;
     }
     Ok({})
 }
@@ -831,7 +831,7 @@ fn serialize_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: &FSeria
 
     if builder.container_header_version >= EIoContainerHeaderVersion::NoExportInfo {
         // Write export buffer without any changes if we are following cooked offsets
-        result_package_writer.write(&legacy_asset_bundle.exports_file_buffer)?;
+        result_package_writer.write_all(&legacy_asset_bundle.exports_file_buffer)?;
     } else {
         // Write export buffer in bundle order otherwise, moving exports around to follow bundle serialization order
         write_exports_in_bundle_order(&mut result_package_writer, builder, &legacy_asset_bundle.exports_file_buffer)?;

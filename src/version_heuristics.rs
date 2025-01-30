@@ -110,7 +110,7 @@ pub(crate) fn heuristic_package_version_from_legacy_package<S: Read + Seek>(s: &
     // to then deduce the package file version for this package
     let header_size = names.offset as usize;
     let mut header_read_payload: Vec<u8> = Vec::with_capacity(header_size);
-    s.read(&mut header_read_payload)?;
+    s.read_exact(&mut header_read_payload)?;
 
     // Try these package versions for the supported engine versions. First version to read the full header size and not overflow is the presumed package version
     let package_versions_to_try: Vec<FPackageFileVersion> = vec![

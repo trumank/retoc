@@ -582,7 +582,7 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive, compress_
                 }
                 Message::Write { shader_index, data, unique } => {
                     shader_file_regions[shader_index] = (stream_position as i64, data.len(), unique);
-                    shader_code_writer.write(&data)?;
+                    shader_code_writer.write_all(&data)?;
                 }
                 Message::Compress { .. } => unreachable!(),
             }
@@ -798,7 +798,7 @@ pub(crate) fn rebuild_shader_library_from_io_store(store_access: &dyn IoStoreTra
     // Serialize shader library header
     FShaderLibraryHeader::serialize(&shader_library, &mut result_library_writer)?;
     // Serialize shader code
-    result_library_writer.write(&shader_code.shader_code_buffer)?;
+    result_library_writer.write_all(&shader_code.shader_code_buffer)?;
 
     // Resolve asset names referencing the shader maps contained in this library
     let contained_shader_map_hashes: HashSet<FSHAHash> = shader_library.shader_map_hashes.iter().cloned().collect();
