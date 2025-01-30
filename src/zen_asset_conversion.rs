@@ -251,6 +251,7 @@ fn build_zen_import_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
 
     for import_index in 0..builder.legacy_package.imports.len() {
         let import_object_index = convert_legacy_import_to_object_index(builder, import_index)?;
+        assert_ne!(import_object_index.kind(), FPackageObjectIndexType::Export);
         builder.zen_package.import_map.push(import_object_index)
     }
     Ok({})
