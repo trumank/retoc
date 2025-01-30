@@ -13,6 +13,7 @@ use std::cmp::max;
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Seek, SeekFrom, Write};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
+use itertools::Itertools;
 use crate::container_header::EIoContainerHeaderVersion;
 
 // Cache that stores the packages that were retrieved for the purpose of dependency resolution, to avoid loading and parsing them multiple times
@@ -516,15 +517,16 @@ fn build_import_map(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
             // TODO: Do not log messages that refer to packages that have failed loading previously not to spam the output. There should be a better way to handle this.
             let loading_error_message = result_import_map_index.unwrap_err().to_string();
             if !loading_error_message.contains("failed loading previously") {
-                log!(builder.package_context.log, "Failed to resolve import map object {} for package {}: {}", import_object_index, builder.zen_package.package_name(), loading_error_message);
+                log!(builder.package_context.log, "Failed to resolve import map object {} (index {}) for package {}: {}", import_object_index, import_index, builder.zen_package.package_name(), loading_error_message);
             }
             builder.has_failed_import_map_entries = true;
 
             // Insert the entry into the import map, and associate this import index with the null import
+            let null_package_import = create_and_add_unknown_package_import(builder);
             let import_map_index = FPackageIndex::create_import(builder.legacy_package.imports.len() as u32);
-            let null_import_map_entry = create_null_import_map_entry(builder);
+            let null_object_import = create_unknown_object_import_map_entry(builder, null_package_import);
 
-            builder.legacy_package.imports.push(null_import_map_entry);
+            builder.legacy_package.imports.push(null_object_import);
             builder.zen_import_lookup.insert(import_object_index, import_map_index);
             import_map_index
         } else {
@@ -1015,14 +1017,28 @@ fn resolve_prestream_package_imports(builder: &mut LegacyAssetBuilder) -> anyhow
     Ok({})
 }
 
-fn create_null_import_map_entry(builder: &mut LegacyAssetBuilder) -> FObjectImport {
+fn create_unknown_package_import_map_entry(builder: &mut LegacyAssetBuilder) -> FObjectImport {
     let class_package = builder.legacy_package.name_map.store(CORE_OBJECT_PACKAGE_NAME);
     let class_name = builder.legacy_package.name_map.store(PACKAGE_CLASS_NAME);
-    // Use /Engine/Transient as a package name, because it is expected to be a valid package name by the serialization code
-    let object_name = builder.legacy_package.name_map.store("/Engine/Transient");
+    // The package name here can be anything except for a script import
+    let object_name = builder.legacy_package.name_map.store("/Engine/UnknownPackage");
 
-    // Since this import has no outer index, it has to be a Package import, otherwise it triggers a check in AsyncLoading.cpp
     FObjectImport{class_package, class_name, outer_index: FPackageIndex::create_null(), object_name, is_optional: false}
+}
+fn create_and_add_unknown_package_import(builder: &mut LegacyAssetBuilder) -> FPackageIndex {
+    let new_import_index = builder.legacy_package.imports.len();
+    let new_import_entry = create_unknown_package_import_map_entry(builder);
+    builder.legacy_package.imports.push(new_import_entry);
+    FPackageIndex::create_import(new_import_index as u32)
+}
+fn create_unknown_object_import_map_entry(builder: &mut LegacyAssetBuilder, outer_index: FPackageIndex) -> FObjectImport {
+    let class_package = builder.legacy_package.name_map.store(CORE_OBJECT_PACKAGE_NAME);
+    let class_name = builder.legacy_package.name_map.store(OBJECT_CLASS_NAME);
+    // This object name can be anything
+    let object_name = builder.legacy_package.name_map.store("UnknownExport");
+
+    // This import has to have a package since it is not a package itself
+    FObjectImport{class_package, class_name, outer_index, object_name, is_optional: false}
 }
 
 fn finalize_asset(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
@@ -1057,7 +1073,8 @@ fn finalize_asset(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
                     final_import_index, import_map_size, builder.legacy_package.summary.package_name.clone());
             }
 
-            new_import_map.push(create_null_import_map_entry(builder));
+            // We need a new import map entry here, and since it's not referenced by the original package, it can be a package entry, which will become Null again if asset is converted back to zen
+            new_import_map.push(create_unknown_package_import_map_entry(builder));
             continue;
         }
 
