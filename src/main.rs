@@ -39,6 +39,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::io::BufWriter;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::RwLock;
 use std::{
     collections::HashMap,
     io::{BufReader, Cursor, Read, Seek, SeekFrom, Write},
@@ -46,7 +47,6 @@ use std::{
     str::FromStr,
     sync::{Arc, Mutex},
 };
-use std::sync::RwLock;
 use strum::{AsRefStr, FromRepr};
 use tracing::instrument;
 use version::EngineVersion;
@@ -119,59 +119,70 @@ struct ActionPackRaw {
 }
 
 #[derive(Parser, Debug)]
-struct ActionExtractLegacy {
+struct ActionToLegacy {
+    /// Input .utoc or directory with multiple .utoc (e.g. Content/Paks/)
     #[arg(index = 1)]
-    utoc: PathBuf,
+    input: PathBuf,
+    /// Output directory or .pak
     #[arg(index = 2)]
     output: PathBuf,
 
-    /// Skip extraction of assets
+    /// Asset file name filter
+    #[arg(short, long)]
+    filter: Vec<String>,
+
+    /// Skip conversion of assets
     #[arg(long)]
     no_assets: bool,
-    /// Skip extraction of shader libraries
+    /// Skip conversion of shader libraries
     #[arg(long)]
     no_shaders: bool,
-    /// Skip compression of extracted shader libraries
+    /// Skip compression of shader libraries
     #[arg(long)]
     no_compres_shaders: bool,
-    /// Do not output any file (dry run). Useful for testing conversion
+    /// Do not output any files (dry run). Useful for testing conversion
     #[arg(short, long)]
     dry_run: bool,
-    /// Don't run in parallel. Useful for debugging
-    #[arg(long)]
-    no_parallel: bool,
 
     /// Engine version override
     #[arg(long)]
     version: Option<EngineVersion>,
-    #[arg(short, long, default_value = "false")]
-    verbose: bool,
-    #[arg(long, default_value = "false")]
-    debug: bool,
+
+    /// Verbose logging
     #[arg(short, long)]
-    filter: Vec<String>,
+    verbose: bool,
+    /// Debug logging
+    #[arg(long)]
+    debug: bool,
+    /// Do not run in parallel. Useful for debugging
+    #[arg(long)]
+    no_parallel: bool,
 }
 
 #[derive(Parser, Debug)]
-struct ActionPackZen {
-    /// Input directory
+struct ActionToZen {
+    /// Input directory or .pak
     #[arg(index = 1)]
     input: PathBuf,
     /// Output .utoc
     #[arg(index = 2)]
     output: PathBuf,
 
+    /// Asset file name filter
+    #[arg(short, long)]
+    filter: Vec<String>,
+
     /// Engine version
     #[arg(long)]
     version: EngineVersion,
 
-    #[arg(short, long, default_value = "false")]
-    verbose: bool,
-    #[arg(long, default_value = "false")]
-    debug: bool,
+    /// Verbose logging
     #[arg(short, long)]
-    filter: Vec<String>,
-    /// Don't run in parallel. Useful for debugging
+    verbose: bool,
+    /// Debug logging
+    #[arg(long)]
+    debug: bool,
+    /// Do not run in parallel. Useful for debugging
     #[arg(long)]
     no_parallel: bool,
 }
@@ -212,10 +223,10 @@ enum Action {
     /// Packs directory of raw chunks into container
     PackRaw(ActionPackRaw),
 
-    /// Extracts legacy assets from .utoc
-    ExtractLegacy(ActionExtractLegacy),
-    /// Pack legacy assets into iostore container
-    PackZen(ActionPackZen),
+    /// Converts asests and shaders from Zen to Legacy
+    ToLegacy(ActionToLegacy),
+    /// Converts assets and shaders from Legacy to Zen
+    ToZen(ActionToZen),
 
     /// Get chunk by index and write to stdout
     Get(ActionGet),
@@ -227,7 +238,7 @@ enum Action {
 #[derive(Parser, Debug)]
 struct Args {
     #[arg(short, long)]
-    aes: Option<String>,
+    aes_key: Option<String>,
     #[command(subcommand)]
     action: Action,
 }
@@ -236,7 +247,7 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     let mut config = Config::default();
-    if let Some(aes) = args.aes {
+    if let Some(aes) = args.aes_key {
         config
             .aes_keys
             .insert(FGuid::default(), AesKey::from_str(&aes)?);
@@ -253,8 +264,8 @@ fn main() -> Result<()> {
         Action::UnpackRaw(action) => action_unpack_raw(action, config),
         Action::PackRaw(action) => action_pack_raw(action, config),
 
-        Action::ExtractLegacy(action) => action_extract_legacy(action, config),
-        Action::PackZen(action) => action_pack_zen(action, config),
+        Action::ToLegacy(action) => action_to_legacy(action, config),
+        Action::ToZen(action) => action_to_zen(action, config),
 
         Action::Get(action) => action_get(action, config),
 
@@ -728,10 +739,10 @@ impl FileReaderTrait for PakFileReader {
     }
 }
 
-fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Result<()> {
+fn action_to_legacy(args: ActionToLegacy, config: Arc<Config>) -> Result<()> {
     let log = Log::new(args.verbose, args.debug);
     if args.dry_run {
-        action_extract_legacy_inner(args, config, &NullFileWriter, &log)?;
+        action_to_legacy_inner(args, config, &NullFileWriter, &log)?;
     } else if args.output.extension() == Some(std::ffi::OsStr::new("pak")) {
         let mut file = BufWriter::new(fs::File::create(&args.output)?);
         let mut pak = repak::PakBuilder::new()
@@ -755,7 +766,7 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
             };
 
             scope.spawn(move |_| {
-                *result_ref = Some(action_extract_legacy_inner(args, config, &writer, &log));
+                *result_ref = Some(action_to_legacy_inner(args, config, &writer, &log));
             });
 
             for (path, entry) in rx {
@@ -768,24 +779,24 @@ fn action_extract_legacy(args: ActionExtractLegacy, config: Arc<Config>) -> Resu
         pak.write_index()?;
     } else {
         let file_writer = FSFileWriter::new(&args.output);
-        action_extract_legacy_inner(args, config, &file_writer, &log)?;
+        action_to_legacy_inner(args, config, &file_writer, &log)?;
     }
 
     Ok(())
 }
 
-fn action_extract_legacy_inner(
-    args: ActionExtractLegacy,
+fn action_to_legacy_inner(
+    args: ActionToLegacy,
     config: Arc<Config>,
     file_writer: &dyn FileWriterTrait,
     log: &Log,
 ) -> Result<()> {
-    let iostore = iostore::open(&args.utoc, config.clone())?;
+    let iostore = iostore::open(&args.input, config.clone())?;
     if !args.no_assets {
-        action_extract_legacy_assets(&args, file_writer, &*iostore, log)?;
+        action_to_legacy_assets(&args, file_writer, &*iostore, log)?;
     }
     if !args.no_shaders {
-        action_extract_legacy_shaders(&args, file_writer, &*iostore, log)?;
+        action_to_legacy_shaders(&args, file_writer, &*iostore, log)?;
     }
     Ok(())
 }
@@ -798,8 +809,8 @@ fn progress_style() -> indicatif::ProgressStyle {
     .progress_chars("##-")
 }
 
-fn action_extract_legacy_assets(
-    args: &ActionExtractLegacy,
+fn action_to_legacy_assets(
+    args: &ActionToLegacy,
     file_writer: &dyn FileWriterTrait,
     iostore: &dyn IoStoreTrait,
     log: &Log,
@@ -879,8 +890,8 @@ fn action_extract_legacy_assets(
     Ok(())
 }
 
-fn action_extract_legacy_shaders(
-    args: &ActionExtractLegacy,
+fn action_to_legacy_shaders(
+    args: &ActionToLegacy,
     file_writer: &dyn FileWriterTrait,
     iostore: &dyn IoStoreTrait,
     log: &Log,
@@ -933,7 +944,7 @@ fn action_extract_legacy_shaders(
     Ok(())
 }
 
-fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
+fn action_to_zen(args: ActionToZen, _config: Arc<Config>) -> Result<()> {
     let mount_point = "../../../";
 
     let input: Box<dyn FileReaderTrait> = if args.input.is_dir() {
@@ -1023,7 +1034,7 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
     let container_header_version = writer.container_header_version();
     // Decide whenever we need all packages to be in memory at the same time to perform the fixup or not
     let needs_asset_import_fixup = container_header_version == EIoContainerHeaderVersion::Initial;
-    
+
     let process_assets = |tx: std::sync::mpsc::SyncSender<ConvertedZenAssetBundle>| -> Result<()> {
         let process = |path| -> Result<()> {
             verbose!(&log, "converting asset {path:?}");
@@ -1071,9 +1082,10 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
         scope.spawn(|_| {
             *result_ref = Some(process_assets(tx));
         });
-        
+
         if needs_asset_import_fixup {
-            let mut converted_lookup: HashMap<FPackageId, Arc<RwLock<ConvertedZenAssetBundle>>> = HashMap::new();
+            let mut converted_lookup: HashMap<FPackageId, Arc<RwLock<ConvertedZenAssetBundle>>> =
+                HashMap::new();
             let mut all_converted: Vec<Arc<RwLock<ConvertedZenAssetBundle>>> = Vec::new();
             let mut total_package_data_size: usize = 0;
 
@@ -1082,24 +1094,34 @@ fn action_pack_zen(args: ActionPackZen, _config: Arc<Config>) -> Result<()> {
                 // Write and release bulk data immediately, we do not have enough RAM to keep all the bulk data for all the packages in memory at the same time
                 converted.write_and_release_bulk_data(&mut writer)?;
                 total_package_data_size += converted.package_data_size();
-                
+
                 // Add the package data and the metadata necessary for the import fixup into the list
                 let converted_arc = Arc::new(RwLock::new(converted));
-                converted_lookup.insert(converted_arc.read().unwrap().package_id, converted_arc.clone());
+                converted_lookup.insert(
+                    converted_arc.read().unwrap().package_id,
+                    converted_arc.clone(),
+                );
                 all_converted.push(converted_arc);
             }
 
-            log!(log, "Applying import fix-ups to the converted assets. Package data in memory: {}MB", total_package_data_size / 1024 / 1024);
+            log!(
+                log,
+                "Applying import fix-ups to the converted assets. Package data in memory: {}MB",
+                total_package_data_size / 1024 / 1024
+            );
             prog_ref.inspect(|x| x.set_position(0));
-            
+
             // Process fixups on all the assets in their original processing order
             for converted in &all_converted {
-                converted.write().unwrap().fixup_legacy_external_arcs(&converted_lookup, &log)?;
+                converted
+                    .write()
+                    .unwrap()
+                    .fixup_legacy_external_arcs(&converted_lookup, &log)?;
                 prog_ref.inspect(|x| x.inc(1));
             }
             log!(log, "Writing converted assets");
             prog_ref.inspect(|x| x.set_position(0));
-            
+
             // Write all the package data for each asset once fixups are complete
             for converted in &all_converted {
                 converted.write().unwrap().write_package_data(&mut writer)?;
