@@ -267,7 +267,10 @@ impl IoStoreTrait for IoStoreBackend {
             }
         }
     }
-    fn read(&self, chunk_id: FIoChunkId) -> Result<Vec<u8>> {
+    fn read(&self, mut chunk_id: FIoChunkId) -> Result<Vec<u8>> {
+        if let Some(version) = self.container_file_version() {
+            chunk_id = chunk_id.with_version(version);
+        }
         self.containers
             .iter()
             .find(|c| c.has_chunk_id(chunk_id))
