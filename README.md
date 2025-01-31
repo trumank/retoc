@@ -33,7 +33,7 @@ pakchunk0-Windows.utoc
 
 $ retoc to-legacy AbioticFactor/Content/Paks legacy_P.pak
 Detected package version: FPackageFileVersion(UE4: 522, UE5: 1012), EZenPackageVersion: 3
-[00:00:06] ########################################   22522/22522                                                                                        Extracted 22522 (0 failed) legacy assets to "converted.pak"
+[00:00:06] ########################################   22522/22522
 Extracted 22522 (0 failed) legacy assets to "legacy_P.pak"
 Shader Library ShaderArchive-Global-PCD3D_SM5-PCD3D_SM5 statistics: Shared Shaders: 10; Unique Shaders: 4324; Detached Shaders: 0; Shader Maps: 339 (referenced by 0 packages), Uncompressed Size: 68MB, Compressed Size: 15MB, Compression Ratio: 445%
 Shader Library ShaderArchive-AbioticFactor_Chunk0-PCD3D_SM5-PCD3D_SM5 statistics: Shared Shaders: 1941; Unique Shaders: 12327; Detached Shaders: 0; Shader Maps: 819 (referenced by 1721 packages), Uncompressed Size: 138MB, Compressed Size: 43MB, Compression Ratio: 322%
