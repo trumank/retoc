@@ -56,8 +56,6 @@ impl Readable for FIoContainerHeader {
         if version == EIoContainerHeaderVersion::Initial {
             let _package_count: u32 = s.de()?;
 
-            //let unknown: u32 = s.de()?; // ff7r2?
-
             let names_buffer: Vec<u8> = s.de()?;
             let _name_hashes_buffer: Vec<u8> = s.de()?;
             let names = read_name_batch_parts(&names_buffer)?;
@@ -123,8 +121,6 @@ impl Writeable for FIoContainerHeader {
 
         if self.version == EIoContainerHeaderVersion::Initial {
             s.ser(&(self.packages.0.len() as u32))?;
-
-            //let unknown: u32 = s.de()?; // ff7r2?
 
             // Serialize container local name map. This map is generally empty in legacy UE4 containers because there are no fields that write to it
             let (names_buffer, name_hashes_buffer) =
