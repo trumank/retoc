@@ -628,14 +628,13 @@ struct FStandaloneExportDependencies {
     serialize_before_create: Vec<FPackageIndex>,
     create_before_create: Vec<FPackageIndex>,
 }
-fn resolve_export_dependencies_internal_dependency_bundles(builder: &mut LegacyAssetBuilder, export_dependencies: &mut Vec<FStandaloneExportDependencies>) {
+fn resolve_export_dependencies_internal_dependency_bundles(builder: &mut LegacyAssetBuilder, export_dependencies: &mut [FStandaloneExportDependencies]) {
 
-    for export_index in 0..builder.zen_package.dependency_bundle_headers.len() {
+    for (export_index, bundle_header) in builder.zen_package.dependency_bundle_headers.iter().enumerate() {
 
         let dependencies = &mut export_dependencies[export_index];
 
         // Extract dependencies from zen first
-        let bundle_header = builder.zen_package.dependency_bundle_headers[export_index];
         let first_dependency_index = bundle_header.first_entry_index as usize;
 
         // Note that local_import_or_export_index from zen use import map ordering that is not currently valid for this asset, and will only become valid later, but
@@ -684,7 +683,7 @@ struct ExportBundleGroup {
     export_indices: Vec<usize>,
     command_type: EExportCommandType,
 }
-fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAssetBuilder, export_dependencies: &mut Vec<FStandaloneExportDependencies>) -> anyhow::Result<()> {
+fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAssetBuilder, export_dependencies: &mut [FStandaloneExportDependencies]) -> anyhow::Result<()> {
 
     // "to export" is the one that depends on the given state of the "from export/import", e.g. "to export" is the export that has "from export/import" as a dependency
     let mut add_export_dependency = |from_index: FPackageIndex, to_export_index: usize, from_type: EExportCommandType, to_type: EExportCommandType| -> anyhow::Result<()> {
@@ -866,10 +865,9 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
     Ok(())
 }
 
-fn apply_standalone_dependencies_to_package(builder: &mut LegacyAssetBuilder, export_dependencies: &mut Vec<FStandaloneExportDependencies>) {
-    for export_index in 0..builder.legacy_package.exports.len() {
+fn apply_standalone_dependencies_to_package(builder: &mut LegacyAssetBuilder, export_dependencies: &mut [FStandaloneExportDependencies]) {
+    for (export_index, export_object) in builder.legacy_package.exports.iter_mut().enumerate() {
 
-        let mut export_object = builder.legacy_package.exports[export_index].clone();
         let dependencies = &mut export_dependencies[export_index];
 
         // Ensure that we have outer and super as create before create dependencies
@@ -898,9 +896,6 @@ fn apply_standalone_dependencies_to_package(builder: &mut LegacyAssetBuilder, ex
         export_object.create_before_serialize_dependencies = dependencies.create_before_serialize.len() as i32;
         export_object.serialize_before_create_dependencies = dependencies.serialize_before_create.len() as i32;
         export_object.create_before_create_dependencies = dependencies.create_before_create.len() as i32;
-
-        // Update the export object now
-        builder.legacy_package.exports[export_index] = export_object;
 
         // Append preload dependencies for this export now to the legacy package
         builder.legacy_package.preload_dependencies.append(&mut dependencies.serialize_before_serialize);
@@ -1096,7 +1091,7 @@ fn build_asset_from_zen<'a, 'b>(package_context: &'a FZenPackageContext<'b>, pac
 
     Ok(asset_builder)
 }
-fn rebuild_asset_export_data_internal(builder: &LegacyAssetBuilder, raw_exports_data: &Vec<u8>) -> anyhow::Result<Vec<u8>> {
+fn rebuild_asset_export_data_internal(builder: &LegacyAssetBuilder, raw_exports_data: &[u8]) -> anyhow::Result<Vec<u8>> {
 
     // Calculate the total size of the exports blob
     let mut total_exports_serial_size = 0;

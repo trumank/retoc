@@ -334,8 +334,8 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
     let mut export_to_bundle_map: HashMap<ZenDependencyGraphNode, usize> = HashMap::new();
 
     // Create export bundles from the export list sorted by the dependencies
-    for graph_node_index in 0..export_load_order.len() {
-        let dependency_graph_node = export_load_order[graph_node_index].node;
+    for graph_node in export_load_order {
+        let dependency_graph_node = graph_node.node;
 
         // Skip non-export items in the dependency graph. Imports will occasionally appear in the graph when there is a requirement for both a creation and a serialization
         if !dependency_graph_node.package_index.is_export() {
@@ -510,8 +510,8 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
 fn build_zen_dependency_bundle_new(builder: &mut ZenPackageBuilder, export_load_order: &[ZenExportGraphNode], export_dependencies: &HashMap<ZenDependencyGraphNode, Vec<ZenDependencyGraphNode>>) {
 
     // Create a single dependency bundle with all exports
-    for graph_node_index in 0..export_load_order.len() {
-        let dependency_graph_node = export_load_order[graph_node_index].node;
+    for dependency_graph in export_load_order {
+        let dependency_graph_node = dependency_graph.node;
 
         // Skip non-export items in the dependency graph. Imports will occasionally appear in the graph when there is a requirement for both a creation and a serialization
         if !dependency_graph_node.package_index.is_export() {

@@ -55,7 +55,7 @@ pub(crate) fn read_name_batch<S: Read>(s: &mut S) -> Result<Vec<String>> {
 }
 
 pub(crate) fn write_name_batch<S: Write>(s: &mut S, names: &[String]) -> Result<()> {
-    fn name_byte_size(name: &String) -> u32 {
+    fn name_byte_size(name: &str) -> u32 {
         if name.is_ascii() {
             name.bytes().len() as u32
         } else {
@@ -68,7 +68,7 @@ pub(crate) fn write_name_batch<S: Write>(s: &mut S, names: &[String]) -> Result<
         return Ok(());
     }
 
-    s.ser(&names.iter().map(name_byte_size).sum::<u32>())?;
+    s.ser(&names.iter().map(|s| name_byte_size(s)).sum::<u32>())?;
     s.ser(&FNAME_HASH_ALGORITHM_ID)?;
 
     for name in names {
@@ -156,8 +156,8 @@ impl FNameMap {
     }
     pub(crate) fn create_from_names(kind: EMappedNameType, names: Vec<String>) -> Self {
         let mut name_lookup: HashMap<String, usize> = HashMap::with_capacity(names.len());
-        for name_index in 0..names.len() {
-            name_lookup.insert(names[name_index].clone(), name_index);
+        for (name_index, name) in names.iter().cloned().enumerate() {
+            name_lookup.insert(name, name_index);
         }
         Self {
             kind,

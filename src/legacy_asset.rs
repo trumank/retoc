@@ -468,8 +468,8 @@ impl FPackageNameMap {
     pub(crate) fn create() -> Self { FPackageNameMap{ names: Vec::new(), name_lookup: HashMap::new() } }
     pub(crate) fn create_from_names(names: Vec<String>) -> Self {
         let mut name_lookup: HashMap<String, usize> = HashMap::with_capacity(names.len());
-        for name_index in 0..names.len() {
-            name_lookup.insert(names[name_index].clone(), name_index);
+        for (name_index, name) in names.iter().cloned().enumerate() {
+            name_lookup.insert(name, name_index);
         }
         Self{names, name_lookup}
     }
@@ -992,19 +992,19 @@ pub(crate) fn get_package_object_full_name(package: &FLegacyPackageHeader, objec
 
     // Build full object name now. We append all elements and use / as a path separator
     let mut full_object_name: String = package_name.clone();
-    for i in start_object_index..package_object_outer_chain.len() {
+    for outer in &package_object_outer_chain[start_object_index..] {
 
         // Append object path separator
         full_object_name.push(path_separator);
 
         // Append the name of the object if it's an import
-        if package_object_outer_chain[i].is_import() {
-            let import_index = package_object_outer_chain[i].to_import_index() as usize;
+        if outer.is_import() {
+            let import_index = outer.to_import_index() as usize;
             full_object_name.push_str(&package.name_map.get(package.imports[import_index].object_name));
 
             // Append the name of the object if it's an import
-        } else if package_object_outer_chain[i].is_export() {
-            let export_index = package_object_outer_chain[i].to_export_index() as usize;
+        } else if outer.is_export() {
+            let export_index = outer.to_export_index() as usize;
             full_object_name.push_str(&package.name_map.get(package.exports[export_index].object_name));
         }
     }
