@@ -603,7 +603,7 @@ fn action_pack_raw(args: ActionPackRaw, _config: Arc<Config>) -> Result<()> {
     let mut writer = IoStoreWriter::new(
         args.utoc,
         manifest.version,
-        todo!("container header version"),
+        None,
         manifest.mount_point,
     )?;
     for entry in args.input.join("chunks").read_dir()? {
