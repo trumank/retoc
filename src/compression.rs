@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 use std::io::{Read as _, Write};
 use strum::{AsRefStr, EnumString, VariantArray};
 
-#[derive(Debug, Clone, Copy, EnumString, AsRefStr, VariantArray)]
+#[derive(Debug, Clone, Copy, PartialEq, EnumString, AsRefStr, VariantArray)]
 pub enum CompressionMethod {
     Zlib,
     Zstd,
@@ -58,7 +58,7 @@ pub fn decompress(compression: CompressionMethod, input: &[u8], output: &mut [u8
             zstd::bulk::decompress_to_buffer(input, output)?;
         }
         CompressionMethod::LZ4 => {
-            lz4_flex::block::decompress_into(input, output).unwrap();
+            lz4_flex::block::decompress_into(input, output)?;
         }
         CompressionMethod::Oodle => {
             let status = oodle_loader::oodle()?.decompress(input, output);

@@ -1,16 +1,14 @@
 use crate::chunk_id::FIoChunkIdRaw;
 use crate::compression::{compress, decompress, CompressionMethod};
-use crate::container_header::EIoContainerHeaderVersion;
 use crate::iostore::IoStoreTrait;
 use crate::iostore_writer::IoStoreWriter;
 use crate::logging::*;
 use crate::ser::{ReadExt, Readable, WriteExt, Writeable};
 use crate::zen::FZenPackageHeader;
 use crate::{EIoChunkType, EIoStoreTocVersion, FIoChunkId, FSHAHash, UEPath};
-use anyhow::{anyhow, bail};
+use anyhow::{anyhow, bail, Context as _};
 use key_mutex::Empty;
 use serde::{Deserialize, Serialize};
-use sha1::digest::{DynDigest, Update};
 use sha1::{Digest, Sha1};
 use std::cmp::{min, Ordering};
 use std::collections::{HashMap, HashSet};
@@ -165,28 +163,22 @@ impl FIoStoreShaderCodeArchiveHeader {
     }
 }
 
-fn determine_compression_method_for_shader_code(shader_group_data: &Vec<u8>, container_version: EIoStoreTocVersion, container_header_version: Option<EIoContainerHeaderVersion>) -> CompressionMethod {
+fn determine_likely_compression_method_for_shader_code(shader_group_data: &Vec<u8>) -> CompressionMethod {
 
-    // There is no indication of what compression algorithm is used, however, starting with UE5.3, it is always oodle
-    let is_compression_always_oodle = container_version >= EIoStoreTocVersion::OnDemandMetaData ||
-        (container_header_version.is_some() && container_header_version.unwrap() >= EIoContainerHeaderVersion::NoExportInfo);
-
-    // If we know for sure that this is oodle, decompress with oodle
-    if is_compression_always_oodle {
-        return CompressionMethod::Oodle
+    // Check compression stream headers for known magic values
+    if shader_group_data.len() >= 4 && shader_group_data[1..4] == [0xB5, 0x2F, 0xFD] {
+        CompressionMethod::Zstd
+    } else if shader_group_data.first().is_some_and(|f| [0x78, 0x58].contains(f)) {
+        CompressionMethod::Zlib
+    } else if shader_group_data.first().is_some_and(|f| [0x8C].contains(f)) {
+        CompressionMethod::Oodle
+    } else {
+        // no magic values found so assume LZ4 which does not have reliable magic
+        CompressionMethod::LZ4
     }
-    // Otherwise, it can be any compression format UE supports. However, by default it is always Oodle, and it is known that to change it an engine patch is necessary
-    // The only known game to have used non-oodle shader compression in UE5.2 is Satisfactory U8, where it used Zlib instead
-    // We can determine if it's Zlib by checking if it starts with 0x78 or 0x58. Otherwise, we assume oodle
-    let is_zlib_marker = !shader_group_data.is_empty() && shader_group_data[0] == 0x78 || shader_group_data[0] == 0x58;
-    if is_zlib_marker {
-        return CompressionMethod::Zlib
-    }
-    // Assume Oodle by default. This can be changed to account for other algorithms if games using them are discovered
-    CompressionMethod::Oodle
 }
 
-fn decompress_shader_code(shader_group_data: &Vec<u8>, compression_method: CompressionMethod, uncompressed_size: usize) -> anyhow::Result<Vec<u8>> {
+fn decompress_shader_code_with_method(shader_group_data: &Vec<u8>, compression_method: CompressionMethod, uncompressed_size: usize) -> anyhow::Result<Vec<u8>> {
 
     // Sanity check against empty compressed data chunks
     if shader_group_data.is_empty() {
@@ -195,6 +187,39 @@ fn decompress_shader_code(shader_group_data: &Vec<u8>, compression_method: Compr
     let mut result_uncompressed_data: Vec<u8> = vec![0; uncompressed_size];
     decompress(compression_method, shader_group_data, &mut result_uncompressed_data)?;
     Ok(result_uncompressed_data)
+}
+
+fn decompress_shader_code(shader_group_data: &Vec<u8>, compression_method: &mut Option<CompressionMethod>, uncompressed_size: usize) -> anyhow::Result<Vec<u8>> {
+
+    if compression_method.is_none() {
+        // compression method unknown so try to determine it
+        let likely_compression = determine_likely_compression_method_for_shader_code(&shader_group_data);
+
+        let mut compression_to_try = [
+            CompressionMethod::Zlib,
+            CompressionMethod::Zstd,
+            CompressionMethod::LZ4,
+            CompressionMethod::Oodle,
+        ];
+
+        // move likely compression to front
+        compression_to_try.sort_by_key(|&c| c != likely_compression);
+
+        // try compression methods until one succeeds
+        let mut decompressed = None;
+        for compression in compression_to_try {
+            let result = decompress_shader_code_with_method(&shader_group_data, compression, uncompressed_size);
+            if let Ok(d) = result {
+                *compression_method = Some(compression);
+                decompressed = Some(d);
+                break;
+            }
+        }
+        decompressed.context("Failed to find decompression method for shader")
+    } else {
+        // compression method already known so use it
+        decompress_shader_code_with_method(&shader_group_data, compression_method.unwrap(), uncompressed_size)
+    }
 }
 
 fn compress_shader(shader_data: &Vec<u8>, compression_method: CompressionMethod) -> anyhow::Result<Vec<u8>> {
@@ -242,13 +267,7 @@ impl IoStoreShaderCodeArchive {
             if shader_group_entry.compressed_size != shader_group_entry.uncompressed_size {
 
                 // Establish which compression method is used for this shader library. The entire library must use the same compression method
-                if compression_method.is_none() {
-                    let container_version = store_access.container_file_version().ok_or_else(|| { anyhow!("Failed to retrieve container file version") })?;
-                    let container_header_version = store_access.container_header_version();
-
-                    compression_method = Some(determine_compression_method_for_shader_code(&shader_group_data, container_version, container_header_version))
-                }
-                shader_group_data = decompress_shader_code(&shader_group_data, compression_method.unwrap(), shader_group_entry.uncompressed_size as usize)?;
+                shader_group_data = decompress_shader_code(&shader_group_data, &mut compression_method, shader_group_entry.uncompressed_size as usize)?;
 
                 if shader_group_data.len() != shader_group_entry.uncompressed_size as usize {
                     bail!("Invalid amount of uncompressed data from decompress_shader_group_chunk: Expected {}, got {}", shader_group_entry.uncompressed_size, shader_group_data.len());
@@ -1134,11 +1153,7 @@ pub(crate) fn write_io_store_library(store_writer: &mut IoStoreWriter, raw_shade
 
             // Decompress the shader code if it's size is actually different from the uncompressed size
             if shader_code_entry.size != shader_code_entry.uncompressed_size {
-                // Determine the compression method from the shader code if we do not know it yet
-                if compression_method.is_none() {
-                    compression_method = Some(determine_compression_method_for_shader_code(&uncompressed_shader_code, store_writer.container_version(), Some(store_writer.container_header_version())));
-                }
-                uncompressed_shader_code = decompress_shader_code(&uncompressed_shader_code, compression_method.unwrap(), shader_code_entry.uncompressed_size as usize)?;
+                uncompressed_shader_code = decompress_shader_code(&uncompressed_shader_code, &mut compression_method, shader_code_entry.uncompressed_size as usize)?;
             }
 
             // Write the shader code into the uncompressed chunk buffer. Make sure shader code offset matches it's actual placement
