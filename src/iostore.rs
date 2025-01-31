@@ -355,8 +355,14 @@ impl IoStoreContainer {
             .find(|info| info.id().get_chunk_type() == EIoChunkType::ContainerHeader);
         if let Some(header_chunk) = header_chunk {
             let data = container.read(header_chunk.id())?;
-            let header = FIoContainerHeader::de(&mut std::io::Cursor::new(data))?;
-            container.container_header = Some(header);
+            match FIoContainerHeader::de(&mut std::io::Cursor::new(data)) {
+                Ok(header) => {
+                    container.container_header = Some(header);
+                }
+                Err(err) => {
+                    eprintln!("Failed to parse ContainerHeader. Package metadata will be unavailable: {err:?}");
+                }
+            }
         }
 
         Ok(container)
