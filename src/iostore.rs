@@ -3,7 +3,7 @@ use std::{
     ffi::OsStr,
     io::{BufReader, Cursor},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use anyhow::{bail, Context, Result};
@@ -15,7 +15,7 @@ use crate::{
     file_pool::FilePool,
     script_objects::ZenScriptObjects,
     ser::*,
-    Config, EIoChunkType, EIoStoreTocVersion, FIoChunkHash, FIoChunkId, FPackageId, FSHAHash, Toc,
+    Config, EIoChunkType, EIoStoreTocVersion, FIoChunkHash, FIoChunkId, FPackageId, Toc,
 };
 
 macro_rules! indent_println {

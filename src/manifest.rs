@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
-use crate::{chunk_id::FIoChunkIdRaw, FIoChunkId};
+use crate::{chunk_id::FIoChunkIdRaw};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct PackageStoreManifest {

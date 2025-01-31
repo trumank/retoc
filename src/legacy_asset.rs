@@ -1,12 +1,11 @@
 use crate::zen::{EUnrealEngineObjectUE4Version, EUnrealEngineObjectUE5Version, FCustomVersion, FPackageFileVersion, FPackageIndex};
-use crate::{break_down_name_string, iostore::IoStoreTrait, ser::*, FGuid};
+use crate::{break_down_name_string, ser::*, FGuid};
 use crate::logging::*;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use std::borrow::Cow;
 use std::cmp::max;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use tracing::instrument;
 use crate::version_heuristics::heuristic_package_version_from_legacy_package;
 
@@ -29,7 +28,7 @@ impl Writeable for FMinimalName {
     fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
         stream.ser(&self.index)?;
         stream.ser(&self.number)?;
-        Ok({})
+        Ok(())
     }
 }
 
@@ -52,7 +51,7 @@ impl Writeable for FCountOffsetPair {
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
         s.ser(&self.count)?;
         s.ser(&self.offset)?;
-        Ok({})
+        Ok(())
     }
 }
 
@@ -75,7 +74,7 @@ impl Writeable for FGenerationInfo {
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
         s.ser(&self.export_count)?;
         s.ser(&self.name_count)?;
-        Ok({})
+        Ok(())
     }
 }
 
@@ -107,7 +106,7 @@ impl Writeable for FEngineVersion {
         s.ser(&self.engine_patch)?;
         s.ser(&self.changelist)?;
         s.ser(&self.branch.clone())?;
-        Ok({})
+        Ok(())
     }
 }
 
@@ -179,7 +178,7 @@ impl Writeable for FLegacyPackageVersioningInfo {
         let licensee_version = if self.is_unversioned { 0 } else { self.licensee_version };
         s.ser(&licensee_version)?;
         s.ser(&self.custom_versions.clone())?;
-        Ok({})
+        Ok(())
     }
 }
 
@@ -236,7 +235,7 @@ impl FLegacyPackageFileSummary {
         let mut versioning_info: FLegacyPackageVersioningInfo = s.de()?;
         // We need a valid package file version to deserialize this package, so we rely on having a fallback if the package is unversioned
         if versioning_info.is_unversioned {
-            if !package_version_fallback.is_some() {
+            if package_version_fallback.is_none() {
                 bail!("Cannot deserialize an unversioned package without a fallback package file version");
             }
             versioning_info.package_file_version = package_version_fallback.unwrap();
@@ -456,7 +455,7 @@ impl FLegacyPackageFileSummary {
         // Data resource offset is only written with new bulk data save format, otherwise bulk data meta is simply saved inline
         if self.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::DataResources as i32 { s.ser(&self.data_resource_offset)?; }
 
-        Ok({})
+        Ok(())
     }
 }
 
@@ -513,7 +512,7 @@ impl FPackageNameMap {
             stream.ser(&non_case_preserving_hash)?;
             stream.ser(&case_preserving_hash)?;
         }
-        Ok({})
+        Ok(())
     }
     pub(crate) fn get(&self, name: FMinimalName) -> Cow<'_, str> {
         let bare_name = &self.names[name.index as usize];
@@ -588,7 +587,7 @@ impl FObjectImport
         if should_serialize_optional {
             s.ser(&self.is_optional)?;
         }
-        Ok({})
+        Ok(())
     }
 }
 
@@ -732,7 +731,7 @@ impl FObjectExport
             s.ser(&self.script_serialization_start_offset)?;
             s.ser(&self.script_serialization_end_offset)?;
         }
-        Ok({})
+        Ok(())
     }
 }
 
@@ -768,7 +767,7 @@ impl Writeable for FObjectDataResource {
         s.ser(&self.raw_size)?;
         s.ser(&self.outer_index)?;
         s.ser(&self.legacy_bulk_data_flags)?;
-        Ok({})
+        Ok(())
     }
 }
 
@@ -857,7 +856,7 @@ impl FLegacyPackageHeader {
         let imports_start_offset = (s.stream_position()? - package_summary_offset) as i32;
         package_summary.imports = FCountOffsetPair{count: self.imports.len() as i32, offset: imports_start_offset};
         for object_import in &self.imports {
-            FObjectImport::serialize(&object_import, s, &package_summary)?;
+            FObjectImport::serialize(object_import, s, &package_summary)?;
         }
 
         // Serialize export map
@@ -865,7 +864,7 @@ impl FLegacyPackageHeader {
         let exports_start_offset = (exports_start_offset_from_stream_start - package_summary_offset) as i32;
         package_summary.exports = FCountOffsetPair{count: self.exports.len() as i32, offset: exports_start_offset};
         for object_export in &self.exports {
-            FObjectExport::serialize(&object_export, s, &package_summary)?;
+            FObjectExport::serialize(object_export, s, &package_summary)?;
         }
 
         // Serialize depends map. This is just an empty placeholder for cooked assets
@@ -947,7 +946,7 @@ impl FLegacyPackageHeader {
 
         // Seek back to the position after the header
         s.seek(SeekFrom::Start(position_after_writing_header))?;
-        Ok({})
+        Ok(())
     }
 }
 
@@ -974,8 +973,8 @@ pub(crate) fn get_package_object_full_name(package: &FLegacyPackageHeader, objec
     // Reserve the outer chain now
     package_object_outer_chain.reverse();
 
-    let mut package_name: String;
-    let mut start_object_index: usize;
+    let package_name: String;
+    let start_object_index: usize;
 
     if package_object_outer_chain[0].is_import() {
         let package_import_index = package_object_outer_chain[0].to_import_index() as usize;
@@ -1019,7 +1018,7 @@ pub(crate) fn get_package_object_full_name(package: &FLegacyPackageHeader, objec
 // Attempts to resolve an original package name from a localized package name. Returns None if the provided package name is not a localized package name. Returns source package name and culture name otherwise
 pub(crate) fn convert_localized_package_name_to_source(package_name: &str) -> Option<(String, String)> {
     // If the first character is not a /, this is not a localized package (or a valid package name, for that matter)
-    if package_name.chars().nth(0) != Some('/') {
+    if !package_name.starts_with('/') {
         return None;
     }
     // Split package name into Mount Point, L10N and the actual package name. We skip the first slash to keep the logic simpler and append it later

@@ -13,7 +13,7 @@ use crate::{
     ser::*, EIoStoreTocVersion, FIoChunkHash, FIoChunkId, FIoContainerId, FIoOffsetAndLength,
     FIoStoreTocCompressedBlockEntry, FIoStoreTocEntryMeta, FIoStoreTocEntryMetaFlags, Toc,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use fs_err as fs;
 
 pub(crate) struct IoStoreWriter {

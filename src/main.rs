@@ -441,7 +441,7 @@ fn action_verify(args: ActionVerify, config: Arc<Config>) -> Result<()> {
     toc.chunk_metas.par_iter().enumerate().try_for_each_init(
         || BufReader::new(fs::File::open(ucas).unwrap()),
         |ucas, (i, meta)| -> Result<()> {
-            let chunk_id = toc.chunks[i];
+            //let chunk_id = toc.chunks[i];
             let data = toc.read(ucas, i as u32)?;
 
             //let chunk_type = chunk_id.get_chunk_type();
@@ -826,10 +826,8 @@ fn action_to_legacy_assets(
             )
         })?;
 
-        if !args.filter.is_empty() {
-            if !args.filter.iter().any(|f| package_path.contains(f)) {
-                continue;
-            }
+        if !args.filter.is_empty() && !args.filter.iter().any(|f| package_path.contains(f)) {
+            continue;
         }
 
         packages_to_extract.push((package_info, package_path));
@@ -858,7 +856,7 @@ fn action_to_legacy_assets(
         let res = asset_conversion::build_legacy(
             &package_context,
             package_info.id(),
-            &UEPath::new(&path),
+            UEPath::new(&path),
             file_writer,
         )
         .with_context(|| format!("Failed to convert {}", package_path.clone()));
@@ -909,10 +907,8 @@ fn action_to_legacy_shaders(
             )
         })?;
 
-        if !args.filter.is_empty() {
-            if !args.filter.iter().any(|f| shader_library_path.contains(f)) {
-                continue;
-            }
+        if !args.filter.is_empty() && !args.filter.iter().any(|f| shader_library_path.contains(f)) {
+            continue;
         }
         verbose!(log, "Extracting Shader Library: {shader_library_path}");
         // TODO make configurable
@@ -979,7 +975,7 @@ fn action_to_zen(args: ActionToZen, _config: Arc<Config>) -> Result<()> {
         let ue_path = UEPath::new(&path);
         let ext = ue_path.extension();
         let is_asset = [Some("uasset"), Some("umap")].contains(&ext);
-        if is_asset && check_path(&path) {
+        if is_asset && check_path(path) {
             let uexp = ue_path.with_extension("uexp");
             if files_set.contains(uexp.as_str()) {
                 asset_paths.push(path);
@@ -988,7 +984,7 @@ fn action_to_zen(args: ActionToZen, _config: Arc<Config>) -> Result<()> {
             }
         }
         let is_shader_lib = Some("ushaderbytecode") == ext;
-        if is_shader_lib && check_path(&path) {
+        if is_shader_lib && check_path(path) {
             shader_lib_paths.push(path);
         }
     }
@@ -997,7 +993,7 @@ fn action_to_zen(args: ActionToZen, _config: Arc<Config>) -> Result<()> {
     let mut package_name_to_referenced_shader_maps: HashMap<String, Vec<FSHAHash>> = HashMap::new();
     for path in shader_lib_paths {
         log!(&log, "converting shader library {path:?}");
-        let shader_library_buffer = input.read(&path)?;
+        let shader_library_buffer = input.read(path)?;
         let path = UEPath::new(&path);
         let asset_metadata_filename =
             get_shader_asset_info_filename_from_library_filename(path.file_name().unwrap())?;
@@ -1048,9 +1044,9 @@ fn action_to_zen(args: ActionToZen, _config: Arc<Config>) -> Result<()> {
                 exports_file_buffer: input.read(path.with_extension("uexp").as_str())?,
                 bulk_data_buffer: input.read_opt(path.with_extension("ubulk").as_str())?,
                 optional_bulk_data_buffer: input
-                    .read_opt(&path.with_extension("uptnl").as_str())?,
+                    .read_opt(path.with_extension("uptnl").as_str())?,
                 memory_mapped_bulk_data_buffer: input
-                    .read_opt(&path.with_extension("m.ubulk").as_str())?,
+                    .read_opt(path.with_extension("m.ubulk").as_str())?,
             };
 
             let converted = zen_asset_conversion::build_zen_asset(
@@ -1620,9 +1616,9 @@ impl Writeable for Toc {
         s.ser_no_length(&self.chunks)?;
         s.ser_no_length(&self.chunk_offset_lengths)?;
         s.ser_no_length(&self.compression_blocks)?;
-        write_compression_methods(s, &self)?;
+        write_compression_methods(s, self)?;
         s.ser_no_length(&directory_index_buffer)?;
-        write_meta(s, &self)?;
+        write_meta(s, self)?;
 
         Ok(())
     }
@@ -1643,7 +1639,7 @@ pub(crate) fn break_down_name_string<'a>(name: &'a str) -> (&'a str, i32) {
     if let Some((left, right)) = name.rsplit_once('_') {
         // Right part needs to be parsed as a valid signed integer that is >= 0 and converts back to the same string
         // Last part is important for not touching names like: Rocket_04 - 04 should stay a part of the name, not a number, otherwise we would actually get Rocket_4 when deserializing!
-        if let Ok(parsed_number) = i32::from_str_radix(right, 10) {
+        if let Ok(parsed_number) = right.parse::<i32>() {
             if parsed_number >= 0 && parsed_number.to_string() == right {
                 name_without_number = left;
                 name_number = parsed_number + 1; // stored as 1 more than the actual number
@@ -1928,7 +1924,7 @@ mod chunk_id {
     }
     impl std::cmp::PartialOrd for FIoChunkId {
         fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-            self.get_raw().partial_cmp(&other.get_raw())
+            Some(self.get_raw().cmp(&other.get_raw()))
         }
     }
     impl std::cmp::Ord for FIoChunkId {
@@ -2233,7 +2229,7 @@ impl Writeable for FGuid {
         stream.ser(&self.b)?;
         stream.ser(&self.c)?;
         stream.ser(&self.d)?;
-        Ok({})
+        Ok(())
     }
 }
 #[serde_as]
@@ -2241,7 +2237,7 @@ impl Writeable for FGuid {
 struct FSHAHash(#[serde_as(as = "serde_with::hex::Hex")] [u8; 20]);
 impl Readable for FSHAHash {
     fn de<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(Self { 0: stream.de()? })
+        Ok(Self(stream.de()?))
     }
 }
 impl Writeable for FSHAHash {

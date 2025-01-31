@@ -1,5 +1,4 @@
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
-use std::ops::Index;
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 use strum::FromRepr;
@@ -8,8 +7,8 @@ use tracing::instrument;
 use crate::name_map::{read_name_batch, read_name_batch_parts, write_name_batch, write_name_batch_parts, EMappedNameType};
 use crate::script_objects::FPackageObjectIndex;
 use crate::ser::{WriteExt, Writeable};
-use crate::{align_u64, align_usize, break_down_name_string, name_map::{FMappedName, FNameMap}, EIoStoreTocVersion, FGuid, FPackageId, FSHAHash, ReadExt, Readable};
-use crate::container_header::{self, EIoContainerHeaderVersion, StoreEntry};
+use crate::{align_u64, break_down_name_string, name_map::{FMappedName, FNameMap}, EIoStoreTocVersion, FGuid, FPackageId, FSHAHash, ReadExt, Readable};
+use crate::container_header::{EIoContainerHeaderVersion, StoreEntry};
 use crate::version_heuristics::{heuristic_zen_has_bulk_data, heuristic_zen_package_version};
 
 pub(crate) fn get_package_name(data: &[u8], container_header_version: EIoContainerHeaderVersion) -> Result<String> {
@@ -159,7 +158,7 @@ impl FZenPackageSummary {
         } else {
             s.ser(&self.graph_data_offset)?;
         }
-        Ok({})
+        Ok(())
     }
 }
 
@@ -197,7 +196,7 @@ impl Writeable for FPackageFileVersion {
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
         s.ser(&self.file_version_ue4)?;
         s.ser(&self.file_version_ue5)?;
-        Ok({})
+        Ok(())
     }
 }
 
@@ -221,7 +220,7 @@ impl Writeable for FCustomVersion {
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
         s.ser(&self.key)?;
         s.ser(&self.version)?;
-        Ok({})
+        Ok(())
     }
 }
 
@@ -254,7 +253,7 @@ impl Writeable for FZenPackageVersioningInfo {
         s.ser(&self.package_file_version)?;
         s.ser(&self.licensee_version)?;
         s.ser(&self.custom_versions)?;
-        Ok({})
+        Ok(())
     }
 }
 
@@ -288,7 +287,7 @@ impl Writeable for FBulkDataMapEntry {
         s.ser(&self.serial_size)?;
         s.ser(&self.flags)?;
         s.ser(&self.pad)?;
-        Ok({})
+        Ok(())
     }
 }
 
@@ -360,7 +359,7 @@ impl Writeable for FExportMapEntry {
         let raw_filter_flags: u8 = self.filter_flags as u8;
         s.ser(&raw_filter_flags)?;
         s.ser(&self.padding)?;
-        Ok({})
+        Ok(())
     }
 }
 
@@ -405,7 +404,7 @@ impl Writeable for FExportBundleEntry {
         s.ser(&self.local_export_index)?;
         let raw_command_type: u32 = self.command_type as u32;
         s.ser(&raw_command_type)?;
-        Ok({})
+        Ok(())
     }
 }
 
@@ -440,7 +439,7 @@ impl Writeable for FDependencyBundleHeader {
         s.ser(&self.serialize_before_create_dependencies)?;
         s.ser(&self.create_before_serialize_dependencies)?;
         s.ser(&self.serialize_before_serialize_dependencies)?;
-        Ok({})
+        Ok(())
     }
 }
 
@@ -457,11 +456,11 @@ impl FPackageIndex {
     pub(crate) fn is_export(&self) -> bool { self.index > 0 }
     pub(crate) fn is_null(&self) -> bool { self.index == 0 }
 
-    pub(crate) fn to_import_index(&self) -> u32 {
+    pub(crate) fn to_import_index(self) -> u32 {
         assert!(self.index < 0);
         (-self.index - 1) as u32
     }
-    pub(crate) fn to_export_index(&self) -> u32 {
+    pub(crate) fn to_export_index(self) -> u32 {
         assert!(self.index > 0);
         (self.index - 1) as u32
     }
@@ -498,7 +497,7 @@ impl Writeable for FDependencyBundleEntry {
     #[instrument(skip_all, name = "FDependencyBundleEntry")]
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
         s.ser(&self.local_import_or_export_index)?;
-        Ok({})
+        Ok(())
     }
 }
 
@@ -522,7 +521,7 @@ impl Writeable for FInternalDependencyArc {
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
         s.ser(&self.from_export_bundle_index)?;
         s.ser(&self.to_export_bundle_index)?;
-        Ok({})
+        Ok(())
     }
 }
 
@@ -556,7 +555,7 @@ impl Writeable for FExternalDependencyArc {
         let raw_from_command_type: u8 = self.from_command_type as u8;
         s.ser(&raw_from_command_type)?;
         s.ser(&self.to_export_bundle_index)?;
-        Ok({})
+        Ok(())
     }
 }
 
@@ -608,7 +607,7 @@ impl FExportBundleHeader {
         }
         s.ser(&self.first_entry_index)?;
         s.ser(&self.entry_count)?;
-        Ok({})
+        Ok(())
     }
 }
 impl Writeable for FExportBundleHeader {
@@ -617,7 +616,7 @@ impl Writeable for FExportBundleHeader {
         s.ser(&self.serial_offset)?;
         s.ser(&self.first_entry_index)?;
         s.ser(&self.entry_count)?;
-        Ok({})
+        Ok(())
     }
 }
 
@@ -681,7 +680,7 @@ impl Writeable for FZenPackageImportedPackageNamesContainer {
 
         write_name_batch(s, &imported_package_names)?;
         s.ser_no_length(&imported_package_name_numbers)?;
-        Ok({})
+        Ok(())
     }
 }
 
@@ -756,7 +755,7 @@ impl FZenPackageHeader {
 
         let optional_package_version = optional_versioning_info.as_ref()
             .map(|x| { x.package_file_version })
-            .or_else(|| { package_version_override });
+            .or(package_version_override);
 
         let has_bulk_data: bool = if let Some(package_version) = optional_package_version.as_ref() {
             package_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::DataResources as i32
@@ -811,17 +810,15 @@ impl FZenPackageHeader {
         let export_map: Vec<FExportMapEntry> = s.de_ctx(export_map_count)?;
 
         let mut export_bundle_headers: Vec<FExportBundleHeader> = Vec::new();
-        let mut export_bundle_entries: Vec<FExportBundleEntry> = Vec::new();
 
         let export_bundle_entries_start_offset = package_start_offset + summary.export_bundle_entries_offset as u64;
         s.seek(SeekFrom::Start(export_bundle_entries_start_offset))?;
         let expected_export_bundle_entries_count = export_map_count * 2; // Each export must have Create and Serialize
-        let mut export_bundle_entries_count;
 
         // New style export bundles entries, UE5.0+. Export bundle entries count is derived from the graph data offset
-        if header_version >= EIoContainerHeaderVersion::LocalizedPackages {
+        let export_bundle_entries_count = if header_version >= EIoContainerHeaderVersion::LocalizedPackages {
             let export_bundle_entries_end_offset = if summary.dependency_bundle_headers_offset > 0 { summary.dependency_bundle_headers_offset } else { summary.graph_data_offset };
-            export_bundle_entries_count = (export_bundle_entries_end_offset - summary.export_bundle_entries_offset) as usize / size_of::<FExportBundleEntry>();
+            (export_bundle_entries_end_offset - summary.export_bundle_entries_offset) as usize / size_of::<FExportBundleEntry>()
 
         } else {
             // Legacy export bundles, bundle headers followed by bundle entries. UE 4.27 and below. Export bundle entries count is derived from the total entry count of all export bundles
@@ -833,10 +830,10 @@ impl FZenPackageHeader {
             for _ in 0..store_entry.export_bundle_count {
                 export_bundle_headers.push(FExportBundleHeader::deserialize(s, header_version)?);
             }
-            export_bundle_entries_count = export_bundle_headers.iter().map(|x| x.entry_count as usize).sum();
-        }
+            export_bundle_headers.iter().map(|x| x.entry_count as usize).sum()
+        };
 
-        export_bundle_entries = s.de_ctx(export_bundle_entries_count)?;
+        let export_bundle_entries: Vec<FExportBundleEntry> = s.de_ctx(export_bundle_entries_count)?;
         if export_bundle_entries_count != expected_export_bundle_entries_count {
             bail!("Expected to have Create and Serialize commands in export bundle for each export in the package. Got only {} export bundle entries with {} exports", export_bundle_entries_count, export_map_count);
         }
@@ -885,7 +882,7 @@ impl FZenPackageHeader {
                     let external_arcs: Vec<FExternalDependencyArc> = s.de()?;
 
                     external_package_dependencies.push(ExternalPackageDependency{
-                        from_package_id: imported_package_id.clone(),
+                        from_package_id: *imported_package_id,
                         external_dependency_arcs: external_arcs,
                         legacy_dependency_arcs: Vec::new(),
                     })
@@ -899,7 +896,7 @@ impl FZenPackageHeader {
                     let legacy_arcs: Vec<FInternalDependencyArc> = s.de()?;
 
                     external_package_dependencies.push(ExternalPackageDependency{
-                        from_package_id: imported_package_id.clone(),
+                        from_package_id: imported_package_id,
                         external_dependency_arcs: Vec::new(),
                         legacy_dependency_arcs: legacy_arcs,
                     })
@@ -915,7 +912,7 @@ impl FZenPackageHeader {
             imported_package_names = s.de()?;
         }
 
-        let mut imported_packages: Vec<FPackageId> = Vec::new();
+        let imported_packages: Vec<FPackageId>;
         let mut shader_map_hashes: Vec<FSHAHash> = Vec::new();
 
         // Derive information from the store entry directly if it is available
@@ -956,7 +953,7 @@ impl FZenPackageHeader {
     #[instrument(skip_all, name = "FZenPackageHeader")]
     pub(crate) fn serialize<S: Write + Seek>(&self, s: &mut S, store_entry: &mut StoreEntry, container_header_version: EIoContainerHeaderVersion) -> Result<Vec<u64>> {
 
-        let mut package_summary = self.summary.clone();
+        let mut package_summary = self.summary;
         package_summary.has_versioning_info = if self.is_unversioned { 0 } else { 1 };
 
         // Write dummy package summary. We will seek back to it once we have all the data necessary to populate it
@@ -1123,14 +1120,14 @@ impl FZenPackageHeader {
 
                 for package_dependency in non_empty_dependencies {
                     s.ser(&package_dependency.from_package_id)?;
-                    
+
                     // Serialize number of dependency arcs to this package
                     let num_legacy_dependency_arcs: i32 = package_dependency.legacy_dependency_arcs.len() as i32;
                     s.ser(&num_legacy_dependency_arcs)?;
-                    
+
                     // Serialize each individual dependency arc. Track it's serialized position so we can patch it up later
                     for dependency_arc in &package_dependency.legacy_dependency_arcs {
-                        let dependency_arc_offset = (s.stream_position()? - package_summary_offset);
+                        let dependency_arc_offset = s.stream_position()? - package_summary_offset;
                         legacy_external_arcs_serialized_offsets.push(dependency_arc_offset);
 
                         s.ser(&dependency_arc.from_export_bundle_index)?;

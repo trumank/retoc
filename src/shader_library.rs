@@ -34,7 +34,7 @@ impl Writeable for FIoStoreShaderMapEntry {
     fn ser<S: Write>(&self, s: &mut S) -> anyhow::Result<()> {
         s.ser(&self.shader_indices_offset)?;
         s.ser(&self.num_shaders)?;
-        Ok({})
+        Ok(())
     }
 }
 
@@ -50,7 +50,7 @@ impl Readable for FIoStoreShaderCodeEntry {
 impl Writeable for FIoStoreShaderCodeEntry {
     fn ser<S: Write>(&self, s: &mut S) -> anyhow::Result<()> {
         s.ser(&self.packed)?;
-        Ok({})
+        Ok(())
     }
 }
 impl FIoStoreShaderCodeEntry {
@@ -108,7 +108,7 @@ impl Writeable for FIoStoreShaderGroupEntry {
         s.ser(&self.num_shaders)?;
         s.ser(&self.uncompressed_size)?;
         s.ser(&self.compressed_size)?;
-        Ok({})
+        Ok(())
     }
 }
 
@@ -159,7 +159,7 @@ impl FIoStoreShaderCodeArchiveHeader {
         s.ser(&self.shader_entries)?;
         s.ser(&self.shader_group_entries)?;
         s.ser(&self.shader_indices)?;
-        Ok({})
+        Ok(())
     }
 }
 
@@ -193,7 +193,7 @@ fn decompress_shader_code(shader_group_data: &Vec<u8>, compression_method: &mut 
 
     if compression_method.is_none() {
         // compression method unknown so try to determine it
-        let likely_compression = determine_likely_compression_method_for_shader_code(&shader_group_data);
+        let likely_compression = determine_likely_compression_method_for_shader_code(shader_group_data);
 
         let mut compression_to_try = [
             CompressionMethod::Zlib,
@@ -208,7 +208,7 @@ fn decompress_shader_code(shader_group_data: &Vec<u8>, compression_method: &mut 
         // try compression methods until one succeeds
         let mut decompressed = None;
         for compression in compression_to_try {
-            let result = decompress_shader_code_with_method(&shader_group_data, compression, uncompressed_size);
+            let result = decompress_shader_code_with_method(shader_group_data, compression, uncompressed_size);
             if let Ok(d) = result {
                 *compression_method = Some(compression);
                 decompressed = Some(d);
@@ -218,7 +218,7 @@ fn decompress_shader_code(shader_group_data: &Vec<u8>, compression_method: &mut 
         decompressed.context("Failed to find decompression method for shader")
     } else {
         // compression method already known so use it
-        decompress_shader_code_with_method(&shader_group_data, compression_method.unwrap(), uncompressed_size)
+        decompress_shader_code_with_method(shader_group_data, compression_method.unwrap(), uncompressed_size)
     }
 }
 
@@ -230,11 +230,11 @@ fn compress_shader(shader_data: &Vec<u8>, compression_method: CompressionMethod)
 
 #[derive(Debug, Clone)]
 pub(crate) struct IoStoreShaderCodeArchive {
-    pub(crate) version: EIoStoreShaderLibraryVersion,
-    pub(crate) header: FIoStoreShaderCodeArchiveHeader,
-    pub(crate) compression_method: Option<CompressionMethod>,
-    pub(crate) shaders_code: Vec<Vec<u8>>,
-    pub(crate) total_shader_code_size: usize,
+    version: EIoStoreShaderLibraryVersion,
+    header: FIoStoreShaderCodeArchiveHeader,
+    compression_method: Option<CompressionMethod>,
+    shaders_code: Vec<Vec<u8>>,
+    total_shader_code_size: usize,
 }
 impl IoStoreShaderCodeArchive {
     // Reads full IoStore shader code archive
@@ -258,7 +258,7 @@ impl IoStoreShaderCodeArchive {
         for shader_group_index in 0..shader_library_header.shader_group_entries.len() {
 
             let shader_group_chunk_id = shader_library_header.shader_group_chunk_ids[shader_group_index];
-            let shader_group_entry = shader_library_header.shader_group_entries[shader_group_index].clone();
+            let shader_group_entry = shader_library_header.shader_group_entries[shader_group_index];
 
             // Read shader group chunk
             let mut shader_group_data = store_access.read_raw(shader_group_chunk_id)?;
@@ -281,7 +281,7 @@ impl IoStoreShaderCodeArchive {
                 // Resolve the actual shader index and it's shader entry
                 let shader_indices_index = (shader_group_entry.shader_indices_offset + i) as usize;
                 let shader_index = shader_library_header.shader_indices[shader_indices_index] as usize;
-                let shader_entry = shader_library_header.shader_entries[shader_index].clone();
+                let shader_entry = shader_library_header.shader_entries[shader_index];
 
                 // Make sure that this shader actually belongs to this group
                 if shader_entry.shader_group_index() != shader_group_index {
@@ -297,8 +297,8 @@ impl IoStoreShaderCodeArchive {
 
             // Copy the decompressed shader data for all shaders except the last one
             for i in 0..(shader_id_and_offset.len() - 1) {
-                let (shader_index, shader_start_offset) = shader_id_and_offset[i].clone();
-                let (_, shader_end_offset) = shader_id_and_offset[i + 1].clone();
+                let (shader_index, shader_start_offset) = shader_id_and_offset[i];
+                let (_, shader_end_offset) = shader_id_and_offset[i + 1];
 
                 decompressed_shaders[shader_index] = shader_group_data[shader_start_offset..shader_end_offset].to_vec();
                 total_shader_code_size += decompressed_shaders[shader_index].len();
@@ -306,7 +306,7 @@ impl IoStoreShaderCodeArchive {
 
             // Copy the shader data for the last shader. It's end offset is the size of the shader group
             if !shader_id_and_offset.is_empty() {
-                let (shader_index, shader_start_offset) = shader_id_and_offset.last().unwrap().clone();
+                let (shader_index, shader_start_offset) = *shader_id_and_offset.last().unwrap();
                 let shader_end_offset = shader_group_entry.uncompressed_size as usize;
 
                 decompressed_shaders[shader_index] = shader_group_data[shader_start_offset..shader_end_offset].to_vec();
@@ -317,7 +317,7 @@ impl IoStoreShaderCodeArchive {
         // Make sure that we have no shaders left with no shader code assigned
         for shader_index in 0..shader_library_header.shader_entries.len() {
             if decompressed_shaders[shader_index].is_empty() {
-                let shader_entry = shader_library_header.shader_entries[shader_index].clone();
+                let shader_entry = shader_library_header.shader_entries[shader_index];
                 bail!("Shader at index {} (frequency: {}, shader group index: {}, offset in group: {}) was not found in any shader group",
                     shader_index, shader_entry.shader_frequency(), shader_entry.shader_group_index(), shader_entry.shader_uncompressed_offset_in_group());
             }
@@ -357,7 +357,7 @@ impl Writeable for FShaderMapEntry {
         s.ser(&self.num_shaders)?;
         s.ser(&self.first_preload_index)?;
         s.ser(&self.num_preload_entries)?;
-        Ok({})
+        Ok(())
     }
 }
 #[derive(Debug, Clone, Default)]
@@ -384,7 +384,7 @@ impl Writeable for FShaderCodeEntry {
         s.ser(&self.size)?;
         s.ser(&self.uncompressed_size)?;
         s.ser(&self.frequency)?;
-        Ok({})
+        Ok(())
     }
 }
 #[derive(Debug, Clone, Default)]
@@ -405,7 +405,7 @@ impl Writeable for FFileCachePreloadEntry {
     fn ser<S: Write>(&self, s: &mut S) -> anyhow::Result<()> {
         s.ser(&self.offset)?;
         s.ser(&self.size)?;
-        Ok({})
+        Ok(())
     }
 }
 #[derive(Debug, Clone, Default)]
@@ -425,7 +425,7 @@ impl FShaderLibraryHeader {
         s.ser(&self.shader_entries)?;
         s.ser(&self.preload_entries)?;
         s.ser(&self.shader_indices)?;
-        Ok({})
+        Ok(())
     }
     fn deserialize<S: Read>(s: &mut S) -> anyhow::Result<Self> {
         Ok(Self{
@@ -470,7 +470,7 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive, compress_
     let mut shader_reference_count: Vec<u32> = vec![0; total_shaders];
 
     for shader_map_index in 0..shader_library.header.shader_map_entries.len() {
-        let shader_map_entry = shader_library.header.shader_map_entries[shader_map_index].clone();
+        let shader_map_entry = shader_library.header.shader_map_entries[shader_map_index];
 
         for i in 0..shader_map_entry.num_shaders {
             let shader_indices_index = (shader_map_entry.shader_indices_offset + i) as usize;
@@ -520,7 +520,7 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive, compress_
             // Write shaders that only belong to a single shader map now, e.g. "Unique" shaders
             for shader_map_index in 0..shader_library.header.shader_map_entries.len() {
 
-                let shader_map_entry = shader_library.header.shader_map_entries[shader_map_index].clone();
+                let shader_map_entry = shader_library.header.shader_map_entries[shader_map_index];
 
                 // Send signal to mark current stream position
                 tx.send(Message::StartMap).unwrap();
@@ -570,7 +570,7 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive, compress_
 
                     // Compress shader if we are allowed to and compression method is known
                     if compress_shaders && shader_library.compression_method.is_some() {
-                        let shader_compressed_data = compress_shader(&shader_uncompressed_data, shader_library.compression_method.unwrap())?;
+                        let shader_compressed_data = compress_shader(shader_uncompressed_data, shader_library.compression_method.unwrap())?;
                         let shader_compressed_size = shader_compressed_data.len();
 
                         // Sometimes compression can result in larger size for some small shaders, so only write compressed data if it's actually smaller than uncompressed size
@@ -587,7 +587,7 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive, compress_
                 },
                 _ => Ok(message) // pass through
             }
-        }).map(|message: anyhow::Result<Message>| -> anyhow::Result<()> {
+        }).try_for_each(|message: anyhow::Result<Message>| -> anyhow::Result<()> {
             let stream_position = shader_code_writer.stream_position()?;
             match message? {
                 Message::StartMap => {
@@ -606,7 +606,7 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive, compress_
                 Message::Compress { .. } => unreachable!(),
             }
             Ok(())
-        }).collect::<anyhow::Result<()>>()?;
+        })?;
 
         Ok(())
 
@@ -715,7 +715,7 @@ fn build_shader_asset_metadata_from_io_store_packages(store_access: &dyn IoStore
     let mut shader_asset_info = ShaderAssetInfoFileRoot::default();
     for shader_map_hash in &referenced_shader_map_hashes {
         shader_asset_info.shader_code_to_assets.push(ShaderMapToPackageNameListEntry{
-            shader_map_hash: shader_map_hash.clone(),
+            shader_map_hash: *shader_map_hash,
             package_names: shader_map_hash_to_package_names.get(shader_map_hash).unwrap().clone(),
         })
     }
@@ -766,7 +766,7 @@ pub(crate) fn rebuild_shader_library_from_io_store(store_access: &dyn IoStoreTra
     shader_library.shader_map_entries.reserve(io_store_shader_library.header.shader_map_entries.len());
     for shader_map_index in 0..io_store_shader_library.header.shader_map_entries.len() {
 
-        let shader_map_entry = io_store_shader_library.header.shader_map_entries[shader_map_index].clone();
+        let shader_map_entry = io_store_shader_library.header.shader_map_entries[shader_map_index];
 
         let first_preload_dependency_index = shader_library.preload_entries.len();
         let mut num_preload_dependencies: usize = 0;
@@ -979,7 +979,7 @@ fn build_io_store_shader_code_archive_header(shader_library: &FShaderLibraryHead
             new_shader_groups[smallest_new_group_index].push(shader_index);
             new_shader_group_sizes[smallest_new_group_index] += shader_size;
         }
-        return new_shader_groups.into_iter();
+        new_shader_groups.into_iter()
     }).collect();
 
     // Final step, sort shaders in each shader group ascending
@@ -1058,11 +1058,11 @@ fn build_io_store_shader_code_archive_header(shader_library: &FShaderLibraryHead
         // Populate shader entries and calculate the resulting hash of the group
         for shader_index in &shader_group {
             let shader_code_entry = shader_library.shader_entries[*shader_index].clone();
-            let shader_hash = shader_library.shader_hashes[*shader_index].clone();
+            let shader_hash = shader_library.shader_hashes[*shader_index];
             io_store_library_header.shader_entries[*shader_index] = FIoStoreShaderCodeEntry::new(shader_group_index, uncompressed_group_size, shader_code_entry.frequency);
 
-            Digest::update(&mut group_hasher, &shader_hash.0);
-            Digest::update(&mut group_hasher, &shader_code_entry.uncompressed_size.to_le_bytes());
+            Digest::update(&mut group_hasher, shader_hash.0);
+            Digest::update(&mut group_hasher, shader_code_entry.uncompressed_size.to_le_bytes());
             uncompressed_group_size += shader_code_entry.uncompressed_size as usize;
         }
         // Add the name of the shader library format into the group hash
@@ -1085,14 +1085,14 @@ fn build_io_store_shader_code_archive_header(shader_library: &FShaderLibraryHead
 }
 
 pub(crate) fn read_shader_asset_info(shader_asset_metadata_buffer: &Vec<u8>, package_name_to_shader_maps: &mut HashMap<String, Vec<FSHAHash>>) -> anyhow::Result<()> {
-    let shader_asset_info: ShaderAssetInfoFileRoot = serde_json::from_slice(&shader_asset_metadata_buffer)?;
+    let shader_asset_info: ShaderAssetInfoFileRoot = serde_json::from_slice(shader_asset_metadata_buffer)?;
 
     for shader_map_entry in &shader_asset_info.shader_code_to_assets {
         for package_name in &shader_map_entry.package_names {
-            package_name_to_shader_maps.entry(package_name.clone()).or_default().push(shader_map_entry.shader_map_hash.clone());
+            package_name_to_shader_maps.entry(package_name.clone()).or_default().push(shader_map_entry.shader_map_hash);
         }
     }
-    Ok({})
+    Ok(())
 }
 
 pub(crate) fn write_io_store_library(store_writer: &mut IoStoreWriter, raw_shader_library_buffer: &Vec<u8>, shader_library_path: &str, log: &Log) -> anyhow::Result<()> {
@@ -1134,7 +1134,7 @@ pub(crate) fn write_io_store_library(store_writer: &mut IoStoreWriter, raw_shade
     // Create shader chunks for each shader group from the library
     for shader_group_index in 0..io_store_library_header.shader_group_entries.len() {
 
-        let shader_group_entry = io_store_library_header.shader_group_entries[shader_group_index].clone();
+        let shader_group_entry = io_store_library_header.shader_group_entries[shader_group_index];
         let mut shader_group_chunk_buffer: Vec<u8> = Vec::new();
 
         // Read and decompress each individual shader contained within this group
@@ -1187,7 +1187,7 @@ pub(crate) fn write_io_store_library(store_writer: &mut IoStoreWriter, raw_shade
         // Now that we know compressed group size, write it into the shader group header
         let compressed_group_size = shader_group_chunk_buffer.len();
         io_store_library_header.shader_group_entries[shader_group_index].compressed_size = compressed_group_size as u32;
-        let shader_group_chunk_id = io_store_library_header.shader_group_chunk_ids[shader_group_index].clone();
+        let shader_group_chunk_id = io_store_library_header.shader_group_chunk_ids[shader_group_index];
 
         // Write the shader code chunk for this group into the container. Note that shader chunks do not have filenames
         store_writer.write_chunk_raw(shader_group_chunk_id, None, &shader_group_chunk_buffer)?;
@@ -1218,7 +1218,7 @@ pub(crate) fn write_io_store_library(store_writer: &mut IoStoreWriter, raw_shade
             total_library_uncompressed_size / 1024 / 1024, total_library_compressed_size / 1024 / 1024,
             total_compressed_groups_size / 1024 / 1024, recompression_ratio, compression_ratio);
     }
-    Ok({})
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1296,6 +1296,6 @@ mod test {
             // Compressed sizes can be different because Oodle compression is not deterministic
         }
 
-        Ok({})
+        Ok(())
     }
 }

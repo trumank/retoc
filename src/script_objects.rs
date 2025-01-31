@@ -157,7 +157,7 @@ impl FPackageObjectIndex {
             })
             .collect::<String>();
         let mut hash: u64 = cityhasher::hash(
-            &lower_slash_path
+            lower_slash_path
                 .encode_utf16()
                 .flat_map(u16::to_le_bytes)
                 .collect::<Vec<u8>>(),
@@ -183,7 +183,7 @@ impl Writeable for FPackageObjectIndex {
     #[instrument(skip_all, name = "FPackageObjectIndex")]
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
         s.ser(&self.type_and_id)?;
-        Ok({})
+        Ok(())
     }
 }
 

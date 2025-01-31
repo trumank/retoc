@@ -3,7 +3,6 @@ use crate::legacy_asset::{EPackageFlags, FLegacyPackageFileSummary, FLegacyPacka
 use crate::zen::{EUnrealEngineObjectUE4Version, EUnrealEngineObjectUE5Version, EZenPackageVersion, FPackageFileVersion, FZenPackageSummary, FZenPackageVersioningInfo};
 use crate::EIoStoreTocVersion;
 use anyhow::{anyhow, bail};
-use itertools::Itertools;
 use std::io::{Cursor, Read, Seek, SeekFrom};
 
 // Returns true if given zen package should deserialize bulk data
@@ -96,8 +95,8 @@ pub(crate) fn heuristic_package_version_from_legacy_package<S: Read + Seek>(s: &
         return Ok(versioning_info.package_file_version);
     }
     // If package is unversioned, but we have a fallback package version, serialize with it directly
-    if package_version_fallback.is_some() {
-        return Ok(package_version_fallback.unwrap());
+    if let Some(package_version_fallback) = package_version_fallback {
+        return Ok(package_version_fallback);
     }
     // Otherwise, we need to make sure that the package is cooked and has no editor properties, for our intrinsics to work
     let package_flags_cooked_versioned = EPackageFlags::Cooked as u32 | EPackageFlags::FilterEditorOnly as u32;

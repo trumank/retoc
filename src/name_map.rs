@@ -26,7 +26,7 @@ fn name_hash(name: &str) -> u64 {
 
 fn name_header(name: &str) -> [u8; 2] {
     let len = if name.is_ascii() {
-        name.as_bytes().len() as i16
+        name.len() as i16
     } else {
         name.encode_utf16().count() as i16 + i16::MIN
     };
@@ -76,7 +76,7 @@ pub(crate) fn write_name_batch<S: Write>(s: &mut S, names: &[String]) -> Result<
     }
 
     for name in names {
-        s.ser(&name_header(&name))?;
+        s.ser(&name_header(name))?;
     }
 
     for name in names {
@@ -111,7 +111,7 @@ pub(crate) fn write_name_batch_parts(names: &[String]) -> Result<(Vec<u8>, Vec<u
     let mut cur_hashes = Cursor::new(vec![]);
 
     for name in names {
-        cur_names.ser(&name_header(&name))?;
+        cur_names.ser(&name_header(name))?;
         if name.is_ascii() {
             cur_names.write_all(name.as_bytes())?;
         } else {
@@ -122,7 +122,7 @@ pub(crate) fn write_name_batch_parts(names: &[String]) -> Result<(Vec<u8>, Vec<u
                 cur_names.ser(&c)?;
             }
         }
-        cur_hashes.ser(&name_hash(&name))?;
+        cur_hashes.ser(&name_hash(name))?;
     }
 
     Ok((cur_names.into_inner(), cur_hashes.into_inner()))
@@ -244,6 +244,6 @@ impl Writeable for FMappedName {
     fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
         stream.ser(&self.index_and_type)?;
         stream.ser(&self.number)?;
-        Ok({})
+        Ok(())
     }
 }

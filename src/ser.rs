@@ -262,7 +262,7 @@ pub(crate) fn write_string<S: Write>(stream: &mut S, value: &str) -> Result<()> 
     if value.is_empty() {
         stream.write_u32::<LE>(0)?;
     } else if value.is_ascii() {
-        stream.write_u32::<LE>(value.as_bytes().len() as u32 + 1)?;
+        stream.write_u32::<LE>(value.len() as u32 + 1)?;
         stream.write_all(value.as_bytes())?;
         stream.write_u8(0)?;
     } else {
