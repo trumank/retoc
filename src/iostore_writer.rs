@@ -80,7 +80,9 @@ impl IoStoreWriter {
                     index.mount_point
                 )
             })?;
-            index.add_file(relative_path, self.toc.chunks.len() as u32);
+            // Convert any backslashes to forward slashes.
+            let relative_path = relative_path.replace('\\', "/");
+            index.add_file(&relative_path, self.toc.chunks.len() as u32);
         }
 
         let mut offset = self.cas_stream.stream_position()?;
