@@ -809,6 +809,35 @@ fn progress_style() -> indicatif::ProgressStyle {
     .progress_chars("##-")
 }
 
+fn compute_common_prefix(paths: &[String]) -> String {
+    if paths.is_empty() {
+        return "".to_string();
+    }
+    let path_components: Vec<Vec<&str>> = paths
+        .iter()
+        .map(|p| {
+            let trimmed = p.strip_prefix("../../../").unwrap_or(p);
+            trimmed.split('\\').filter(|s| !s.is_empty()).collect()
+        })
+        .collect();
+
+    let mut common = path_components[0].clone();
+    for comps in path_components.iter().skip(1) {
+        let min_len = common.len().min(comps.len());
+        let mut new_common = Vec::new();
+        for i in 0..min_len {
+            if common[i] == comps[i] {
+                new_common.push(common[i]);
+            } else {
+                break;
+            }
+        }
+        common = new_common;
+    }
+    common.join("/")
+}
+
+
 fn action_to_legacy_assets(
     args: &ActionToLegacy,
     file_writer: &dyn FileWriterTrait,
