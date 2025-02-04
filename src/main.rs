@@ -978,11 +978,18 @@ fn action_to_zen(args: ActionToZen, _config: Arc<Config>) -> Result<()> {
         Box::new(PakFileReader::new(args.input)?)
     };
 
+    let files = input.list_files()?;
+    let common_prefix = compute_common_prefix(&files);
+    let mount_point = if common_prefix.is_empty() {
+        "../../../".to_string()
+    } else {
+        format!("../../../{}", common_prefix)
+    };
     let mut writer = IoStoreWriter::new(
         &args.output,
         args.version.toc_version(),
         Some(args.version.container_header_version()),
-        mount_point.to_string(),
+        mount_point.clone(),
     )?;
 
     let log = Log::new(args.verbose, args.debug);
