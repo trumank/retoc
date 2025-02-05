@@ -970,8 +970,6 @@ fn action_to_legacy_shaders(
 }
 
 fn action_to_zen(args: ActionToZen, _config: Arc<Config>) -> Result<()> {
-    let mount_point = "../../../";
-
     let input: Box<dyn FileReaderTrait> = if args.input.is_dir() {
         Box::new(FSFileReader::new(args.input))
     } else {
@@ -983,7 +981,7 @@ fn action_to_zen(args: ActionToZen, _config: Arc<Config>) -> Result<()> {
     let mount_point = if common_prefix.is_empty() {
         "../../../".to_string()
     } else {
-        format!("../../../{}", common_prefix)
+        format!("../../../{}/", common_prefix)
     };
     let mut writer = IoStoreWriter::new(
         &args.output,
@@ -1050,7 +1048,7 @@ fn action_to_zen(args: ActionToZen, _config: Arc<Config>) -> Result<()> {
         shader_library::write_io_store_library(
             &mut writer,
             &shader_library_buffer,
-            UEPath::new(mount_point).join(path).as_str(),
+            UEPath::new(&mount_point).join(path).as_str(),
             &log,
         )?;
     }
@@ -1068,27 +1066,34 @@ fn action_to_zen(args: ActionToZen, _config: Arc<Config>) -> Result<()> {
     let needs_asset_import_fixup = container_header_version == EIoContainerHeaderVersion::Initial;
 
     let process_assets = |tx: std::sync::mpsc::SyncSender<ConvertedZenAssetBundle>| -> Result<()> {
-        let process = |path| -> Result<()> {
-            verbose!(&log, "converting asset {path:?}");
-
-            let path = UEPath::new(&path);
+        let process = |path: &String| -> Result<()> {
+            verbose!(&log, "converting asset {}", path);
+            let path = path.replace('\\', "/");
+            let ue_path = UEPath::new(&path);
+            verbose!(&log, "converting asset ue path {}", ue_path);
+            let common_path = &mount_point.strip_prefix("../../../").unwrap_or(&mount_point);
+            verbose!(&log, "converting asset common path {}", common_path);
+            let stripped_path = ue_path.to_string()
+                .strip_prefix(common_path)
+                .unwrap_or(&ue_path.to_string())
+                .to_string();
 
             prog_ref.inspect(|p| p.set_message(path.to_string()));
 
             let bundle = FSerializedAssetBundle {
                 asset_file_buffer: input.read(path.as_str())?,
-                exports_file_buffer: input.read(path.with_extension("uexp").as_str())?,
-                bulk_data_buffer: input.read_opt(path.with_extension("ubulk").as_str())?,
+                exports_file_buffer: input.read(ue_path.with_extension("uexp").as_str())?,
+                bulk_data_buffer: input.read_opt(ue_path.with_extension("ubulk").as_str())?,
                 optional_bulk_data_buffer: input
-                    .read_opt(path.with_extension("uptnl").as_str())?,
+                    .read_opt(ue_path.with_extension("uptnl").as_str())?,
                 memory_mapped_bulk_data_buffer: input
-                    .read_opt(path.with_extension("m.ubulk").as_str())?,
+                    .read_opt(ue_path.with_extension("m.ubulk").as_str())?,
             };
 
             let converted = zen_asset_conversion::build_zen_asset(
                 bundle,
                 &package_name_to_referenced_shader_maps,
-                UEPath::new(mount_point).join(path).as_str(),
+                UEPath::new(&mount_point).join(stripped_path).as_str(),
                 Some(args.version.package_file_version()),
                 container_header_version,
                 needs_asset_import_fixup,
@@ -1101,9 +1106,9 @@ fn action_to_zen(args: ActionToZen, _config: Arc<Config>) -> Result<()> {
         };
 
         if args.no_parallel {
-            asset_paths.iter().try_for_each(process)
+            asset_paths.iter().try_for_each(|p| process(p))
         } else {
-            asset_paths.par_iter().try_for_each(process)
+            asset_paths.par_iter().try_for_each(|p| process(p))
         }
     };
     let mut result = None;
