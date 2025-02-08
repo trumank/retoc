@@ -1592,6 +1592,9 @@ impl ReadableCtx<Arc<Config>> for Toc {
 }
 impl Writeable for Toc {
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        let mut container_flags = EIoContainerFlags::empty();
+
+        container_flags |= EIoContainerFlags::Indexed;
         let mut directory_index_buffer = vec![];
         self.directory_index
             .ser(&mut Cursor::new(&mut directory_index_buffer))?;
@@ -1614,7 +1617,7 @@ impl Writeable for Toc {
             partition_count: 1,
             container_id: self.container_id,
             encryption_key_guid: Default::default(),
-            container_flags: EIoContainerFlags::empty(),
+            container_flags,
             reserved3: 0,
             reserved4: 0,
             toc_chunk_perfect_hash_seeds_count: 0,
