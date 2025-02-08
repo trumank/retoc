@@ -21,9 +21,9 @@ macro_rules! debug {
     };
 }
 
+pub(crate) use debug;
 pub(crate) use log;
 pub(crate) use verbose;
-pub(crate) use debug;
 
 pub(crate) struct Log {
     verbose: bool,

@@ -607,12 +607,7 @@ fn action_pack_raw(args: ActionPackRaw, _config: Arc<Config>) -> Result<()> {
         args.input.join("manifest.json"),
     )?))?;
 
-    let mut writer = IoStoreWriter::new(
-        args.utoc,
-        manifest.version,
-        None,
-        manifest.mount_point,
-    )?;
+    let mut writer = IoStoreWriter::new(args.utoc, manifest.version, None, manifest.mount_point)?;
     for entry in args.input.join("chunks").read_dir()? {
         let entry = entry?;
         let chunk_id = FIoChunkIdRaw::from_str(entry.file_name().to_string_lossy().as_ref())?;
@@ -1050,8 +1045,7 @@ fn action_to_zen(args: ActionToZen, _config: Arc<Config>) -> Result<()> {
                 asset_file_buffer: input.read(path.as_str())?,
                 exports_file_buffer: input.read(path.with_extension("uexp").as_str())?,
                 bulk_data_buffer: input.read_opt(path.with_extension("ubulk").as_str())?,
-                optional_bulk_data_buffer: input
-                    .read_opt(path.with_extension("uptnl").as_str())?,
+                optional_bulk_data_buffer: input.read_opt(path.with_extension("uptnl").as_str())?,
                 memory_mapped_bulk_data_buffer: input
                     .read_opt(path.with_extension("m.ubulk").as_str())?,
             };

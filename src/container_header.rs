@@ -190,8 +190,7 @@ impl FIoContainerHeader {
             {
                 let source_package_mapped_name = self.redirect_name_map.store(source_package_name);
 
-                self.localized_source_package_ids
-                    .insert(source_package_id);
+                self.localized_source_package_ids.insert(source_package_id);
                 self.localized_packages
                     .push(FIoContainerHeaderLocalizedPackage {
                         source_package_id,

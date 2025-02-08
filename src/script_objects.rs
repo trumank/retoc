@@ -97,7 +97,7 @@ impl FPackageObjectIndex {
     const INVALID_ID: u64 = !0;
 
     pub(crate) fn create_from_raw(raw: u64) -> Self {
-        Self{type_and_id: raw}
+        Self { type_and_id: raw }
     }
     pub(crate) fn create(kind: FPackageObjectIndexType, value: u64) -> Self {
         Self {
@@ -146,7 +146,9 @@ impl FPackageObjectIndex {
     pub(crate) fn is_null(self) -> bool {
         self.kind() == FPackageObjectIndexType::Null
     }
-    pub(crate) fn to_raw(self) -> u64 { self.type_and_id } 
+    pub(crate) fn to_raw(self) -> u64 {
+        self.type_and_id
+    }
 
     fn generate_import_hash_from_object_path(object_path: &str) -> u64 {
         let lower_slash_path = object_path
