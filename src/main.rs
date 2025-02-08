@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize, Serializer};
 use serde_with::serde_as;
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::fmt::{Debug, Display, Formatter};
 use std::io::BufWriter;
 use std::path::Path;
@@ -189,10 +190,16 @@ struct ActionToZen {
 
 #[derive(Parser, Debug)]
 struct ActionGet {
+    /// Input .utoc or directory with multiple .utoc (e.g. Content/Paks/)
     #[arg(index = 1)]
-    utoc: PathBuf,
+    input: PathBuf,
+    /// Chunk ID to get
     #[arg(index = 2)]
     chunk_id: FIoChunkIdRaw,
+
+    /// Optional output path or stdout if "-" or omitted
+    #[arg(index = 3)]
+    output: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug)]
@@ -1155,9 +1162,20 @@ fn action_to_zen(args: ActionToZen, _config: Arc<Config>) -> Result<()> {
 }
 
 fn action_get(args: ActionGet, config: Arc<Config>) -> Result<()> {
-    let iostore = iostore::open(args.utoc, config)?;
+    let iostore = iostore::open(args.input, config)?;
     let data = iostore.read_raw(args.chunk_id)?;
-    std::io::stdout().write_all(&data)?;
+
+    let mut output: Box<dyn Write> = if let Some(output) = args.output {
+        if output == OsStr::new("-") {
+            Box::new(std::io::stdout())
+        } else {
+            Box::new(BufWriter::new(fs::File::create(output)?))
+        }
+    } else {
+        Box::new(std::io::stdout())
+    };
+
+    output.write_all(&data)?;
     Ok(())
 }
 
