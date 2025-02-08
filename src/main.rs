@@ -607,14 +607,16 @@ fn action_pack_raw(args: ActionPackRaw, _config: Arc<Config>) -> Result<()> {
         args.input.join("manifest.json"),
     )?))?;
 
-    let mut writer = IoStoreWriter::new(args.utoc, manifest.version, None, manifest.mount_point)?;
+    let mut writer = IoStoreWriter::new(
+        args.utoc,
+        manifest.version,
+        None,
+        manifest.mount_point.into(),
+    )?;
     for entry in args.input.join("chunks").read_dir()? {
         let entry = entry?;
         let chunk_id = FIoChunkIdRaw::from_str(entry.file_name().to_string_lossy().as_ref())?;
-        let path = manifest
-            .chunk_paths
-            .get(&chunk_id.into())
-            .map(String::as_ref);
+        let path = manifest.chunk_paths.get(&chunk_id.into()).map(UEPath::new);
         let data = fs::read(entry.path())?;
         writer.write_chunk_raw(chunk_id, path, &data)?;
     }
@@ -660,9 +662,9 @@ impl FileWriterTrait for NullFileWriter {
 }
 
 trait FileReaderTrait: Send + Sync {
-    fn read(&self, path: &str) -> Result<Vec<u8>>;
-    fn read_opt(&self, path: &str) -> Result<Option<Vec<u8>>>;
-    fn list_files(&self) -> Result<Vec<String>>;
+    fn read(&self, path: &UEPath) -> Result<Vec<u8>>;
+    fn read_opt(&self, path: &UEPath) -> Result<Option<Vec<u8>>>;
+    fn list_files(&self) -> Result<Vec<UEPathBuf>>;
 }
 struct FSFileReader {
     dir: PathBuf,
@@ -673,13 +675,13 @@ impl FSFileReader {
     }
 }
 impl FileReaderTrait for FSFileReader {
-    fn read(&self, path: &str) -> Result<Vec<u8>> {
-        Ok(fs::read(self.dir.join(path))?)
+    fn read(&self, path: &UEPath) -> Result<Vec<u8>> {
+        Ok(fs::read(self.dir.join(path.as_str()))?)
     }
-    fn read_opt(&self, path: &str) -> Result<Option<Vec<u8>>> {
-        read_file_opt(path)
+    fn read_opt(&self, path: &UEPath) -> Result<Option<Vec<u8>>> {
+        read_file_opt(path.as_str())
     }
-    fn list_files(&self) -> Result<Vec<String>> {
+    fn list_files(&self) -> Result<Vec<UEPathBuf>> {
         fn visit_dirs<F>(dir: &Path, cb: &mut F) -> std::io::Result<()>
         where
             F: FnMut(&fs::DirEntry),
@@ -700,14 +702,11 @@ impl FileReaderTrait for FSFileReader {
 
         let mut files = vec![];
         visit_dirs(&self.dir, &mut |file| {
-            files.push(
-                file.path()
-                    .strip_prefix(&self.dir)
-                    .expect("failed to strip dir prefix")
-                    .to_str()
-                    .expect("non-utf8 path")
-                    .to_string(),
-            );
+            let file_path = file.path();
+            let file_relative_path = file_path
+                .strip_prefix(&self.dir)
+                .expect("Failed to strip dir prefix");
+            files.push(to_ue_path(file_relative_path));
         })?;
         Ok(files)
     }
@@ -724,20 +723,20 @@ impl PakFileReader {
     }
 }
 impl FileReaderTrait for PakFileReader {
-    fn read(&self, path: &str) -> Result<Vec<u8>> {
+    fn read(&self, path: &UEPath) -> Result<Vec<u8>> {
         let mut handle = self.file.acquire()?;
-        Ok(self.pak.get(path, handle.file())?)
+        Ok(self.pak.get(path.as_str(), handle.file())?)
     }
-    fn read_opt(&self, path: &str) -> Result<Option<Vec<u8>>> {
+    fn read_opt(&self, path: &UEPath) -> Result<Option<Vec<u8>>> {
         let mut handle = self.file.acquire()?;
-        match self.pak.get(path, handle.file()) {
+        match self.pak.get(path.as_str(), handle.file()) {
             Ok(data) => Ok(Some(data)),
             Err(repak::Error::MissingEntry(_)) => Ok(None),
             Err(err) => Err(err.into()),
         }
     }
-    fn list_files(&self) -> Result<Vec<String>> {
-        Ok(self.pak.files())
+    fn list_files(&self) -> Result<Vec<UEPathBuf>> {
+        Ok(self.pak.files().into_iter().map(Into::into).collect())
     }
 }
 
@@ -943,7 +942,7 @@ fn action_to_legacy_shaders(
 }
 
 fn action_to_zen(args: ActionToZen, _config: Arc<Config>) -> Result<()> {
-    let mount_point = "../../../";
+    let mount_point = UEPath::new("../../../");
 
     let input: Box<dyn FileReaderTrait> = if args.input.is_dir() {
         Box::new(FSFileReader::new(args.input))
@@ -955,23 +954,23 @@ fn action_to_zen(args: ActionToZen, _config: Arc<Config>) -> Result<()> {
         &args.output,
         args.version.toc_version(),
         Some(args.version.container_header_version()),
-        mount_point.to_string(),
+        mount_point.into(),
     )?;
 
     let log = Log::new(args.verbose, args.debug);
     let mut asset_paths = vec![];
     let mut shader_lib_paths = vec![];
 
-    let check_path = |path: &str| {
+    let check_path = |path: &UEPath| {
         if args.filter.is_empty() {
             true
         } else {
-            args.filter.iter().any(|f| path.contains(f))
+            args.filter.iter().any(|f| path.as_str().contains(f))
         }
     };
 
     let files = input.list_files()?;
-    let files_set: HashSet<&str> = HashSet::from_iter(files.iter().map(String::as_str));
+    let files_set: HashSet<&UEPathBuf> = HashSet::from_iter(files.iter());
 
     for path in &files {
         let ue_path = UEPath::new(&path);
@@ -979,7 +978,7 @@ fn action_to_zen(args: ActionToZen, _config: Arc<Config>) -> Result<()> {
         let is_asset = [Some("uasset"), Some("umap")].contains(&ext);
         if is_asset && check_path(path) {
             let uexp = ue_path.with_extension("uexp");
-            if files_set.contains(uexp.as_str()) {
+            if files_set.contains(&uexp) {
                 asset_paths.push(path);
             } else {
                 log!(&log, "Skipping {path:?} because it does not have a split exports file. Are you sure the package is cooked?");
@@ -997,11 +996,12 @@ fn action_to_zen(args: ActionToZen, _config: Arc<Config>) -> Result<()> {
         log!(&log, "converting shader library {path:?}");
         let shader_library_buffer = input.read(path)?;
         let path = UEPath::new(&path);
-        let asset_metadata_filename =
-            get_shader_asset_info_filename_from_library_filename(path.file_name().unwrap())?;
+        let asset_metadata_filename = UEPathBuf::from(
+            get_shader_asset_info_filename_from_library_filename(path.file_name().unwrap())?,
+        );
         let asset_metadata_path = path
             .parent()
-            .map(|x| x.join(&asset_metadata_filename).to_string())
+            .map(|x| x.join(&asset_metadata_filename))
             .unwrap_or(asset_metadata_filename);
 
         // Read asset metadata and store it into the global map to be picked up by zen packages later
@@ -1016,7 +1016,7 @@ fn action_to_zen(args: ActionToZen, _config: Arc<Config>) -> Result<()> {
         shader_library::write_io_store_library(
             &mut writer,
             &shader_library_buffer,
-            UEPath::new(mount_point).join(path).as_str(),
+            &mount_point.join(path),
             &log,
         )?;
     }
@@ -1034,26 +1034,23 @@ fn action_to_zen(args: ActionToZen, _config: Arc<Config>) -> Result<()> {
     let needs_asset_import_fixup = container_header_version == EIoContainerHeaderVersion::Initial;
 
     let process_assets = |tx: std::sync::mpsc::SyncSender<ConvertedZenAssetBundle>| -> Result<()> {
-        let process = |path| -> Result<()> {
+        let process = |path: &&UEPathBuf| -> Result<()> {
             verbose!(&log, "converting asset {path:?}");
-
-            let path = UEPath::new(&path);
 
             prog_ref.inspect(|p| p.set_message(path.to_string()));
 
             let bundle = FSerializedAssetBundle {
-                asset_file_buffer: input.read(path.as_str())?,
-                exports_file_buffer: input.read(path.with_extension("uexp").as_str())?,
-                bulk_data_buffer: input.read_opt(path.with_extension("ubulk").as_str())?,
-                optional_bulk_data_buffer: input.read_opt(path.with_extension("uptnl").as_str())?,
-                memory_mapped_bulk_data_buffer: input
-                    .read_opt(path.with_extension("m.ubulk").as_str())?,
+                asset_file_buffer: input.read(path)?,
+                exports_file_buffer: input.read(&path.with_extension("uexp"))?,
+                bulk_data_buffer: input.read_opt(&path.with_extension("ubulk"))?,
+                optional_bulk_data_buffer: input.read_opt(&path.with_extension("uptnl"))?,
+                memory_mapped_bulk_data_buffer: input.read_opt(&path.with_extension("m.ubulk"))?,
             };
 
             let converted = zen_asset_conversion::build_zen_asset(
                 bundle,
                 &package_name_to_referenced_shader_maps,
-                UEPath::new(mount_point).join(path).as_str(),
+                &mount_point.join(path),
                 Some(args.version.package_file_version()),
                 container_header_version,
                 needs_asset_import_fixup,
@@ -1480,6 +1477,16 @@ fn write_meta<S: Write>(s: &mut S, toc: &Toc) -> Result<()> {
 
 // UTF-8 path with '/' as separator
 type UEPath = typed_path::Utf8UnixPath;
+type UEPathBuf = typed_path::Utf8UnixPathBuf;
+type UEPathComponent<'a> = typed_path::Utf8UnixComponent<'a>;
+
+fn to_ue_path(path: &Path) -> UEPathBuf {
+    let native_path = typed_path::Utf8NativePath::from_bytes_path(typed_path::NativePath::new(
+        path.as_os_str().as_encoded_bytes(),
+    ))
+    .expect("Path did not contain valid UTF-8 characters");
+    native_path.with_encoding()
+}
 
 #[derive(Default)]
 struct Toc {
@@ -2497,11 +2504,13 @@ use directory_index::*;
 use zen::get_package_name;
 
 mod directory_index {
+    use typed_path::Utf8Component as _;
+
     use super::*;
 
     #[derive(Debug, Default)]
     pub struct FIoDirectoryIndexResource {
-        pub(crate) mount_point: String,
+        pub(crate) mount_point: UEPathBuf,
         directory_entries: Vec<FIoDirectoryIndexEntry>,
         file_entries: Vec<FIoFileIndexEntry>,
         string_table: Vec<String>,
@@ -2509,7 +2518,7 @@ mod directory_index {
     impl Readable for FIoDirectoryIndexResource {
         fn de<S: Read>(s: &mut S) -> Result<Self> {
             Ok(Self {
-                mount_point: s.de()?,
+                mount_point: s.de::<String>()?.into(),
                 directory_entries: s.de()?,
                 file_entries: s.de()?,
                 string_table: s.de()?,
@@ -2519,7 +2528,7 @@ mod directory_index {
     impl Writeable for FIoDirectoryIndexResource {
         fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
             if !self.file_entries.is_empty() {
-                s.ser(&self.mount_point)?;
+                s.ser(&self.mount_point.as_str())?;
                 s.ser(&self.directory_entries)?;
                 s.ser(&self.file_entries)?;
                 s.ser(&self.string_table)?;
@@ -2646,14 +2655,14 @@ mod directory_index {
                     }) as u32,
             )
         }
-        pub fn add_file(&mut self, path: &str, user_data: u32) {
-            let mut components = path.split('/');
+        pub fn add_file(&mut self, path: &UEPath, user_data: u32) {
+            let mut components = path.components();
             let file_name = components.next_back().unwrap();
             let mut dir_index = self.ensure_root();
             for dir_name in components {
-                dir_index = self.get_or_create_dir(dir_index, dir_name);
+                dir_index = self.get_or_create_dir(dir_index, dir_name.as_str());
             }
-            let file_index = self.get_or_create_file(dir_index, file_name);
+            let file_index = self.get_or_create_file(dir_index, file_name.as_str());
             self.file_entries[file_index.get()].user_data = user_data;
         }
     }
@@ -2768,7 +2777,7 @@ mod directory_index {
             ]);
 
             for (path, data) in &entries {
-                index.add_file(path, *data);
+                index.add_file(UEPath::new(path), *data);
             }
 
             dbg!(&index);

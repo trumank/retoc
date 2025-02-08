@@ -7,7 +7,7 @@ use crate::{
     align_usize,
     chunk_id::FIoChunkIdRaw,
     container_header::{EIoContainerHeaderVersion, FIoContainerHeader, StoreEntry},
-    EIoChunkType, FPackageId,
+    EIoChunkType, FPackageId, UEPath, UEPathBuf,
 };
 use crate::{
     ser::*, EIoStoreTocVersion, FIoChunkHash, FIoChunkId, FIoContainerId, FIoOffsetAndLength,
@@ -29,7 +29,7 @@ impl IoStoreWriter {
         toc_path: P,
         toc_version: EIoStoreTocVersion,
         container_header_version: Option<EIoContainerHeaderVersion>,
-        mount_point: String,
+        mount_point: UEPathBuf,
     ) -> Result<Self> {
         let toc_path = toc_path.as_ref().to_path_buf();
         let name = toc_path.file_stem().unwrap().to_string_lossy();
@@ -57,7 +57,7 @@ impl IoStoreWriter {
     pub(crate) fn write_chunk_raw(
         &mut self,
         chunk_id_raw: FIoChunkIdRaw,
-        path: Option<&str>,
+        path: Option<&UEPath>,
         data: &[u8],
     ) -> Result<()> {
         self.write_chunk(
@@ -69,7 +69,7 @@ impl IoStoreWriter {
     pub(crate) fn write_chunk(
         &mut self,
         chunk_id: FIoChunkId,
-        path: Option<&str>,
+        path: Option<&UEPath>,
         data: &[u8],
     ) -> Result<()> {
         if let Some(path) = path {
@@ -127,7 +127,7 @@ impl IoStoreWriter {
     pub(crate) fn write_package_chunk(
         &mut self,
         chunk_id: FIoChunkId,
-        path: Option<&str>,
+        path: Option<&UEPath>,
         data: &[u8],
         store_entry: &StoreEntry,
     ) -> Result<()> {
@@ -138,14 +138,27 @@ impl IoStoreWriter {
         container_header.add_package(FPackageId(chunk_id.get_chunk_id()), store_entry.clone());
         self.write_chunk(chunk_id, path, data)
     }
-    pub(crate) fn add_localized_package(&mut self, package_culture: &str, source_package_name: &str, localized_package_id: FPackageId) -> Result<()> {
+    pub(crate) fn add_localized_package(
+        &mut self,
+        package_culture: &str,
+        source_package_name: &str,
+        localized_package_id: FPackageId,
+    ) -> Result<()> {
         let container_header = self
             .container_header
             .as_mut()
             .expect("FIoContainerHeader is required to add localized packages");
-        container_header.add_localized_package(package_culture, source_package_name, localized_package_id)
+        container_header.add_localized_package(
+            package_culture,
+            source_package_name,
+            localized_package_id,
+        )
     }
-    pub(crate) fn add_package_redirect(&mut self, source_package_name: &str, redirect_package_id: FPackageId) -> Result<()> {
+    pub(crate) fn add_package_redirect(
+        &mut self,
+        source_package_name: &str,
+        redirect_package_id: FPackageId,
+    ) -> Result<()> {
         let container_header = self
             .container_header
             .as_mut()
@@ -188,7 +201,7 @@ mod test {
             "new.utoc",
             EIoStoreTocVersion::PerfectHashWithOverflow,
             Some(EIoContainerHeaderVersion::OptionalSegmentPackages),
-            "../../..".to_string(),
+            "../../..".into(),
         )?;
 
         let data = fs::read("script_objects.bin")?;
@@ -196,7 +209,7 @@ mod test {
             FIoChunkIdRaw {
                 id: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5],
             },
-            Some("../../../asdf/asdf/dasf/script_objects.bin"),
+            Some(UEPath::new("../../../asdf/asdf/dasf/script_objects.bin")),
             &data,
         )?;
         writer.finalize()?;

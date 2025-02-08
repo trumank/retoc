@@ -392,7 +392,7 @@ impl IoStoreTrait for IoStoreContainer {
         indent_println!(depth, "container_flags: {:?}", self.toc.container_flags);
         indent_println!(depth, "version: {:?}", self.toc.version);
         let mount_point = &self.toc.directory_index.mount_point;
-        if !mount_point.is_empty() {
+        if !mount_point.as_str().is_empty() {
             indent_println!(depth, "mount_point: {}", mount_point);
         }
         indent_println!(depth, "chunks: {}", self.toc.chunks.len());

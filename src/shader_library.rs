@@ -1091,7 +1091,7 @@ pub(crate) fn read_shader_asset_info(shader_asset_metadata_buffer: &[u8], packag
     Ok(())
 }
 
-pub(crate) fn write_io_store_library(store_writer: &mut IoStoreWriter, raw_shader_library_buffer: &Vec<u8>, shader_library_path: &str, log: &Log) -> anyhow::Result<()> {
+pub(crate) fn write_io_store_library(store_writer: &mut IoStoreWriter, raw_shader_library_buffer: &Vec<u8>, shader_library_path: &UEPath, log: &Log) -> anyhow::Result<()> {
 
     let mut shader_library_reader = Cursor::new(raw_shader_library_buffer);
 

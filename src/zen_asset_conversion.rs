@@ -5,7 +5,7 @@ use crate::name_map::{EMappedNameType, FNameMap};
 use crate::script_objects::{FPackageImportReference, FPackageObjectIndex, FPackageObjectIndexType};
 use crate::version_heuristics::heuristic_zen_version_from_package_file_version;
 use crate::zen::{EExportCommandType, EExportFilterFlags, EObjectFlags, EZenPackageVersion, ExternalPackageDependency, FBulkDataMapEntry, FDependencyBundleEntry, FDependencyBundleHeader, FExportBundleEntry, FExportBundleHeader, FExportMapEntry, FExternalDependencyArc, FInternalDependencyArc, FPackageFileVersion, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo};
-use crate::{EIoChunkType, FIoChunkId, FPackageId, FSHAHash, UEPath};
+use crate::{EIoChunkType, FIoChunkId, FPackageId, FSHAHash, UEPath, UEPathBuf};
 use anyhow::{anyhow, bail};
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::io::{Cursor, Seek, SeekFrom, Write};
@@ -837,7 +837,7 @@ fn serialize_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: &FSeria
     Ok((result_store_entry, result_package_buffer, legacy_external_arcs_serialized_offsets))
 }
 
-fn build_converted_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: FSerializedAssetBundle, path: &str, package_name_to_referenced_shader_maps: &HashMap<String, Vec<FSHAHash>>) -> anyhow::Result<ConvertedZenAssetBundle> {
+fn build_converted_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: FSerializedAssetBundle, path: &UEPath, package_name_to_referenced_shader_maps: &HashMap<String, Vec<FSHAHash>>) -> anyhow::Result<ConvertedZenAssetBundle> {
 
     let (mut result_store_entry, result_package_buffer, legacy_external_arc_serialized_offsets) = serialize_zen_asset(builder, &legacy_asset_bundle)?;
 
@@ -849,7 +849,7 @@ fn build_converted_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: F
     Ok(ConvertedZenAssetBundle {
         package_id: builder.package_id,
         package_name: builder.legacy_package.summary.package_name.clone(),
-        path: path.to_string(),
+        path: path.into(),
         store_entry: result_store_entry,
         package_buffer: result_package_buffer,
         bulk_data_buffer: legacy_asset_bundle.bulk_data_buffer,
@@ -866,7 +866,7 @@ fn build_converted_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: F
 pub(crate) struct ConvertedZenAssetBundle {
     pub(crate) package_id: FPackageId,
     pub(crate) package_name: String,
-    path: String,
+    path: UEPathBuf,
     store_entry: StoreEntry,
     package_buffer: Vec<u8>,
     bulk_data_buffer: Option<Vec<u8>>,
@@ -964,17 +964,17 @@ impl ConvertedZenAssetBundle {
         // Write bulk data chunk if it is present
         if let Some(bulk_data_buffer) = &self.bulk_data_buffer {
             let bulk_data_chunk_id = FIoChunkId::from_package_id(self.package_id, 0, EIoChunkType::BulkData);
-            writer.write_chunk(bulk_data_chunk_id, Some(UEPath::new(&self.path).with_extension("ubulk").as_str()), bulk_data_buffer)?;
+            writer.write_chunk(bulk_data_chunk_id, Some(&self.path.with_extension("ubulk")), bulk_data_buffer)?;
         }
         // Write optional bulk data chunk if it is present
         if let Some(optional_bulk_data_buffer) = &self.optional_bulk_data_buffer {
             let optional_bulk_data_chunk_id = FIoChunkId::from_package_id(self.package_id, 0, EIoChunkType::OptionalBulkData);
-            writer.write_chunk(optional_bulk_data_chunk_id, Some(UEPath::new(&self.path).with_extension("uptnl").as_str()), optional_bulk_data_buffer)?;
+            writer.write_chunk(optional_bulk_data_chunk_id, Some(&self.path.with_extension("uptnl")), optional_bulk_data_buffer)?;
         }
         // Write memory mapped bulk data chunk if it is present
         if let Some(memory_mapped_bulk_data_buffer) = &self.memory_mapped_bulk_data_buffer {
             let memory_mapped_bulk_data_chunk_id = FIoChunkId::from_package_id(self.package_id, 0, EIoChunkType::MemoryMappedBulkData);
-            writer.write_chunk(memory_mapped_bulk_data_chunk_id, Some(UEPath::new(&self.path).with_extension("m.ubulk").as_str()), memory_mapped_bulk_data_buffer)?;
+            writer.write_chunk(memory_mapped_bulk_data_chunk_id, Some(&self.path.with_extension("m.ubulk")), memory_mapped_bulk_data_buffer)?;
         }
         
         // Release the buffers to free the memory taken by them
@@ -1014,7 +1014,7 @@ pub(crate) fn build_serialize_zen_asset(legacy_asset: &FSerializedAssetBundle, c
 }
 
 // Builds zen asset and writes it into the container using the provided serialized legacy asset and package version
-pub(crate) fn build_zen_asset(legacy_asset: FSerializedAssetBundle, package_name_to_referenced_shader_maps: &HashMap<String, Vec<FSHAHash>>, path: &str, package_version_fallback: Option<FPackageFileVersion>, container_header_version: EIoContainerHeaderVersion, allow_fixup: bool) -> anyhow::Result<ConvertedZenAssetBundle> {
+pub(crate) fn build_zen_asset(legacy_asset: FSerializedAssetBundle, package_name_to_referenced_shader_maps: &HashMap<String, Vec<FSHAHash>>, path: &UEPath, package_version_fallback: Option<FPackageFileVersion>, container_header_version: EIoContainerHeaderVersion, allow_fixup: bool) -> anyhow::Result<ConvertedZenAssetBundle> {
 
     // We want to fixup this asset once we have converted all the packages
     let final_allow_fixup = container_header_version == EIoContainerHeaderVersion::Initial && allow_fixup;

@@ -101,6 +101,11 @@ impl Writeable for String {
         write_string(stream, self)
     }
 }
+impl Writeable for &str {
+    fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
+        write_string(stream, self)
+    }
+}
 
 impl<T: Readable> Readable for Vec<T> {
     fn de<S: Read>(stream: &mut S) -> Result<Self> {
