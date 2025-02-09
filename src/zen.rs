@@ -159,6 +159,11 @@ impl FZenPackageSummary {
         } else {
             s.ser(&self.graph_data_offset)?;
         }
+
+        if container_header_version == EIoContainerHeaderVersion::Initial {
+            s.ser(&self.graph_data_size)?;
+            s.ser(&0i32)?; // pad
+        }
         Ok(())
     }
 }
