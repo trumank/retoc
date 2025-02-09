@@ -8,7 +8,7 @@ use tracing::instrument;
 
 use crate::{break_down_name_string, read_array, read_string, ser::*};
 
-const FNAME_HASH_ALGORITHM_ID: u64 = 0xC1640000;
+const FNAME_HASH_ALGORITHM_ID: u64 = 0xC164_0000;
 
 fn name_hash(name: &str) -> u64 {
     let lower = name.to_ascii_lowercase();
@@ -109,6 +109,8 @@ pub(crate) fn read_name_batch_parts(names_buffer: &[u8]) -> Result<Vec<String>> 
 pub(crate) fn write_name_batch_parts(names: &[String]) -> Result<(Vec<u8>, Vec<u8>)> {
     let mut cur_names = Cursor::new(vec![]);
     let mut cur_hashes = Cursor::new(vec![]);
+
+    cur_hashes.ser(&FNAME_HASH_ALGORITHM_ID)?;
 
     for name in names {
         cur_names.ser(&name_header(name))?;

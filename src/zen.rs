@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use strum::FromRepr;
 use tracing::instrument;
 
+use crate::align_usize;
 use crate::name_map::{read_name_batch, read_name_batch_parts, write_name_batch, write_name_batch_parts, EMappedNameType};
 use crate::script_objects::FPackageObjectIndex;
 use crate::ser::{WriteExt, Writeable};
@@ -976,6 +977,9 @@ impl FZenPackageHeader {
             package_summary.name_map_names_offset = (s.stream_position()? - package_summary_offset) as i32;
             package_summary.name_map_names_size = names_buffer.len() as i32;
             s.write_all(&names_buffer)?;
+
+            // Write padding so hashes are aligned
+            s.write_all(&vec![0; align_usize(names_buffer.len(), 8) - names_buffer.len()])?;
 
             // Serialize name map hashes
             package_summary.name_map_hashes_offset = (s.stream_position()? - package_summary_offset) as i32;
