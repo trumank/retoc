@@ -6,7 +6,7 @@ use std::{
     io::{Cursor, Read, Seek as _, SeekFrom, Write},
     marker::PhantomData,
 };
-use strum::FromRepr;
+use strum::{EnumString, FromRepr};
 use tracing::instrument;
 
 use crate::name_map::{read_name_batch_parts, write_name_batch_parts, EMappedNameType};
@@ -36,25 +36,38 @@ pub(crate) struct FIoContainerHeader {
     package_redirect_lookup: HashMap<FPackageId, FPackageId>,
 }
 impl Readable for FIoContainerHeader {
-    #[instrument(skip_all, name = "FIoContainerHeader")]
     fn de<S: Read>(s: &mut S) -> Result<Self> {
+        Self::deserialize(s, None)
+    }
+}
+impl FIoContainerHeader {
+    #[instrument(skip_all, name = "FIoContainerHeader")]
+    pub(crate) fn deserialize<S: Read>(
+        s: &mut S,
+        version_override: Option<EIoContainerHeaderVersion>,
+    ) -> Result<Self> {
         let signature: u32 = s.de()?;
         let version: EIoContainerHeaderVersion;
         let container_id;
-        if signature == Self::MAGIC {
-            version = s.de()?;
-            container_id = s.de()?;
-        } else {
-            version = EIoContainerHeaderVersion::Initial;
+        // if first 4 bytes are not MAGIC then header version must be Initial or earlier
+        // if version override >= Initial, then first 4 bytes must be MAGIC, and version must be known
+        if version_override.is_some_and(|v| v <= EIoContainerHeaderVersion::Initial)
+            || signature != Self::MAGIC
+        {
+            version = version_override.unwrap_or(EIoContainerHeaderVersion::Initial);
             let mut id = [0; 8];
             id[0..4].copy_from_slice(&signature.to_le_bytes());
             id[4..8].copy_from_slice(&s.de::<[u8; 4]>()?);
             container_id = FIoContainerId(u64::from_le_bytes(id));
+        } else {
+            version = s.de()?;
+            version_override.inspect(|v| assert_eq!(*v, version));
+            container_id = s.de()?;
         }
 
         let mut new = Self::new(version, container_id);
 
-        if version == EIoContainerHeaderVersion::Initial {
+        if version <= EIoContainerHeaderVersion::Initial {
             let _package_count: u32 = s.de()?;
 
             let names_buffer: Vec<u8> = s.de()?;
@@ -123,7 +136,7 @@ impl Writeable for FIoContainerHeader {
         }
         s.ser(&self.container_id)?;
 
-        if self.version == EIoContainerHeaderVersion::Initial {
+        if self.version <= EIoContainerHeaderVersion::Initial {
             s.ser(&(self.packages.0.len() as u32))?;
 
             // Serialize container local name map. This map is generally empty in legacy UE4 containers because there are no fields that write to it
@@ -270,10 +283,22 @@ impl FIoContainerHeader {
 }
 
 #[derive(
-    Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr, Serialize, Deserialize,
+    Default,
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    FromRepr,
+    EnumString,
+    Serialize,
+    Deserialize,
 )]
-#[repr(u32)]
+#[repr(i32)]
 pub(crate) enum EIoContainerHeaderVersion {
+    PreInitial = -1,
     Initial = 0,
     LocalizedPackages = 1,
     OptionalSegmentPackages = 2,
@@ -412,13 +437,15 @@ impl StoreEntries {
 
         let buffer: Vec<u8> = s.de()?;
         let mut cur = Cursor::new(buffer);
+        //let mut cur = ser_hex::TraceStream::new("trace_store.json", &mut cur);
 
-        let (member_offset, entry_size) = if version >= EIoContainerHeaderVersion::NoExportInfo {
-            (0, 16)
-        } else if version > EIoContainerHeaderVersion::Initial {
-            (8, 24)
-        } else {
-            (24, 32)
+        let (member_offset, entry_size) = match version {
+            EIoContainerHeaderVersion::PreInitial => (8, 16),
+            EIoContainerHeaderVersion::Initial => (24, 32),
+            EIoContainerHeaderVersion::LocalizedPackages => (8, 24),
+            EIoContainerHeaderVersion::OptionalSegmentPackages => (8, 24),
+            EIoContainerHeaderVersion::NoExportInfo => (0, 16),
+            EIoContainerHeaderVersion::SoftPackageReferences => (0, 16),
         };
 
         let entries = read_array(package_ids.len(), &mut cur, |s| {
@@ -484,12 +511,13 @@ impl StoreEntries {
         let mut buffer: Vec<u8> = vec![];
         let mut cur = Cursor::new(&mut buffer);
 
-        let (member_offset, entry_size) = if version >= EIoContainerHeaderVersion::NoExportInfo {
-            (0, 16)
-        } else if version > EIoContainerHeaderVersion::Initial {
-            (8, 24)
-        } else {
-            (24, 32)
+        let (member_offset, entry_size) = match version {
+            EIoContainerHeaderVersion::PreInitial => (8, 16),
+            EIoContainerHeaderVersion::Initial => (24, 32),
+            EIoContainerHeaderVersion::LocalizedPackages => (8, 24),
+            EIoContainerHeaderVersion::OptionalSegmentPackages => (8, 24),
+            EIoContainerHeaderVersion::NoExportInfo => (0, 16),
+            EIoContainerHeaderVersion::SoftPackageReferences => (0, 16),
         };
 
         // calculate end of entries to start writing arrays
@@ -653,41 +681,52 @@ mod test {
     use super::*;
 
     use fs_err as fs;
-    use std::io::BufReader;
 
-    #[test]
-    fn test_container_header_new() -> Result<()> {
-        let stream = BufReader::new(fs::File::open("tests/UE5.3/ContainerHeader_1.bin")?);
-
-        let header: FIoContainerHeader =
-            ser_hex::TraceStream::new("out/container_header.trace.json", stream).de()?;
-        //dbg!(&header.store_entries.entries);
+    fn test_rw_container_header(
+        data: &[u8],
+        version_override: Option<EIoContainerHeaderVersion>,
+    ) -> Result<()> {
+        let header = FIoContainerHeader::deserialize(&mut Cursor::new(data), version_override)?;
 
         let mut out_cur = Cursor::new(vec![]);
         out_cur.ser(&header)?;
         out_cur.set_position(0);
 
-        let header2: FIoContainerHeader = out_cur.de()?;
+        let header2 = FIoContainerHeader::deserialize(&mut out_cur, version_override)?;
+
+        //fs::write("header_in.json", serde_json::to_string(&header)?)?;
+        //fs::write("header_out.json", serde_json::to_string(&header2)?)?;
+        //fs::write("header_out.bin", out_cur.into_inner())?;
 
         assert_eq!(header, header2);
+        Ok(())
+    }
 
+    #[test]
+    fn test_container_header_new() -> Result<()> {
+        let data = fs::read("tests/UE5.3/ContainerHeader_1.bin")?;
+        test_rw_container_header(&data, None)?;
         Ok(())
     }
 
     #[test]
     fn test_container_header_initial() -> Result<()> {
-        let mut stream = BufReader::new(fs::File::open("tests/UE4.27/ContainerHeader_1.bin")?);
+        let data = fs::read("tests/UE4.27/ContainerHeader_1.bin")?;
+        test_rw_container_header(&data, None)?;
+        Ok(())
+    }
 
-        let header: FIoContainerHeader = stream.de()?;
+    #[test]
+    fn test_container_header_issue7() -> Result<()> {
+        let data = fs::read("tests/issues/issue7/header.bin")?;
+        test_rw_container_header(&data, Some(EIoContainerHeaderVersion::PreInitial))?;
+        Ok(())
+    }
 
-        let mut out_cur = Cursor::new(vec![]);
-        out_cur.ser(&header)?;
-        out_cur.set_position(0);
-
-        let header2: FIoContainerHeader = out_cur.de()?;
-
-        assert_eq!(header, header2);
-
+    #[test]
+    fn test_container_header_issue18() -> Result<()> {
+        let data = fs::read("tests/issues/issue18/header.bin")?;
+        test_rw_container_header(&data, Some(EIoContainerHeaderVersion::PreInitial))?;
         Ok(())
     }
 }
