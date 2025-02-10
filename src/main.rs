@@ -1407,6 +1407,31 @@ fn to_ue_path(path: &Path) -> UEPathBuf {
     native_path.with_encoding()
 }
 
+fn pak_path_to_game_path(pak_path: &UEPath) -> Option<String> {
+    let mut components = pak_path.components();
+    let a = components.next();
+    let b = components.next();
+
+    match (a, b) {
+        (Some(UEPathComponent::Normal(_)), Some(UEPathComponent::Normal(b))) if b.eq_ignore_ascii_case("Plugins") => {
+            let mut last = None;
+            loop {
+                match components.next() {
+                    Some(UEPathComponent::Normal(c)) if c.eq_ignore_ascii_case("Content") => break last.map(|plugin| UEPath::new("/").join(plugin).join(components.as_path())),
+                    Some(UEPathComponent::Normal(next)) => {
+                        last = Some(next);
+                    }
+                    _ => break None,
+                }
+            }
+        }
+        (Some(UEPathComponent::Normal(a)), Some(UEPathComponent::Normal(b))) if a.eq_ignore_ascii_case("Engine") && b.eq_ignore_ascii_case("Content") => Some(UEPath::new("/Engine").join(components.as_path())),
+        (Some(UEPathComponent::Normal(_)), Some(UEPathComponent::Normal(b))) if b.eq_ignore_ascii_case("Content") => Some(UEPath::new("/Game").join(components.as_path())),
+        _ => None,
+    }
+    .map(|p| p.to_string())
+}
+
 #[derive(Default)]
 struct Toc {
     config: Arc<Config>,

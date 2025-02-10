@@ -11,7 +11,7 @@ use crate::zen::{
     FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo,
 };
 use crate::{EIoChunkType, FIoChunkId, FPackageId, FSHAHash, UEPath, UEPathBuf};
-use anyhow::{anyhow, bail};
+use anyhow::{Context, anyhow, bail};
 use byteorder::{LE, ReadBytesExt};
 use std::cmp::{Ordering, max};
 use std::collections::{BinaryHeap, HashMap, HashSet};
@@ -65,7 +65,7 @@ struct ZenPackageBuilder {
 // Flow is create_asset_builder -> setup_zen_package_summary -> build_zen_import_map -> build_zen_export_map -> build_zen_preload_dependencies -> serialize_zen_asset
 fn create_asset_builder(package: FLegacyPackageHeader, container_header_version: EIoContainerHeaderVersion, fixup_legacy_external_arcs: bool, source_package_name: Option<String>) -> ZenPackageBuilder {
     ZenPackageBuilder {
-        package_id: FPackageId::from_name(&package.summary.package_name),
+        package_id: FPackageId::from_name(source_package_name.as_deref().unwrap_or(&package.summary.package_name)),
         legacy_package: package,
         zen_package: FZenPackageHeader {
             container_header_version,
@@ -951,14 +951,16 @@ fn serialize_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: &FSeria
 fn build_converted_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: FSerializedAssetBundle, path: &UEPath, package_name_to_referenced_shader_maps: &HashMap<String, Vec<FSHAHash>>) -> anyhow::Result<ConvertedZenAssetBundle> {
     let (mut result_store_entry, result_package_buffer, legacy_external_arc_serialized_offsets) = serialize_zen_asset(builder, &legacy_asset_bundle)?;
 
+    let package_name = builder.source_package_name.clone().unwrap();
+
     // Append shader map hashes to the store entry from the package name to shader maps lookup
-    if let Some(referenced_shader_maps) = package_name_to_referenced_shader_maps.get(&builder.legacy_package.summary.package_name) {
+    if let Some(referenced_shader_maps) = package_name_to_referenced_shader_maps.get(&package_name) {
         result_store_entry.shader_map_hashes.append(&mut referenced_shader_maps.clone());
     }
 
     Ok(ConvertedZenAssetBundle {
         package_id: builder.package_id,
-        package_name: builder.legacy_package.summary.package_name.clone(),
+        package_name,
         path: path.into(),
         store_entry: result_store_entry,
         package_buffer: result_package_buffer,
@@ -1144,9 +1146,18 @@ pub(crate) fn build_zen_asset(
     container_header_version: EIoContainerHeaderVersion,
     allow_fixup: bool,
 ) -> anyhow::Result<ConvertedZenAssetBundle> {
+    let source_package_name = if container_header_version <= EIoContainerHeaderVersion::Initial {
+        let stripped = path.strip_prefix("../../../").unwrap();
+        let pak_path = crate::pak_path_to_game_path(stripped).with_context(|| format!("Failed to get Package Path from {}", stripped))?;
+        let asset_path = pak_path.rsplit_once(".").unwrap();
+        Some(asset_path.0.to_string())
+    } else {
+        None
+    };
+
     // We want to fixup this asset once we have converted all the packages
     let final_allow_fixup = container_header_version <= EIoContainerHeaderVersion::Initial && allow_fixup;
-    let builder = build_zen_asset_internal(&legacy_asset, container_header_version, package_version_fallback, final_allow_fixup, None)?;
+    let builder = build_zen_asset_internal(&legacy_asset, container_header_version, package_version_fallback, final_allow_fixup, source_package_name)?;
 
     // Serialize the resulting asset into the container writer
     build_converted_zen_asset(&builder, legacy_asset, path, package_name_to_referenced_shader_maps)
