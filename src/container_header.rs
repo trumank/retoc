@@ -26,6 +26,7 @@ pub(crate) struct FIoContainerHeader {
     redirect_name_map: FNameMap,
     localized_packages: Vec<FIoContainerHeaderLocalizedPackage>,
     package_redirects: Vec<FIoContainerHeaderPackageRedirect>,
+    soft_package_references: Option<FIoContainerHeaderSoftPackageReferences>,
     // Legacy UE4 culture map (also known as localized package map) and package redirects (without source package name information)
     legacy_culture_package_map: FCulturePackageMap,
     legacy_package_redirects: Vec<LegacyContainerHeaderPackageRedirect>,
@@ -105,7 +106,10 @@ impl Readable for FIoContainerHeader {
         }
 
         if version >= EIoContainerHeaderVersion::SoftPackageReferences {
-            todo!("soft package references")
+            let has_soft_package_references: bool = s.de()?;
+            if has_soft_package_references {
+                new.soft_package_references = Some(s.de()?);
+            }
         }
 
         Ok(new)
@@ -143,7 +147,10 @@ impl Writeable for FIoContainerHeader {
         }
 
         if self.version >= EIoContainerHeaderVersion::SoftPackageReferences {
-            todo!("soft package references")
+            s.ser(&self.soft_package_references.is_some())?;
+            if let Some(soft_package_references) = &self.soft_package_references {
+                s.ser(soft_package_references)?;
+            }
         }
 
         Ok(())
@@ -162,6 +169,7 @@ impl FIoContainerHeader {
             redirect_name_map: FNameMap::default(),
             localized_packages: vec![],
             package_redirects: vec![],
+            soft_package_references: None,
             legacy_culture_package_map: FCulturePackageMap::default(),
             legacy_package_redirects: vec![],
             localized_source_package_ids: HashSet::new(),
@@ -329,6 +337,28 @@ impl Writeable for FIoContainerHeaderPackageRedirect {
         s.ser(&self.source_package_id)?;
         s.ser(&self.target_package_id)?;
         s.ser(&self.source_package_name)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+struct FIoContainerHeaderSoftPackageReferences {
+    package_ids: Vec<FPackageId>,
+    package_indices: Vec<u8>,
+}
+impl Readable for FIoContainerHeaderSoftPackageReferences {
+    #[instrument(skip_all, name = "FIoContainerHeaderSoftPackageReferences")]
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        Ok(Self {
+            package_ids: s.de()?,
+            package_indices: s.de()?,
+        })
+    }
+}
+impl Writeable for FIoContainerHeaderSoftPackageReferences {
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.package_ids)?;
+        s.ser(&self.package_indices)?;
         Ok(())
     }
 }

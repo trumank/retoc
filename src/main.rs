@@ -1452,24 +1452,32 @@ fn read_directory_index<R: Read>(
 }
 
 #[instrument(skip_all)]
-fn read_meta<S: Read>(
-    stream: &mut S,
-    header: &FIoStoreTocHeader,
-) -> Result<Vec<FIoStoreTocEntryMeta>> {
-    read_array(header.toc_entry_count as usize, stream, |s| {
-        let res = s.de()?;
+fn read_meta<S: Read>(s: &mut S, header: &FIoStoreTocHeader) -> Result<Vec<FIoStoreTocEntryMeta>> {
+    read_array(header.toc_entry_count as usize, s, |s| {
+        let mut chunk_hash;
+        let flags;
         if header.version >= EIoStoreTocVersion::ReplaceIoChunkHashWithIoHash {
+            chunk_hash = FIoChunkHash([0; 32]);
+            s.read_exact(&mut chunk_hash.0[0..20])?;
+            flags = s.de()?;
             s.read_exact(&mut [0; 3])?;
+        } else {
+            chunk_hash = s.de()?;
+            flags = s.de()?;
         }
-        Ok(res)
+        Ok(FIoStoreTocEntryMeta { chunk_hash, flags })
     })
 }
 #[instrument(skip_all)]
 fn write_meta<S: Write>(s: &mut S, toc: &Toc) -> Result<()> {
     for meta in &toc.chunk_metas {
-        s.ser(meta)?;
         if toc.version >= EIoStoreTocVersion::ReplaceIoChunkHashWithIoHash {
+            s.write_all(&meta.chunk_hash.0[0..20])?;
+            s.ser(&meta.flags)?;
             s.write_all(&[0; 3])?;
+        } else {
+            s.ser(&meta.chunk_hash)?;
+            s.ser(&meta.flags)?;
         }
     }
     Ok(())
