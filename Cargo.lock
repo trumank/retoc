@@ -118,6 +118,9 @@ name = "bitflags"
 version = "2.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b048fb63fd8b5923fc5aa7b340d8e156aec7ec02f0c78fa8a6ddc2613f6f71de"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "blake3"
@@ -1122,6 +1125,7 @@ dependencies = [
  "strum",
  "tracing",
  "typed-path",
+ "ue_reflection",
  "zstd",
 ]
 
@@ -1532,6 +1536,15 @@ name = "typenum"
 version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42ff0bf0c66b8238c6f3b578df37d0b7848e55df8577b3f74f92a69acceeb825"
+
+[[package]]
+name = "ue_reflection"
+version = "0.1.0"
+source = "git+https://github.com/trumank/meatloaf.git#24c2439c3f72f80f172c13b9eb126e517b19d767"
+dependencies = [
+ "bitflags",
+ "serde",
+]
 
 [[package]]
 name = "unicode-ident"

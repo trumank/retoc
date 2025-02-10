@@ -36,6 +36,7 @@ sha1 = "0.10.6"
 strum = { version = "0.26.3", features = ["derive"] }
 tracing = "0.1.41"
 typed-path = "0.10.0"
+ue_reflection = { git = "https://github.com/trumank/meatloaf.git", version = "0.1.0" }
 zstd = "0.13.2"
 
 [dev-dependencies]
