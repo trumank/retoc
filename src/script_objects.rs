@@ -10,7 +10,6 @@ use tracing::instrument;
 use crate::name_map::{read_name_batch_parts, EMappedNameType};
 use crate::{
     name_map::{FMappedName, FNameMap},
-    read_array,
     ser::*,
 };
 
@@ -24,17 +23,13 @@ impl ZenScriptObjects {
     #[instrument(skip_all, name = "ZenScriptObjects")]
     pub(crate) fn deserialize_new<S: Read>(s: &mut S) -> Result<Self> {
         let global_name_map: FNameMap = FNameMap::deserialize(s, EMappedNameType::Global)?;
-        let num_script_objects: u32 = s.de()?;
-        let script_objects = read_array(num_script_objects as usize, s, FScriptObjectEntry::read)?;
-        Ok(Self::new(script_objects, global_name_map))
+        Ok(Self::new(s.de()?, global_name_map))
     }
     #[instrument(skip_all, name = "ZenScriptObjects")]
     pub(crate) fn deserialize_old<S: Read>(s: &mut S, names: &[u8]) -> Result<Self> {
         let global_name_map: FNameMap =
             FNameMap::create_from_names(EMappedNameType::Global, read_name_batch_parts(names)?);
-        let num_script_objects: u32 = s.de()?;
-        let script_objects = read_array(num_script_objects as usize, s, FScriptObjectEntry::read)?;
-        Ok(Self::new(script_objects, global_name_map))
+        Ok(Self::new(s.de()?, global_name_map))
     }
     fn new(script_objects: Vec<FScriptObjectEntry>, global_name_map: FNameMap) -> Self {
         // Build lookup by package object index for fast access
@@ -49,6 +44,14 @@ impl ZenScriptObjects {
             script_object_lookup,
         }
     }
+    pub(crate) fn print(&self) {
+        for s in &self.script_objects {
+            println!("{}:", self.global_name_map.get(s.object_name));
+            println!("  global_index:    {:?}", s.global_index.value());
+            println!("  outer_index:     {:?}", s.outer_index.value());
+            println!("  cdo_class_index: {:?}", s.cdo_class_index.value());
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, Default)]
@@ -58,9 +61,9 @@ pub(crate) struct FScriptObjectEntry {
     pub(crate) outer_index: FPackageObjectIndex,
     pub(crate) cdo_class_index: FPackageObjectIndex,
 }
-impl FScriptObjectEntry {
+impl Readable for FScriptObjectEntry {
     #[instrument(skip_all, name = "FScriptObjectEntry")]
-    fn read<S: Read>(s: &mut S) -> Result<Self> {
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
         Ok(Self {
             object_name: s.de()?,
             global_index: s.de()?,
@@ -69,8 +72,18 @@ impl FScriptObjectEntry {
         })
     }
 }
+impl Writeable for FScriptObjectEntry {
+    #[instrument(skip_all, name = "FScriptObjectEntry")]
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.object_name)?;
+        s.ser(&self.global_index)?;
+        s.ser(&self.outer_index)?;
+        s.ser(&self.cdo_class_index)?;
+        Ok(())
+    }
+}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Hash)]
 #[repr(C)] // Needed for sizeof to determine number of entries in package header
 pub(crate) struct FPackageObjectIndex {
     type_and_id: u64,
@@ -188,6 +201,28 @@ impl Writeable for FPackageObjectIndex {
         Ok(())
     }
 }
+impl std::fmt::Debug for FPackageObjectIndex {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self.kind() {
+            FPackageObjectIndexType::Export => write!(
+                f,
+                "FPackageObjectIndex::Export({:X?})",
+                self.export().unwrap()
+            ),
+            FPackageObjectIndexType::ScriptImport => write!(
+                f,
+                "FPackageObjectIndex::ScriptImport({:X?})",
+                self.raw_index()
+            ),
+            FPackageObjectIndexType::PackageImport => write!(
+                f,
+                "FPackageObjectIndex::PackageImport({:X?})",
+                self.package_import().unwrap()
+            ),
+            FPackageObjectIndexType::Null => write!(f, "FPackageObjectIndex::Null"),
+        }
+    }
+}
 
 #[cfg(test)]
 mod test {
@@ -200,13 +235,7 @@ mod test {
         let mut stream = BufReader::new(fs::File::open("tests/UE5.3/ScriptObjects.bin")?);
 
         let script_objects = ZenScriptObjects::deserialize_new(&mut stream)?;
-
-        for s in script_objects.script_objects {
-            println!("{}:", script_objects.global_name_map.get(s.object_name));
-            println!("  global_index:    {:?}", s.global_index.value());
-            println!("  outer_index:     {:?}", s.outer_index.value());
-            println!("  cdo_class_index: {:?}", s.cdo_class_index.value());
-        }
+        script_objects.print();
 
         Ok(())
     }
@@ -217,13 +246,7 @@ mod test {
         let mut meta = BufReader::new(fs::File::open("tests/UE4.27/LoaderInitialLoadMeta_1.bin")?);
 
         let script_objects = ZenScriptObjects::deserialize_old(&mut meta, &names)?;
-
-        for s in script_objects.script_objects {
-            println!("{}:", script_objects.global_name_map.get(s.object_name));
-            println!("  global_index:    {:?}", s.global_index.value());
-            println!("  outer_index:     {:?}", s.outer_index.value());
-            println!("  cdo_class_index: {:?}", s.cdo_class_index.value());
-        }
+        script_objects.print();
 
         Ok(())
     }
