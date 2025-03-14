@@ -197,14 +197,15 @@ mod test {
 
     #[test]
     fn test_write_container() -> Result<()> {
+        fs::create_dir("out").ok();
         let mut writer = IoStoreWriter::new(
-            "new.utoc",
+            "out/new.utoc",
             EIoStoreTocVersion::PerfectHashWithOverflow,
             Some(EIoContainerHeaderVersion::OptionalSegmentPackages),
             "../../..".into(),
         )?;
 
-        let data = fs::read("script_objects.bin")?;
+        let data = fs::read("tests/UE5.3/ScriptObjects.bin")?;
         writer.write_chunk_raw(
             FIoChunkIdRaw {
                 id: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5],

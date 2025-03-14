@@ -278,6 +278,7 @@ mod test {
             },
         );
 
+        fs::create_dir("out").ok();
         fs::write("out/packagestore.json", serde_json::to_vec(&field)?)?;
 
         Ok(())
