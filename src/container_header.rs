@@ -6,7 +6,7 @@ use std::{
     io::{Cursor, Read, Seek as _, SeekFrom, Write},
     marker::PhantomData,
 };
-use strum::{FromRepr, IntoStaticStr, VariantArray};
+use strum::FromRepr;
 use tracing::instrument;
 
 use crate::name_map::{read_name_batch_parts, write_name_batch_parts, EMappedNameType};
@@ -292,12 +292,12 @@ impl FIoContainerHeader {
     PartialOrd,
     Ord,
     FromRepr,
-    IntoStaticStr,
-    VariantArray,
+    clap::ValueEnum,
     Serialize,
     Deserialize,
 )]
 #[repr(i32)]
+#[clap(rename_all = "verbatim")]
 pub(crate) enum EIoContainerHeaderVersion {
     PreInitial = -1,
     Initial = 0,
@@ -317,15 +317,6 @@ impl Readable for EIoContainerHeaderVersion {
 impl Writeable for EIoContainerHeaderVersion {
     fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
         s.ser(&(*self as u32))
-    }
-}
-impl clap::ValueEnum for EIoContainerHeaderVersion {
-    fn value_variants<'a>() -> &'a [Self] {
-        Self::VARIANTS
-    }
-    fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
-        let name: &'static str = self.into();
-        Some(clap::builder::PossibleValue::new(name))
     }
 }
 

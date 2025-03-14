@@ -4,10 +4,9 @@ use crate::{
     EIoStoreTocVersion,
 };
 
-use strum::{IntoStaticStr, VariantArray};
-
 use EngineVersion::*;
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, IntoStaticStr, VariantArray)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
+#[clap(rename_all = "verbatim")]
 pub(crate) enum EngineVersion {
     UE4_26,
     UE4_27,
@@ -17,15 +16,6 @@ pub(crate) enum EngineVersion {
     UE5_3,
     UE5_4,
     UE5_5,
-}
-impl clap::ValueEnum for EngineVersion {
-    fn value_variants<'a>() -> &'a [Self] {
-        Self::VARIANTS
-    }
-    fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
-        let name: &'static str = self.into();
-        Some(clap::builder::PossibleValue::new(name))
-    }
 }
 
 impl EngineVersion {
