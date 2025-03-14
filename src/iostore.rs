@@ -335,7 +335,7 @@ pub struct IoStoreContainer {
 impl IoStoreContainer {
     pub fn open<P: AsRef<Path>>(toc_path: P, config: Arc<Config>) -> Result<Self> {
         let path = toc_path.as_ref().to_path_buf();
-        let toc: Toc = BufReader::new(fs::File::open(&path)?).de_ctx(config)?;
+        let toc: Toc = BufReader::new(fs::File::open(&path)?).de_ctx(config.clone())?;
         let cas = FilePool::new(path.with_extension("ucas"), rayon::max_num_threads())?;
 
         let mut container = Self {
@@ -359,7 +359,10 @@ impl IoStoreContainer {
         if let Some(header_chunk) = header_chunk {
             let chunk_id = header_chunk.id();
             let data = container.read(chunk_id)?;
-            match FIoContainerHeader::de(&mut std::io::Cursor::new(&data)) {
+            match FIoContainerHeader::deserialize(
+                &mut std::io::Cursor::new(&data),
+                config.container_header_version_override,
+            ) {
                 Ok(header) => {
                     container.container_header = Some(header);
                 }

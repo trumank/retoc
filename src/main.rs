@@ -246,6 +246,8 @@ enum Action {
 struct Args {
     #[arg(short, long)]
     aes_key: Option<String>,
+    #[arg(long)]
+    override_container_header_version: Option<EIoContainerHeaderVersion>,
     #[command(subcommand)]
     action: Action,
 }
@@ -253,7 +255,10 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    let mut config = Config::default();
+    let mut config = Config {
+        container_header_version_override: args.override_container_header_version,
+        ..Default::default()
+    };
     if let Some(aes) = args.aes_key {
         config
             .aes_keys
@@ -941,7 +946,7 @@ fn action_to_legacy_shaders(
     Ok(())
 }
 
-fn action_to_zen(args: ActionToZen, _config: Arc<Config>) -> Result<()> {
+fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
     let mount_point = UEPath::new("../../../");
 
     let input: Box<dyn FileReaderTrait> = if args.input.is_dir() {
@@ -950,10 +955,14 @@ fn action_to_zen(args: ActionToZen, _config: Arc<Config>) -> Result<()> {
         Box::new(PakFileReader::new(args.input)?)
     };
 
+    let container_header_version = config
+        .container_header_version_override
+        .unwrap_or(args.version.container_header_version());
+
     let mut writer = IoStoreWriter::new(
         &args.output,
         args.version.toc_version(),
-        Some(args.version.container_header_version()),
+        Some(container_header_version),
         mount_point.into(),
     )?;
 
@@ -1237,6 +1246,7 @@ fn read_file_opt<P: AsRef<Path>>(path: P) -> Result<Option<Vec<u8>>> {
 #[derive(Default)]
 struct Config {
     aes_keys: HashMap<FGuid, AesKey>,
+    container_header_version_override: Option<EIoContainerHeaderVersion>,
 }
 
 #[derive(Debug, Clone)]
