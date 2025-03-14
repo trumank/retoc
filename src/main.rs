@@ -1031,7 +1031,7 @@ fn action_to_zen(args: ActionToZen, _config: Arc<Config>) -> Result<()> {
     // Convert assets now
     let container_header_version = writer.container_header_version();
     // Decide whenever we need all packages to be in memory at the same time to perform the fixup or not
-    let needs_asset_import_fixup = container_header_version == EIoContainerHeaderVersion::Initial;
+    let needs_asset_import_fixup = container_header_version <= EIoContainerHeaderVersion::Initial;
 
     let process_assets = |tx: std::sync::mpsc::SyncSender<ConvertedZenAssetBundle>| -> Result<()> {
         let process = |path: &&UEPathBuf| -> Result<()> {

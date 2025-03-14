@@ -746,7 +746,7 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
 
     // There are no internal dependency arcs available for legacy packages. Their export bundles are always serialized sequentially (e.g. 0 -> 1 -> 2), so they have
     // implicit dependency between the next bundle and the previous bundle. So create the synthetic preload dependencies for that
-    if builder.zen_package.container_header_version == EIoContainerHeaderVersion::Initial {
+    if builder.zen_package.container_header_version <= EIoContainerHeaderVersion::Initial {
 
         // Create an internal dependency arc from this export bundle to the previous export bundle
         for export_bundle_index in 1..builder.zen_package.export_bundle_headers.len() {
@@ -802,7 +802,7 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
 
     // If this is a legacy package (UE4.27 or below) where dependencies are between bundles from different packages, process them here
     // Note that this might result in resolution and loading of new packages, which is why this function can fail
-    if builder.zen_package.container_header_version == EIoContainerHeaderVersion::Initial {
+    if builder.zen_package.container_header_version <= EIoContainerHeaderVersion::Initial {
 
         for external_package_dependency in builder.zen_package.external_package_dependencies.clone() {
 

@@ -52,7 +52,7 @@ impl FZenPackageSummary {
         }
         let name: FMappedName = s.de()?;
         let mut source_name: FMappedName = Default::default();
-        if container_header_version == EIoContainerHeaderVersion::Initial {
+        if container_header_version <= EIoContainerHeaderVersion::Initial {
             source_name = s.de()?;
         }
         let package_flags: u32 = s.de()?;
@@ -64,7 +64,7 @@ impl FZenPackageSummary {
         let mut name_map_names_size: i32 = -1;
         let mut name_map_hashes_offset: i32 = -1;
         let mut name_map_hashes_size: i32 = -1;
-        if container_header_version == EIoContainerHeaderVersion::Initial {
+        if container_header_version <= EIoContainerHeaderVersion::Initial {
             name_map_names_offset = s.de()?;
             name_map_names_size = s.de()?;
             name_map_hashes_offset = s.de()?;
@@ -92,7 +92,7 @@ impl FZenPackageSummary {
         }
 
         let mut graph_data_size: i32 = -1;
-        if container_header_version == EIoContainerHeaderVersion::Initial {
+        if container_header_version <= EIoContainerHeaderVersion::Initial {
             graph_data_size = s.de()?;
             let _pad: i32 = s.de()?;
             // Header size is GraphDataOffset + GraphDataSize
@@ -132,14 +132,14 @@ impl FZenPackageSummary {
         }
 
         s.ser(&self.name)?;
-        if container_header_version == EIoContainerHeaderVersion::Initial {
+        if container_header_version <= EIoContainerHeaderVersion::Initial {
             s.ser(&self.source_name)?;
         }
 
         s.ser(&self.package_flags)?;
         s.ser(&self.cooked_header_size)?;
 
-        if container_header_version == EIoContainerHeaderVersion::Initial {
+        if container_header_version <= EIoContainerHeaderVersion::Initial {
             s.ser(&self.name_map_names_offset)?;
             s.ser(&self.name_map_names_size)?;
             s.ser(&self.name_map_hashes_offset)?;
@@ -160,7 +160,7 @@ impl FZenPackageSummary {
             s.ser(&self.graph_data_offset)?;
         }
 
-        if container_header_version == EIoContainerHeaderVersion::Initial {
+        if container_header_version <= EIoContainerHeaderVersion::Initial {
             s.ser(&self.graph_data_size)?;
             s.ser(&0i32)?; // pad
         }
@@ -720,7 +720,7 @@ impl FZenPackageHeader {
     }
     // Returns source package name for this package if it is present, or it's normal package name otherwise
     pub(crate) fn source_package_name(&self) -> String {
-        if self.container_header_version == EIoContainerHeaderVersion::Initial {
+        if self.container_header_version <= EIoContainerHeaderVersion::Initial {
             let source_package_name = self.name_map.get(self.summary.source_name).to_string();
             if source_package_name != "None" {
                 return source_package_name;
@@ -1053,7 +1053,7 @@ impl FZenPackageHeader {
         package_summary.export_bundle_entries_offset = (s.stream_position()? - package_summary_offset) as i32;
 
         // For legacy UE4 packages, export bundle headers are written as a part of export bundle entries
-        if container_header_version == EIoContainerHeaderVersion::Initial {
+        if container_header_version <= EIoContainerHeaderVersion::Initial {
             store_entry.export_bundle_count = self.export_bundle_headers.len() as i32;
             for export_bundle_header in &self.export_bundle_headers {
                 FExportBundleHeader::serialize(export_bundle_header, s, self.container_header_version)?;

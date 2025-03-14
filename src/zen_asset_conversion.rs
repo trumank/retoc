@@ -137,7 +137,7 @@ fn setup_zen_package_summary(builder: &mut ZenPackageBuilder) -> anyhow::Result<
     }
 
     // Setup source package name for the UE4 zen packages. UE5.0+ zen packages do not internally track source package name, it is a part of the container header only
-    if builder.container_header_version == EIoContainerHeaderVersion::Initial {
+    if builder.container_header_version <= EIoContainerHeaderVersion::Initial {
         
         // If this package is not a localized package, write None as the source package name. It has to always point to a valid name in the name map
         let source_package_name = builder.source_package_name.as_deref().unwrap_or("None");
@@ -376,7 +376,7 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
         let is_public_export = builder.zen_package.export_map[export_index].is_public_export();
 
         // If we perform the fix-up on the serialized package data later, store the information necessary to perform the fixup of another package imports
-        if is_public_export && builder.fixup_legacy_external_arcs && builder.container_header_version == EIoContainerHeaderVersion::Initial {
+        if is_public_export && builder.fixup_legacy_external_arcs && builder.container_header_version <= EIoContainerHeaderVersion::Initial {
             let export_global_index = builder.zen_package.export_map[export_index].legacy_global_import_index();
             let full_export_name = builder.debug_full_package_object_names.get(&FPackageIndex::create_export(export_index as u32)).cloned();
 
@@ -1017,7 +1017,7 @@ pub(crate) fn build_serialize_zen_asset(legacy_asset: &FSerializedAssetBundle, c
 pub(crate) fn build_zen_asset(legacy_asset: FSerializedAssetBundle, package_name_to_referenced_shader_maps: &HashMap<String, Vec<FSHAHash>>, path: &UEPath, package_version_fallback: Option<FPackageFileVersion>, container_header_version: EIoContainerHeaderVersion, allow_fixup: bool) -> anyhow::Result<ConvertedZenAssetBundle> {
 
     // We want to fixup this asset once we have converted all the packages
-    let final_allow_fixup = container_header_version == EIoContainerHeaderVersion::Initial && allow_fixup;
+    let final_allow_fixup = container_header_version <= EIoContainerHeaderVersion::Initial && allow_fixup;
     let builder = build_zen_asset_internal(&legacy_asset, container_header_version, package_version_fallback, final_allow_fixup)?;
 
     // Serialize the resulting asset into the container writer
