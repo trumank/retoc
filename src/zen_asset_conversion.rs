@@ -911,7 +911,7 @@ impl ConvertedZenAssetBundle {
                         anyhow!("Failed to find export in the package {} ({}) mapping to the import {} (full name: {}) dependency {:?} in package {} ({})",
                             referenced_asset_bundle.package_name.clone(), referenced_asset_bundle.package_id,
                             fixup_data.from_import_index, fixup_data.debug_full_import_name.clone().unwrap_or(String::from("unknown")), fixup_data.from_command_type,
-                            self.package_name.clone(), self.package_id) 
+                            self.package_name.clone(), self.package_id)
                     })?;
                 
                 if log.debug_enabled() {
@@ -1001,16 +1001,6 @@ fn build_zen_asset_internal(legacy_asset: &FSerializedAssetBundle, container_hea
     build_zen_preload_dependencies(&mut builder)?;
 
     Ok(builder)
-}
-
-// Builds zen asset and returns the resulting package ID, chunk data buffer, and it's store entry. Zen package conversion does not modify bulk data in any way.
-pub(crate) fn build_serialize_zen_asset(legacy_asset: &FSerializedAssetBundle, container_header_version: EIoContainerHeaderVersion, package_version_fallback: Option<FPackageFileVersion>) -> anyhow::Result<(FPackageId, StoreEntry, Vec<u8>)> {
-
-    // Do not allow legacy external arc fixup, just emit the asset that does not require fixup immediately using only the information available from this asset
-    let builder = build_zen_asset_internal(legacy_asset, container_header_version, package_version_fallback, false)?;
-
-    let (store_entry, package_data, _) = serialize_zen_asset(&builder, legacy_asset)?;
-    Ok((builder.package_id, store_entry, package_data))
 }
 
 // Builds zen asset and writes it into the container using the provided serialized legacy asset and package version

@@ -57,7 +57,7 @@ pub(crate) fn read_name_batch<S: Read>(s: &mut S) -> Result<Vec<String>> {
 pub(crate) fn write_name_batch<S: Write>(s: &mut S, names: &[String]) -> Result<()> {
     fn name_byte_size(name: &str) -> u32 {
         if name.is_ascii() {
-            name.bytes().len() as u32
+            name.len() as u32
         } else {
             name.encode_utf16().count() as u32 * 2
         }

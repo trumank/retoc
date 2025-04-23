@@ -1,5 +1,5 @@
 use crate::container_header::EIoContainerHeaderVersion;
-use crate::legacy_asset::{EPackageFlags, FLegacyPackageFileSummary, FLegacyPackageHeader, FObjectExport, FObjectImport, ENGINE_PACKAGE_NAME};
+use crate::legacy_asset::{EPackageFlags, FLegacyPackageFileSummary, FObjectExport, FObjectImport};
 use crate::zen::{EUnrealEngineObjectUE4Version, EUnrealEngineObjectUE5Version, EZenPackageVersion, FPackageFileVersion, FZenPackageSummary, FZenPackageVersioningInfo};
 use crate::EIoStoreTocVersion;
 use anyhow::{anyhow, bail};
@@ -206,14 +206,4 @@ pub(crate) fn heuristic_package_version_from_legacy_package<S: Read + Seek>(s: &
     s.seek(SeekFrom::Start(stream_start_position))?;
     // We failed to derive the package version from the summary, return Err
     Err(anyhow!("Failed to derive package file version from the package. Please provide an explicit package version to deserialize this unversioned package"))
-}
-
-// Returns true if the preload dependency on the given import can be downgraded to the Create dependency (from Serialize dependency)
-pub(crate) fn heuristic_can_downgrade_import_preload_dependency_generic(package: &FLegacyPackageHeader, from_import_index: usize) -> bool {
-    let object_import = package.imports[from_import_index].clone();
-    let class_package = package.name_map.get(object_import.class_package).to_string();
-    let class_name = package.name_map.get(object_import.class_name).to_string();
-
-    // Allow downgrading references to data tables from any asset to create
-    class_package == ENGINE_PACKAGE_NAME && (class_name == "DataTable" || class_name == "CompositeDataTable")
 }
