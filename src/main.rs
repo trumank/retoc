@@ -855,7 +855,7 @@ fn action_to_legacy_assets(
         // TODO make configurable
         let path = package_path
             .strip_prefix("../../../")
-            .with_context(|| format!("failed to strip mount prefix from {package_path:?}"))?;
+            .with_context(|| format!("failed to strip mount prefix from {package_path}"))?;
 
         prog_ref.inspect(|p| p.set_message(path.to_string()));
 
@@ -920,9 +920,7 @@ fn action_to_legacy_shaders(
         // TODO make configurable
         let path = shader_library_path
             .strip_prefix("../../../")
-            .with_context(|| {
-                format!("failed to strip mount prefix from {shader_library_path:?}")
-            })?;
+            .with_context(|| format!("failed to strip mount prefix from {shader_library_path}"))?;
 
         let shader_asset_info_path = get_shader_asset_info_filename_from_library_filename(path)?;
         let (shader_library_buffer, shader_asset_info_buffer) =
@@ -990,7 +988,7 @@ fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
             if files_set.contains(&uexp) {
                 asset_paths.push(path);
             } else {
-                log!(&log, "Skipping {path:?} because it does not have a split exports file. Are you sure the package is cooked?");
+                log!(&log, "Skipping {path} because it does not have a split exports file. Are you sure the package is cooked?");
             }
         }
         let is_shader_lib = Some("ushaderbytecode") == ext;
@@ -1002,7 +1000,7 @@ fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
     // Convert shader libraries first, since the data contained in their asset metadata is needed to build the package store entries
     let mut package_name_to_referenced_shader_maps: HashMap<String, Vec<FSHAHash>> = HashMap::new();
     for path in shader_lib_paths {
-        log!(&log, "converting shader library {path:?}");
+        log!(&log, "converting shader library {path}");
         let shader_library_buffer = input.read(path)?;
         let path = UEPath::new(&path);
         let asset_metadata_filename = UEPathBuf::from(
@@ -1044,7 +1042,7 @@ fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
 
     let process_assets = |tx: std::sync::mpsc::SyncSender<ConvertedZenAssetBundle>| -> Result<()> {
         let process = |path: &&UEPathBuf| -> Result<()> {
-            verbose!(&log, "converting asset {path:?}");
+            verbose!(&log, "converting asset {path}");
 
             prog_ref.inspect(|p| p.set_message(path.to_string()));
 

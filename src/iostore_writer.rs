@@ -76,7 +76,7 @@ impl IoStoreWriter {
             let index = &mut self.toc.directory_index;
             let relative_path = path.strip_prefix(&index.mount_point).with_context(|| {
                 format!(
-                    "mount point {} does not contain path {path:?}",
+                    "mount point {} does not contain path {path}",
                     index.mount_point
                 )
             })?;
