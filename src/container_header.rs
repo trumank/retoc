@@ -65,11 +65,13 @@ impl FIoContainerHeader {
             container_id = s.de()?;
         }
 
+        if version < EIoContainerHeaderVersion::OptionalSegmentPackages {
+            let _package_count: u32 = s.de()?;
+        }
+
         let mut new = Self::new(version, container_id);
 
         if version <= EIoContainerHeaderVersion::Initial {
-            let _package_count: u32 = s.de()?;
-
             let names_buffer: Vec<u8> = s.de()?;
             let _name_hashes_buffer: Vec<u8> = s.de()?;
             let names = read_name_batch_parts(&names_buffer)?;
@@ -81,8 +83,11 @@ impl FIoContainerHeader {
         new.packages = StoreEntries::deserialize(s, version)?;
 
         if version > EIoContainerHeaderVersion::Initial {
-            new.optional_segment_package_ids = s.de()?;
-            new.optional_segment_store_entries = s.de()?;
+            if version >= EIoContainerHeaderVersion::OptionalSegmentPackages {
+                new.optional_segment_package_ids = s.de()?;
+                new.optional_segment_store_entries = s.de()?;
+            }
+
             new.redirect_name_map = FNameMap::deserialize(s, EMappedNameType::Container)?;
             new.localized_packages = s.de()?;
             new.package_redirects = s.de()?;
@@ -136,9 +141,11 @@ impl Writeable for FIoContainerHeader {
         }
         s.ser(&self.container_id)?;
 
-        if self.version <= EIoContainerHeaderVersion::Initial {
+        if self.version < EIoContainerHeaderVersion::OptionalSegmentPackages {
             s.ser(&(self.packages.0.len() as u32))?;
+        }
 
+        if self.version <= EIoContainerHeaderVersion::Initial {
             // Serialize container local name map. This map is generally empty in legacy UE4 containers because there are no fields that write to it
             let (names_buffer, name_hashes_buffer) =
                 write_name_batch_parts(&self.redirect_name_map.copy_raw_names())?;
@@ -149,8 +156,11 @@ impl Writeable for FIoContainerHeader {
         self.packages.serialize(s, self.version)?;
 
         if self.version > EIoContainerHeaderVersion::Initial {
-            s.ser(&self.optional_segment_package_ids)?;
-            s.ser(&self.optional_segment_store_entries)?;
+            if self.version >= EIoContainerHeaderVersion::OptionalSegmentPackages {
+                s.ser(&self.optional_segment_package_ids)?;
+                s.ser(&self.optional_segment_store_entries)?;
+            }
+
             self.redirect_name_map.serialize(s)?;
             s.ser(&self.localized_packages)?;
             s.ser(&self.package_redirects)?;
@@ -728,6 +738,13 @@ mod test {
     fn test_container_header_issue18() -> Result<()> {
         let data = fs::read("tests/issues/issue18/header.bin")?;
         test_rw_container_header(&data, Some(EIoContainerHeaderVersion::PreInitial))?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_container_header_localized_packages() -> Result<()> {
+        let data = fs::read("tests/UE5.0/ContainerHeader_1.bin")?;
+        test_rw_container_header(&data, None)?;
         Ok(())
     }
 }
