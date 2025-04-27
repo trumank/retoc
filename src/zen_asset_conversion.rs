@@ -1021,6 +1021,16 @@ mod test {
     use crate::EIoStoreTocVersion;
     use crate::zen::EUnrealEngineObjectUE5Version;
 
+    // Builds zen asset and returns the resulting package ID, chunk data buffer, and it's store entry. Zen package conversion does not modify bulk data in any way.
+    pub(crate) fn build_serialize_zen_asset(legacy_asset: &FSerializedAssetBundle, container_header_version: EIoContainerHeaderVersion, package_version_fallback: Option<FPackageFileVersion>) -> anyhow::Result<(FPackageId, StoreEntry, Vec<u8>)> {
+
+        // Do not allow legacy external arc fixup, just emit the asset that does not require fixup immediately using only the information available from this asset
+        let builder = build_zen_asset_internal(legacy_asset, container_header_version, package_version_fallback, false)?;
+
+        let (store_entry, package_data, _) = serialize_zen_asset(&builder, legacy_asset)?;
+        Ok((builder.package_id, store_entry, package_data))
+    }
+
     #[test]
     fn test_zen_asset_identity_conversion() -> anyhow::Result<()> {
         run_test(
