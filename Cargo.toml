@@ -1,11 +1,19 @@
 [package]
 name = "retoc"
-edition = "2021"
-
-[workspace]
+version = "0.1.0"
+edition = "2024"
+authors = ["trumank", "Archengius"]
+repository = "https://github.com/trumank/retoc"
+homepage = "https://github.com/trumank/retoc"
+license = "MIT"
 
 [profile.release]
 debug = true
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
 
 [dependencies]
 aes = "0.8.4"
@@ -41,3 +49,6 @@ zstd = "0.13.2"
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
+
+#[package.metadata.dist]
+#dist = true
