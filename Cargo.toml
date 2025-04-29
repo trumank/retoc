@@ -49,6 +49,3 @@ zstd = "0.13.2"
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
-
-#[package.metadata.dist]
-#dist = true

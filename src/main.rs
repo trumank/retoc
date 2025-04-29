@@ -17,10 +17,10 @@ mod version_heuristics;
 mod zen;
 mod zen_asset_conversion;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use bitflags::bitflags;
 use clap::Parser;
-use compression::{decompress, CompressionMethod};
+use compression::{CompressionMethod, decompress};
 use container_header::StoreEntry;
 use file_pool::FilePool;
 use fs_err as fs;
@@ -39,8 +39,8 @@ use std::ffi::OsStr;
 use std::fmt::{Debug, Display, Formatter};
 use std::io::BufWriter;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
     collections::HashMap,
     io::{BufReader, Cursor, Read, Seek, SeekFrom, Write},
@@ -243,6 +243,7 @@ enum Action {
 }
 
 #[derive(Parser, Debug)]
+#[clap(version)]
 struct Args {
     #[arg(short, long)]
     aes_key: Option<String>,
@@ -988,7 +989,10 @@ fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
             if files_set.contains(&uexp) {
                 asset_paths.push(path);
             } else {
-                log!(&log, "Skipping {path} because it does not have a split exports file. Are you sure the package is cooked?");
+                log!(
+                    &log,
+                    "Skipping {path} because it does not have a split exports file. Are you sure the package is cooked?"
+                );
             }
         }
         let is_shader_lib = Some("ushaderbytecode") == ext;
@@ -1253,7 +1257,7 @@ impl std::str::FromStr for AesKey {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         use aes::cipher::KeyInit;
-        use base64::{engine::general_purpose, Engine as _};
+        use base64::{Engine as _, engine::general_purpose};
         let try_parse = |bytes: Vec<_>| aes::Aes256::new_from_slice(&bytes).ok().map(AesKey);
         hex::decode(s.strip_prefix("0x").unwrap_or(s))
             .ok()
