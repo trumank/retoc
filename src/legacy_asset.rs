@@ -132,10 +132,11 @@ impl Readable for FLegacyPackageVersioningInfo {
             bail!("Package file version too old: {} (Supported versions are {} for UE4 and {} for UE5)", legacy_file_version, FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE4, FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE5);
         }
 
-        // There should never be a UE3 version written here
+        // For versioned assets, there should only ever be the highest legacy UE3 version written here
+        // For unversioned assets, this should be 0
         let legacy_ue3_version: i32 = s.de()?;
-        if legacy_ue3_version != 0 {
-            bail!("Expected to find zero UE3 version, got {}", legacy_ue3_version);
+        if legacy_ue3_version != 864 && legacy_ue3_version != 0 {
+            bail!("Expected to find highest UE3 version (864) or 0, got {}", legacy_ue3_version);
         }
 
         // Read raw file version for UE4 and UE5 (if package is UE5)
@@ -145,7 +146,7 @@ impl Readable for FLegacyPackageVersioningInfo {
 
         let licensee_version: i32 = s.de()?;
         let custom_versions: Vec<FCustomVersion> = s.de()?;
-        let is_unversioned = raw_file_version_ue4 == 0 && raw_file_version_ue5 == 0 && licensee_version == 0 && custom_versions.is_empty();
+        let is_unversioned = legacy_ue3_version == 0 && raw_file_version_ue4 == 0 && raw_file_version_ue5 == 0 && licensee_version == 0 && custom_versions.is_empty();
 
         Ok(Self{legacy_file_version, package_file_version, licensee_version, custom_versions, is_unversioned})
     }
@@ -162,8 +163,9 @@ impl Writeable for FLegacyPackageVersioningInfo {
         let legacy_file_version: i32 = if self.package_file_version.file_version_ue5 != 0 { FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE5 } else { FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE4 };
         s.ser(&legacy_file_version)?;
 
-        // There should never be a UE3 version written
-        let legacy_ue3_version: i32 = 0;
+        // Write highest UE3 version for legacy compatability
+        // Note that we should not write any versions if this package was loaded as unversioned
+        let legacy_ue3_version: i32 = if self.is_unversioned { 0 } else { 864 };
         s.ser(&legacy_ue3_version)?;
 
         // Write raw file version for UE4 and UE5 (if package is UE5)
