@@ -685,7 +685,7 @@ impl FileReaderTrait for FSFileReader {
         Ok(fs::read(self.dir.join(path.as_str()))?)
     }
     fn read_opt(&self, path: &UEPath) -> Result<Option<Vec<u8>>> {
-        read_file_opt(path.as_str())
+        read_file_opt(self.dir.join(path.as_str()))
     }
     fn list_files(&self) -> Result<Vec<UEPathBuf>> {
         fn visit_dirs<F>(dir: &Path, cb: &mut F) -> std::io::Result<()>
