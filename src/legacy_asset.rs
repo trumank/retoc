@@ -241,7 +241,7 @@ impl FLegacyPackageFileSummary {
             versioning_info.package_file_version = package_version_fallback.unwrap();
         }
         // Make sure we are not attempting to read versions before UE4 NonOuterPackageImport. Our export/import serialization does not support such old versions
-        if versioning_info.package_file_version.file_version_ue4 < EUnrealEngineObjectUE4Version::NonOuterPackageImport as i32 {
+        if versioning_info.package_file_version.file_version_ue4 < EUnrealEngineObjectUE4Version::AddedPackageOwner as i32 {
             bail!("Encountered UE4 package file version {}, which is below minimum supported version {}", versioning_info.package_file_version.file_version_ue4, EUnrealEngineObjectUE4Version::NonOuterPackageImport as i32);
         }
 

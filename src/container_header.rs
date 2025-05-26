@@ -9,11 +9,11 @@ use std::{
 use strum::FromRepr;
 use tracing::instrument;
 
-use crate::name_map::{read_name_batch_parts, write_name_batch_parts, EMappedNameType};
+use crate::name_map::{EMappedNameType, read_name_batch_parts, write_name_batch_parts};
 use crate::{
+    FIoContainerId, FPackageId, FSHAHash, ReadExt,
     name_map::{FMappedName, FNameMap},
     ser::*,
-    FIoContainerId, FPackageId, FSHAHash, ReadExt,
 };
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]

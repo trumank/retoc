@@ -647,6 +647,8 @@ pub(crate) enum EUnrealEngineObjectUE5Version {
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, FromRepr)]
 #[repr(i32)]
 pub(crate) enum EUnrealEngineObjectUE4Version {
+    AddedPackageOwner = 518,
+    SkinweightProfileDataLayoutChanges = 519,
     NonOuterPackageImport = 520,
     AssetRegistryDependencyFlags = 521,
     CorrectLicenseeFlag = 522,

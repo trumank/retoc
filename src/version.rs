@@ -1,13 +1,14 @@
 use crate::{
+    EIoStoreTocVersion,
     container_header::EIoContainerHeaderVersion,
     zen::{EUnrealEngineObjectUE4Version, EUnrealEngineObjectUE5Version, FPackageFileVersion},
-    EIoStoreTocVersion,
 };
 
 use EngineVersion::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 #[clap(rename_all = "verbatim")]
 pub(crate) enum EngineVersion {
+    UE4_25,
     UE4_26,
     UE4_27,
     UE5_0,
@@ -22,6 +23,7 @@ impl EngineVersion {
     pub(crate) fn toc_version(self) -> EIoStoreTocVersion {
         use EIoStoreTocVersion::*;
         match self {
+            UE4_25 => DirectoryIndex,
             UE4_26 => DirectoryIndex,
             UE4_27 => PartitionSize,
             UE5_0 => PerfectHashWithOverflow,
@@ -35,6 +37,7 @@ impl EngineVersion {
     pub(crate) fn container_header_version(self) -> EIoContainerHeaderVersion {
         use EIoContainerHeaderVersion::*;
         match self {
+            UE4_25 => Initial,
             UE4_26 => Initial,
             UE4_27 => Initial,
             UE5_0 => LocalizedPackages,
@@ -48,6 +51,7 @@ impl EngineVersion {
     pub(crate) fn object_ue4_version(self) -> EUnrealEngineObjectUE4Version {
         use EUnrealEngineObjectUE4Version::*;
         match self {
+            UE4_25 => AddedPackageOwner,
             UE4_26 => CorrectLicenseeFlag,
             UE4_27 => CorrectLicenseeFlag,
             _ => unreachable!(),
