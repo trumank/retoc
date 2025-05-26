@@ -249,6 +249,8 @@ struct Args {
     aes_key: Option<String>,
     #[arg(long)]
     override_container_header_version: Option<EIoContainerHeaderVersion>,
+    #[arg(long)]
+    override_toc_version: Option<EIoStoreTocVersion>,
     #[command(subcommand)]
     action: Action,
 }
@@ -258,6 +260,7 @@ fn main() -> Result<()> {
 
     let mut config = Config {
         container_header_version_override: args.override_container_header_version,
+        toc_version_override: args.override_toc_version,
         ..Default::default()
     };
     if let Some(aes) = args.aes_key {
@@ -958,9 +961,13 @@ fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
         .container_header_version_override
         .unwrap_or(args.version.container_header_version());
 
+    let toc_version = config
+        .toc_version_override
+        .unwrap_or(args.version.toc_version());
+
     let mut writer = IoStoreWriter::new(
         &args.output,
-        args.version.toc_version(),
+        toc_version,
         Some(container_header_version),
         mount_point.into(),
     )?;
@@ -1249,6 +1256,7 @@ fn read_file_opt<P: AsRef<Path>>(path: P) -> Result<Option<Vec<u8>>> {
 struct Config {
     aes_keys: HashMap<FGuid, AesKey>,
     container_header_version_override: Option<EIoContainerHeaderVersion>,
+    toc_version_override: Option<EIoStoreTocVersion>,
 }
 
 #[derive(Debug, Clone)]
@@ -2333,9 +2341,21 @@ impl Writeable for FIoStoreTocEntryMetaFlags {
 }
 
 #[derive(
-    Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, FromRepr, Serialize, Deserialize,
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    FromRepr,
+    clap::ValueEnum,
+    Serialize,
+    Deserialize,
 )]
 #[repr(u8)]
+#[clap(rename_all = "verbatim")]
 enum EIoStoreTocVersion {
     #[default]
     Invalid,
