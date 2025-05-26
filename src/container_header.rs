@@ -321,7 +321,8 @@ impl Readable for EIoContainerHeaderVersion {
     #[instrument(skip_all, name = "EIoContainerHeaderVersion")]
     fn de<S: Read>(s: &mut S) -> Result<Self> {
         let value = s.de()?;
-        Self::from_repr(value).with_context(|| format!("invalid EIoStoreTocVersion value: {value}"))
+        Self::from_repr(value)
+            .with_context(|| format!("invalid EIoContainerHeaderVersion value: {value}"))
     }
 }
 impl Writeable for EIoContainerHeaderVersion {
