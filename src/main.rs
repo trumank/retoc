@@ -79,6 +79,9 @@ struct ActionList {
     /// Show package ID
     #[arg(long)]
     package: bool,
+    /// Show chunk size
+    #[arg(long)]
+    size: bool,
     /// Show chunk path
     #[arg(long)]
     path: bool,
@@ -405,6 +408,9 @@ fn action_list(args: ActionList, config: Arc<Config>) -> Result<()> {
             column!("{:20}", package_id);
         }
         column!("{:20}", chunk_type.as_ref());
+        if args.size {
+            column!("{:10}", chunk.size());
+        }
         if args.path {
             column!("{}", chunk.path().as_deref().unwrap_or("-"));
         }
