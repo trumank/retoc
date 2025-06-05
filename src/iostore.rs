@@ -6,16 +6,16 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use fs_err as fs;
 
 use crate::{
+    Config, EIoChunkType, EIoStoreTocVersion, FIoChunkHash, FIoChunkId, FPackageId, Toc,
     chunk_id::FIoChunkIdRaw,
     container_header::{EIoContainerHeaderVersion, FIoContainerHeader, StoreEntry},
     file_pool::FilePool,
     script_objects::ZenScriptObjects,
     ser::*,
-    Config, EIoChunkType, EIoStoreTocVersion, FIoChunkHash, FIoChunkId, FPackageId, Toc,
 };
 
 macro_rules! indent_println {
@@ -218,8 +218,13 @@ impl IoStoreBackend {
                 previous_container_version = Some(this_container_version);
             }
             if this_container_version != previous_container_version.unwrap() {
-                bail!("Cannot create composite container for containers of different versions: Container {} and {} have different versions {:?} and {:?}",
-                    previous_container_name, this_container_name, previous_container_version.unwrap(), this_container_version);
+                bail!(
+                    "Cannot create composite container for containers of different versions: Container {} and {} have different versions {:?} and {:?}",
+                    previous_container_name,
+                    this_container_name,
+                    previous_container_version.unwrap(),
+                    this_container_version
+                );
             }
 
             // Check that container header version matches the previous container
@@ -229,8 +234,13 @@ impl IoStoreBackend {
                     previous_header_container_version = Some(this_container_header_version);
                 }
                 if this_container_header_version != previous_header_container_version.unwrap() {
-                    bail!("Cannot create composite container for containers of different header versions: Container {} and {} have different versions {:?} and {:?}",
-                     previous_header_container_name, this_container_name, previous_header_container_version.unwrap(), this_container_header_version);
+                    bail!(
+                        "Cannot create composite container for containers of different header versions: Container {} and {} have different versions {:?} and {:?}",
+                        previous_header_container_name,
+                        this_container_name,
+                        previous_header_container_version.unwrap(),
+                        this_container_header_version
+                    );
                 }
             }
         }
@@ -367,7 +377,9 @@ impl IoStoreContainer {
                     container.container_header = Some(header);
                 }
                 Err(err) => {
-                    eprintln!("Failed to parse ContainerHeader ({chunk_id:?}). Package metadata will be unavailable: {err:?}");
+                    eprintln!(
+                        "Failed to parse ContainerHeader ({chunk_id:?}). Package metadata will be unavailable: {err:?}"
+                    );
                 }
             }
         }
