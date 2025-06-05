@@ -1204,7 +1204,7 @@ fn action_dump_test(args: ActionDumpTest, config: Arc<Config>) -> Result<()> {
     let name = UEPath::new(&game_path).file_name().unwrap();
     let path = args.output_dir.join(name);
     let data = iostore.read(chunk_id)?;
-    fs::write(args.output_dir.join(name), data)?;
+    fs::write(args.output_dir.join(name), &data)?;
 
     let store_entry = iostore.package_store_entry(args.package_id).unwrap();
 
@@ -1219,6 +1219,21 @@ fn action_dump_test(args: ActionDumpTest, config: Arc<Config>) -> Result<()> {
         path.with_extension("metadata.json"),
         serde_json::to_vec_pretty(&metadata)?,
     )?;
+
+    {
+        let mut stream =
+            ser_hex::TraceStream::new(path.with_extension("trace.json"), Cursor::new(data));
+
+        let header = zen::FZenPackageHeader::deserialize(
+            &mut stream,
+            metadata.store_entry,
+            metadata.toc_version,
+            metadata.container_header_version,
+            metadata.package_file_version,
+        )?;
+
+        fs::write(path.with_extension("header.txt"), format!("{header:#?}"))?;
+    }
 
     let chunk_id = FIoChunkId::from_package_id(args.package_id, 0, EIoChunkType::BulkData);
     if iostore.has_chunk_id(chunk_id) {
