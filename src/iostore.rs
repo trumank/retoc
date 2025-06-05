@@ -128,6 +128,7 @@ pub trait IoStoreTrait: Send + Sync {
 pub struct ChunkInfo<'a> {
     id: FIoChunkId,
     container: &'a IoStoreContainer,
+    size: u64,
 }
 impl ChunkInfo<'_> {
     pub fn id(&self) -> FIoChunkId {
@@ -135,6 +136,9 @@ impl ChunkInfo<'_> {
     }
     pub fn container(&self) -> &IoStoreContainer {
         self.container
+    }
+    pub fn size(&self) -> u64 {
+        self.size
     }
     pub fn path(&self) -> Option<String> {
         self.container.chunk_path(self.id)
@@ -450,10 +454,17 @@ impl IoStoreTrait for IoStoreContainer {
         self.chunks_all()
     }
     fn chunks_all(&self) -> Box<dyn Iterator<Item = ChunkInfo> + Send + '_> {
-        Box::new(self.toc.chunks.iter().map(|&id| ChunkInfo {
-            id,
-            container: self,
-        }))
+        Box::new(
+            self.toc
+                .chunks
+                .iter()
+                .zip(&self.toc.chunk_offset_lengths)
+                .map(|(&id, offset_and_length)| ChunkInfo {
+                    id,
+                    container: self,
+                    size: offset_and_length.get_length(),
+                }),
+        )
     }
     fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + Send + '_> {
         // packages should already be unique in individual containers
