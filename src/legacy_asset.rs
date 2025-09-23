@@ -794,10 +794,11 @@ impl FObjectExport {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
 #[repr(u32)]
 pub(crate) enum EObjectDataResourceVersion {
     Invalid,
+    #[default]
     Initial,
     AddedCookedIndex,
 }
@@ -871,6 +872,7 @@ pub(crate) struct FLegacyPackageHeader {
     pub(crate) exports: Vec<FObjectExport>,
     pub(crate) preload_dependencies: Vec<FPackageIndex>,
     pub(crate) data_resources: Vec<FObjectDataResource>,
+    pub(crate) data_resource_version: Option<EObjectDataResourceVersion>,
 }
 impl FLegacyPackageHeader {
     pub(crate) fn deserialize<S: Read + Seek>(s: &mut S, package_version_fallback: Option<FPackageFileVersion>) -> Result<FLegacyPackageHeader> {
@@ -911,14 +913,17 @@ impl FLegacyPackageHeader {
 
         // Data resources are absent on packages below UE 5.2
         let mut data_resources: Vec<FObjectDataResource> = Vec::new();
+        let mut data_resource_version: Option<EObjectDataResourceVersion> = None;
         if package_summary.data_resource_offset > 0 {
             let data_resource_start_offset = package_summary_offset + package_summary.data_resource_offset as u64;
             s.seek(SeekFrom::Start(data_resource_start_offset))?;
 
-            let data_resource_version: EObjectDataResourceVersion = s.de()?;
+            let version: EObjectDataResourceVersion = s.de()?;
+            data_resource_version = Some(version);
+
             let data_resource_count: i32 = s.de()?;
             for _ in 0..data_resource_count {
-                data_resources.push(s.de_ctx(data_resource_version)?);
+                data_resources.push(s.de_ctx(version)?);
             }
         }
         Ok(FLegacyPackageHeader {
@@ -928,6 +933,7 @@ impl FLegacyPackageHeader {
             exports,
             preload_dependencies,
             data_resources,
+            data_resource_version,
         })
     }
     pub(crate) fn serialize<S: Write + Seek>(&self, s: &mut S, desired_header_size: Option<usize>, log: &Log) -> Result<()> {
@@ -999,9 +1005,7 @@ impl FLegacyPackageHeader {
             let data_resources_start_offset = (s.stream_position()? - package_summary_offset) as i32;
             package_summary.data_resource_offset = data_resources_start_offset;
 
-            // Might be worth moving into the enum once UE adds more data resource versions
-            let data_resource_version: u32 = 1;
-            s.ser(&data_resource_version)?;
+            s.ser(&self.data_resource_version.unwrap_or_default())?;
 
             let data_resource_count: i32 = self.data_resources.len() as i32;
             s.ser(&data_resource_count)?;
