@@ -151,7 +151,8 @@ fn setup_zen_package_summary(builder: &mut ZenPackageBuilder) -> anyhow::Result<
             duplicate_serial_offset: x.duplicate_serial_offset,
             serial_size: x.serial_size,
             flags: x.legacy_bulk_data_flags,
-            pad: 0,
+            cooked_index: x.cooked_index.unwrap_or(0),
+            pad: [0, 0, 0],
         })
         .collect();
     Ok(())

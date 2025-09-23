@@ -460,8 +460,11 @@ fn copy_package_sections(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()>
             // Copy legacy bulk data flags from zen directly
             let legacy_bulk_data_flags = zen_bulk_data.flags;
 
+            let cooked_index = if zen_bulk_data.cooked_index != 0 { Some(zen_bulk_data.cooked_index) } else { None };
+
             FObjectDataResource {
                 flags,
+                cooked_index,
                 serial_offset: zen_bulk_data.serial_offset,
                 duplicate_serial_offset: zen_bulk_data.duplicate_serial_offset,
                 serial_size: zen_bulk_data.serial_size,

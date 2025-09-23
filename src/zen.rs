@@ -271,7 +271,8 @@ pub(crate) struct FBulkDataMapEntry {
     pub(crate) duplicate_serial_offset: i64,
     pub(crate) serial_size: i64,
     pub(crate) flags: u32,
-    pub(crate) pad: u32,
+    pub(crate) cooked_index: u8,
+    pub(crate) pad: [u8; 3],
 }
 impl Readable for FBulkDataMapEntry {
     #[instrument(skip_all, name = "FBulkDataMapEntry")]
@@ -281,6 +282,7 @@ impl Readable for FBulkDataMapEntry {
             duplicate_serial_offset: s.de()?,
             serial_size: s.de()?,
             flags: s.de()?,
+            cooked_index: s.de()?,
             pad: s.de()?,
         })
     }
@@ -292,6 +294,7 @@ impl Writeable for FBulkDataMapEntry {
         s.ser(&self.duplicate_serial_offset)?;
         s.ser(&self.serial_size)?;
         s.ser(&self.flags)?;
+        s.ser(&self.cooked_index)?;
         s.ser(&self.pad)?;
         Ok(())
     }

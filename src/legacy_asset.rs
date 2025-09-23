@@ -2,11 +2,12 @@ use crate::logging::*;
 use crate::version_heuristics::heuristic_package_version_from_legacy_package;
 use crate::zen::{EUnrealEngineObjectUE4Version, EUnrealEngineObjectUE5Version, FCustomVersion, FPackageFileVersion, FPackageIndex};
 use crate::{FGuid, break_down_name_string, ser::*};
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use std::borrow::Cow;
 use std::cmp::max;
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom, Write};
+use strum::FromRepr;
 use tracing::instrument;
 
 #[derive(Debug, Copy, Clone, Default)]
@@ -793,9 +794,30 @@ impl FObjectExport {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
+#[repr(u32)]
+pub(crate) enum EObjectDataResourceVersion {
+    Invalid,
+    Initial,
+    AddedCookedIndex,
+}
+impl Readable for EObjectDataResourceVersion {
+    #[instrument(skip_all, name = "EObjectDataResourceVersion")]
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        let value = s.de()?;
+        Self::from_repr(value).with_context(|| format!("invalid EObjectDataResourceVersion value: {value}"))
+    }
+}
+impl Writeable for EObjectDataResourceVersion {
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&(*self as u32))
+    }
+}
+
 #[derive(Debug, Copy, Clone, Default)]
 pub(crate) struct FObjectDataResource {
     pub(crate) flags: u32,
+    pub(crate) cooked_index: Option<u8>,
     pub(crate) serial_offset: i64,
     pub(crate) duplicate_serial_offset: i64,
     pub(crate) serial_size: i64,
@@ -803,9 +825,12 @@ pub(crate) struct FObjectDataResource {
     pub(crate) outer_index: FPackageIndex,
     pub(crate) legacy_bulk_data_flags: u32,
 }
-impl Readable for FObjectDataResource {
-    fn de<S: Read>(s: &mut S) -> Result<Self> {
+impl ReadableCtx<EObjectDataResourceVersion> for FObjectDataResource {
+    fn de<S: Read>(s: &mut S, version: EObjectDataResourceVersion) -> Result<Self> {
         let flags: u32 = s.de()?;
+
+        let cooked_index = if version >= EObjectDataResourceVersion::AddedCookedIndex { Some(s.de()?) } else { None };
+
         let serial_offset: i64 = s.de()?;
         let duplicate_serial_offset: i64 = s.de()?;
         let serial_size: i64 = s.de()?;
@@ -815,6 +840,7 @@ impl Readable for FObjectDataResource {
 
         Ok(FObjectDataResource {
             flags,
+            cooked_index,
             serial_offset,
             duplicate_serial_offset,
             serial_size,
@@ -889,14 +915,11 @@ impl FLegacyPackageHeader {
             let data_resource_start_offset = package_summary_offset + package_summary.data_resource_offset as u64;
             s.seek(SeekFrom::Start(data_resource_start_offset))?;
 
-            // Might be worth moving into the enum once UE adds more data resource versions
-            let data_resource_version: u32 = s.de()?;
-            if data_resource_version != 1 {
-                bail!("Unknown data resource version {}. Only EVersion::Initial (1) is supported", data_resource_version);
-            }
-
+            let data_resource_version: EObjectDataResourceVersion = s.de()?;
             let data_resource_count: i32 = s.de()?;
-            data_resources = s.de_ctx(data_resource_count as usize)?;
+            for _ in 0..data_resource_count {
+                data_resources.push(s.de_ctx(data_resource_version)?);
+            }
         }
         Ok(FLegacyPackageHeader {
             summary: package_summary,
