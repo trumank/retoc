@@ -239,9 +239,6 @@ fn convert_legacy_import_to_object_index(builder: &mut ZenPackageBuilder, import
         global_import_index
     };
 
-    // Map the resulting import to the original package ID it came from. This is necessary to resolve legacy UE4 imports into package ID
-    builder.import_to_package_id_lookup.insert(result_package_import, package_id);
-
     Ok(result_package_import)
 }
 
@@ -252,6 +249,52 @@ fn build_zen_import_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
         let import_object_index = convert_legacy_import_to_object_index(builder, import_index)?;
         builder.zen_package.import_map.push(import_object_index)
     }
+
+    // Sort imports by package ID and rebuild maps pointing to sorted index
+    // Create a sorted list of (old_index, package_id, package_name)
+    let mut sorted_packages: Vec<(usize, FPackageId, String)> = builder
+        .zen_package
+        .imported_packages
+        .iter()
+        .enumerate()
+        .map(|(index, &package_id)| {
+            let package_name = builder.zen_package.imported_package_names[index].clone();
+            (index, package_id, package_name)
+        })
+        .collect();
+    sorted_packages.sort_by_key(|(_, package_id, _)| *package_id);
+
+    // Build index remapping table: old_index -> new_sorted_index
+    let mut index_remap: Vec<u32> = vec![0; sorted_packages.len()];
+    for (new_index, (old_index, id, name)) in sorted_packages.into_iter().enumerate() {
+        index_remap[old_index] = new_index as u32;
+
+        builder.zen_package.imported_packages[new_index] = id;
+        builder.zen_package.imported_package_names[new_index] = name;
+    }
+
+    // Update package_import_lookup with sorted indices
+    for (new_index, package_id) in builder.zen_package.imported_packages.iter().enumerate() {
+        builder.package_import_lookup.insert(*package_id, new_index as u32);
+    }
+
+    // Remap import_map and build import_to_package_id_lookup
+    for import in &mut builder.zen_package.import_map {
+        if import.kind() == FPackageObjectIndexType::PackageImport
+            && let Some(mut package_import) = import.package_import()
+        {
+            let old_package_index = package_import.imported_package_index;
+            let new_package_index = index_remap[old_package_index as usize];
+            package_import.imported_package_index = new_package_index;
+
+            *import = FPackageObjectIndex::create_package_import(package_import);
+
+            // Map the resulting import to the original package ID it came from. This is necessary to resolve legacy UE4 imports into package ID
+            let package_id = builder.zen_package.imported_packages[package_import.imported_package_index as usize];
+            builder.import_to_package_id_lookup.insert(*import, package_id);
+        }
+    }
+
     Ok(())
 }
 
