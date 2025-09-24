@@ -238,20 +238,19 @@ mod test {
         let mut names = FNameMap::create(EMappedNameType::Global);
         let mut script_objects = vec![];
         for (path, object) in &dump {
-            if path.starts_with("/Script/") {
-                if let ObjectType::Class(class) = &object {
-                    if let Some(cdo) = &class.class_default_object {
-                        cdos.insert(&cdo, &path);
-                    }
-                }
+            if path.starts_with("/Script/")
+                && let ObjectType::Class(class) = &object
+                && let Some(cdo) = &class.class_default_object
+            {
+                cdos.insert(cdo, path);
             }
         }
         for (path, object) in &dump {
             if path.starts_with("/Script/") {
-                if let ObjectType::Class(class) = &object {
-                    if let Some(cdo) = &class.class_default_object {
-                        cdos.insert(&cdo, &path);
-                    }
+                if let ObjectType::Class(class) = &object
+                    && let Some(cdo) = &class.class_default_object
+                {
+                    cdos.insert(cdo, path);
                 }
                 let mut components = path.rsplit(['/', '.', ':']);
                 let name = components.next().unwrap();
@@ -272,11 +271,11 @@ mod test {
                 }
                 .outer;
 
-                let outer_index = outer.as_ref().map_or(FPackageObjectIndex::create_null(), |outer| FPackageObjectIndex::create_script_import(&outer));
-                let cdo_class_index = cdos.get(path.as_str()).map_or(FPackageObjectIndex::create_null(), |outer| FPackageObjectIndex::create_script_import(&outer));
+                let outer_index = outer.as_ref().map_or(FPackageObjectIndex::create_null(), |outer| FPackageObjectIndex::create_script_import(outer));
+                let cdo_class_index = cdos.get(path.as_str()).map_or(FPackageObjectIndex::create_null(), |outer| FPackageObjectIndex::create_script_import(outer));
                 script_objects.push(FScriptObjectEntry {
                     object_name: names.store(name),
-                    global_index: FPackageObjectIndex::create_script_import(&path),
+                    global_index: FPackageObjectIndex::create_script_import(path),
                     outer_index,
                     cdo_class_index,
                 });

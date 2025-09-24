@@ -1449,11 +1449,12 @@ pub(crate) fn break_down_name_string<'a>(name: &'a str) -> (&'a str, i32) {
     if let Some((left, right)) = name.rsplit_once('_') {
         // Right part needs to be parsed as a valid signed integer that is >= 0 and converts back to the same string
         // Last part is important for not touching names like: Rocket_04 - 04 should stay a part of the name, not a number, otherwise we would actually get Rocket_4 when deserializing!
-        if let Ok(parsed_number) = right.parse::<i32>() {
-            if parsed_number >= 0 && parsed_number.to_string() == right {
-                name_without_number = left;
-                name_number = parsed_number + 1; // stored as 1 more than the actual number
-            }
+        if let Ok(parsed_number) = right.parse::<i32>()
+            && parsed_number >= 0
+            && parsed_number.to_string() == right
+        {
+            name_without_number = left;
+            name_number = parsed_number + 1; // stored as 1 more than the actual number
         }
     }
     (name_without_number, name_number)
@@ -1698,7 +1699,7 @@ mod chunk_id {
     }
     impl std::cmp::PartialOrd for FIoChunkId {
         fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-            Some(self.get_raw().cmp(&other.get_raw()))
+            Some(self.cmp(other))
         }
     }
     impl std::cmp::Ord for FIoChunkId {

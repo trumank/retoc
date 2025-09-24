@@ -989,8 +989,10 @@ impl FLegacyPackageHeader {
 
         // Write zero padding after normal header data to maintain the zen asset binary equality if desired
         let data_total_header_size = (s.stream_position()? - package_summary_offset) as usize;
-        if desired_header_size.is_some() && desired_header_size.unwrap() > data_total_header_size {
-            let extra_null_padding_bytes = desired_header_size.unwrap() - data_total_header_size;
+        if let Some(desired_header_size) = desired_header_size
+            && desired_header_size > data_total_header_size
+        {
+            let extra_null_padding_bytes = desired_header_size - data_total_header_size;
             s.write_all(&vec![0; extra_null_padding_bytes])?;
         }
 

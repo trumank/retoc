@@ -49,7 +49,7 @@ impl<'a> FZenPackageContext<'a> {
             package_lookup_locks: KeyMutex::new(),
         }
     }
-    fn get_script_objects(&self) -> anyhow::Result<RwLockReadGuard<Option<FZenPackageContextScriptObjects>>> {
+    fn get_script_objects(&self) -> anyhow::Result<RwLockReadGuard<'_, Option<FZenPackageContextScriptObjects>>> {
         let read_lock = self.script_objects.read().unwrap();
         if read_lock.is_some() {
             Ok(read_lock)
@@ -538,9 +538,9 @@ fn build_import_map(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
         let result_import_map_index = resolve_local_package_object(builder, import_object_index);
 
         // Handle potential failure to resolve the import. This is not an unusual situation when specific assets are referenced by the cooked content, but are not cooked themselves
-        let import_map_index = if result_import_map_index.is_err() {
+        let import_map_index = if let Err(err) = result_import_map_index {
             // TODO: Do not log messages that refer to packages that have failed loading previously not to spam the output. There should be a better way to handle this.
-            let loading_error_message = result_import_map_index.unwrap_err().to_string();
+            let loading_error_message = err.to_string();
             if !loading_error_message.contains("failed loading previously") {
                 log!(
                     builder.package_context.log,
@@ -848,8 +848,8 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
             let import_package_result = builder.package_context.lookup(imported_package_id);
 
             // If we failed to look up a preload dependency, it is pretty bad for the global order, but should not stop us from attempting to load the package
-            if import_package_result.is_err() {
-                let loading_error_message = import_package_result.unwrap_err().to_string();
+            if let Err(err) = import_package_result {
+                let loading_error_message = err.to_string();
                 if !loading_error_message.contains("failed loading previously") {
                     log!(
                         builder.package_context.log,
@@ -883,8 +883,7 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
                 let resolved_from_import_result = resolve_package_export_internal(builder.package_context, &resolved_import_package, &resolved_from_export_entry);
 
                 // Failure to create a full zen import is pretty bad here as well, but could still potentially be recovered from
-                if resolved_from_import_result.is_err() {
-                    let resolution_error_message = resolved_from_import_result.unwrap_err().to_string();
+                if let Err(resolution_error_message) = resolved_from_import_result {
                     log!(
                         builder.package_context.log,
                         "Failed to resolve a preload dependency on package {} ({}) export {} for package {} ({}): {}",

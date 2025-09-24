@@ -68,11 +68,11 @@ fn sort_container_name(full_name: &str) -> (bool, u32, &str) {
     if let Some(name) = base_name.strip_suffix("_P") {
         base_name = name;
         chunk_version = 1;
-        if let Some((name, version)) = base_name.rsplit_once("_") {
-            if let Ok(version) = version.parse::<u32>() {
-                base_name = name;
-                chunk_version = version + 2;
-            }
+        if let Some((name, version)) = base_name.rsplit_once("_")
+            && let Ok(version) = version.parse::<u32>()
+        {
+            base_name = name;
+            chunk_version = version + 2;
         }
     }
 
@@ -90,10 +90,10 @@ pub trait IoStoreTrait: Send + Sync {
     fn read_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> Result<Vec<u8>>;
     fn has_chunk_id(&self, chunk_id: FIoChunkId) -> bool;
     fn has_chunk_id_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> bool;
-    fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + Send + '_>;
-    fn chunks_all(&self) -> Box<dyn Iterator<Item = ChunkInfo> + Send + '_>;
-    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + Send + '_>;
-    fn packages_all(&self) -> Box<dyn Iterator<Item = PackageInfo> + Send + '_>;
+    fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo<'_>> + Send + '_>;
+    fn chunks_all(&self) -> Box<dyn Iterator<Item = ChunkInfo<'_>> + Send + '_>;
+    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo<'_>> + Send + '_>;
+    fn packages_all(&self) -> Box<dyn Iterator<Item = PackageInfo<'_>> + Send + '_>;
     fn child_containers(&self) -> Box<dyn Iterator<Item = &dyn IoStoreTrait> + '_>;
     /// Get absolute path (including mount point) if it has one
     fn chunk_path(&self, chunk_id: FIoChunkId) -> Option<String>;
@@ -278,16 +278,16 @@ impl IoStoreTrait for IoStoreBackend {
     fn has_chunk_id_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> bool {
         self.containers.iter().any(|c| c.has_chunk_id_raw(chunk_id_raw))
     }
-    fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + Send + '_> {
+    fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo<'_>> + Send + '_> {
         Box::new(UniqueIterator::new(self.chunks_all()))
     }
-    fn chunks_all(&self) -> Box<dyn Iterator<Item = ChunkInfo> + Send + '_> {
+    fn chunks_all(&self) -> Box<dyn Iterator<Item = ChunkInfo<'_>> + Send + '_> {
         Box::new(self.containers.iter().flat_map(|c| c.chunks_all()))
     }
-    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + Send + '_> {
+    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo<'_>> + Send + '_> {
         Box::new(self.containers.iter().flat_map(|c| c.packages()))
     }
-    fn packages_all(&self) -> Box<dyn Iterator<Item = PackageInfo> + Send + '_> {
+    fn packages_all(&self) -> Box<dyn Iterator<Item = PackageInfo<'_>> + Send + '_> {
         Box::new(UniqueIterator::new(self.containers.iter().flat_map(|c| c.packages())))
     }
     fn child_containers(&self) -> Box<dyn Iterator<Item = &dyn IoStoreTrait> + '_> {
@@ -390,22 +390,22 @@ impl IoStoreTrait for IoStoreContainer {
     fn has_chunk_id_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> bool {
         self.has_chunk_id(FIoChunkId::from_raw(chunk_id_raw, self.toc.version))
     }
-    fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo> + Send + '_> {
+    fn chunks(&self) -> Box<dyn Iterator<Item = ChunkInfo<'_>> + Send + '_> {
         // chunks should already be unique in individual containers
         self.chunks_all()
     }
-    fn chunks_all(&self) -> Box<dyn Iterator<Item = ChunkInfo> + Send + '_> {
+    fn chunks_all(&self) -> Box<dyn Iterator<Item = ChunkInfo<'_>> + Send + '_> {
         Box::new(self.toc.chunks.iter().zip(&self.toc.chunk_offset_lengths).map(|(&id, offset_and_length)| ChunkInfo {
             id,
             container: self,
             size: offset_and_length.get_length(),
         }))
     }
-    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo> + Send + '_> {
+    fn packages(&self) -> Box<dyn Iterator<Item = PackageInfo<'_>> + Send + '_> {
         // packages should already be unique in individual containers
         self.packages_all()
     }
-    fn packages_all(&self) -> Box<dyn Iterator<Item = PackageInfo> + Send + '_> {
+    fn packages_all(&self) -> Box<dyn Iterator<Item = PackageInfo<'_>> + Send + '_> {
         Box::new(self.container_header.iter().flat_map(|header| header.package_ids()).map(|id| PackageInfo { id, container: self }))
     }
     fn child_containers(&self) -> Box<dyn Iterator<Item = &dyn IoStoreTrait> + '_> {

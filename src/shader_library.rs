@@ -659,16 +659,14 @@ fn build_shader_asset_metadata_from_io_store_packages(store_access: &dyn IoStore
 
             // Skip this package if we could not actually read its data from the container
             let package_data_buffer = store_access.read(FIoChunkId::from_package_id(package_id, 0, EIoChunkType::ExportBundleData));
-            if package_data_buffer.is_err() {
-                let error_message = package_data_buffer.unwrap_err().to_string();
+            if let Err(error_message) = package_data_buffer {
                 log!(log, "WARNING: Skipping reference to shader maps {referenced_shader_map_hashes:?} from package {package_id:?} because it's data could not be read: {error_message}");
                 continue;
             }
 
             // Skip this package if we could not resolve package name from it's serialized data
             let package_header = FZenPackageHeader::get_package_name(&mut Cursor::new(&package_data_buffer.unwrap()), container_header_version.unwrap());
-            if package_header.is_err() {
-                let error_message = package_header.unwrap_err().to_string();
+            if let Err(error_message) = package_header {
                 log!(log, "WARNING: Skipping reference to shader maps {referenced_shader_map_hashes:?} from package {package_id:?} because it failed to parse as a valid asset: {error_message}");
                 continue;
             }
