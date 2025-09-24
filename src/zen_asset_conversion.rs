@@ -123,7 +123,8 @@ fn setup_zen_package_summary(builder: &mut ZenPackageBuilder) -> anyhow::Result<
     }
 
     // Set package name on the zen package from the legacy package header
-    builder.zen_package.summary.name = builder.zen_package.name_map.store(&builder.legacy_package.summary.package_name);
+    // (deferred to match name map order of editor)
+    // builder.zen_package.summary.name = builder.zen_package.name_map.store(&builder.legacy_package.summary.package_name);
     // Copy size of the cooked header from the legacy package
     builder.zen_package.summary.cooked_header_size = builder.legacy_package.summary.total_header_size as u32;
 
@@ -1027,6 +1028,9 @@ fn build_zen_asset_internal(legacy_asset: &FSerializedAssetBundle, container_hea
     build_zen_import_map(&mut builder)?;
     build_zen_export_map(&mut builder)?;
     build_zen_preload_dependencies(&mut builder)?;
+
+    // Finally store and set package summary name
+    builder.zen_package.summary.name = builder.zen_package.name_map.store(&builder.legacy_package.summary.package_name);
 
     Ok(builder)
 }
