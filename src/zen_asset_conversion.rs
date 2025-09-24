@@ -578,8 +578,8 @@ fn build_zen_dependency_bundle_new(builder: &mut ZenPackageBuilder, export_load_
         let mut result_dependencies: Vec<FDependencyBundleEntry> = Vec::new();
 
         for from_dependency_node in export_dependencies.get(to_dependency_node).unwrap_or(&Vec::new()) {
-            // Skip nodes that do not have the matching command type, and nodes to ourselves (e.g. serialize depends on create)
-            if from_dependency_node.command_type == from_command_type && from_dependency_node.package_index != to_dependency_node.package_index {
+            // Skip nodes that do not have the matching command type, and skip exact self-references (same export, same command type)
+            if from_dependency_node.command_type == from_command_type && !(from_dependency_node.package_index == to_dependency_node.package_index && from_dependency_node.command_type == to_dependency_node.command_type) {
                 // If this is an export, add the dependency bundle entry at all times
                 if from_dependency_node.package_index.is_export() {
                     result_dependencies.push(FDependencyBundleEntry {
@@ -724,9 +724,6 @@ fn build_zen_preload_dependencies(builder: &mut ZenPackageBuilder) -> anyhow::Re
         let mut create_dependencies: Vec<ZenDependencyGraphNode> = Vec::new();
         let mut serialize_dependencies: Vec<ZenDependencyGraphNode> = Vec::new();
 
-        //This export's serialize has a dependency on this export's create. This dependency is added first because it is added before anything else by the Package Store Optimizer
-        serialize_dependencies.push(create_graph_node);
-
         // Collect create and serialize dependencies for this export
         if object_export.first_export_dependency_index != -1 {
             // Create before create dependencies. They go first because Package Store Optimizer puts them first
@@ -783,6 +780,11 @@ fn build_zen_preload_dependencies(builder: &mut ZenPackageBuilder) -> anyhow::Re
         let is_public_export = builder.zen_package.export_map[export_index].is_public_export();
         export_graph_nodes.push(ZenExportGraphNode { node: create_graph_node, is_public_export });
         export_graph_nodes.push(ZenExportGraphNode { node: serialize_graph_node, is_public_export });
+
+        if builder.container_header_version < EIoContainerHeaderVersion::NoExportInfo {
+            //This export's serialize has a dependency on this export's create. This dependency is added first because it is added before anything else by the Package Store Optimizer
+            serialize_dependencies.push(create_graph_node);
+        }
 
         // Remember dependencies associated with each node. This is necessary for building dependency arcs later
         export_dependencies.insert(create_graph_node, create_dependencies);
@@ -1126,6 +1128,75 @@ mod test {
         Ok(())
     }
 
+    #[allow(unused)]
+    fn get_dependency_name(package: &FZenPackageHeader, package_index: FPackageIndex) -> String {
+        if package_index.is_export() {
+            let export_idx = package_index.to_export_index() as usize;
+            if export_idx < package.export_map.len() {
+                let export = &package.export_map[export_idx];
+                let name = package.name_map.get(export.object_name);
+                return format!("Export[{}] {}", export_idx, name);
+            }
+        } else if package_index.is_import() {
+            let import_idx = package_index.to_import_index() as usize;
+            if import_idx < package.import_map.len() {
+                let import = package.import_map[import_idx];
+                return format!("Import[{}] {:?}", import_idx, import);
+            }
+        }
+        format!("{:?}", package_index)
+    }
+
+    #[allow(unused)]
+    fn print_dependency_structure(package: &FZenPackageHeader) -> String {
+        let mut output = String::new();
+
+        for (export_idx, header) in package.dependency_bundle_headers.iter().enumerate() {
+            let export_name = if export_idx < package.export_map.len() {
+                package.name_map.get(package.export_map[export_idx].object_name).to_string()
+            } else {
+                format!("Export{}", export_idx)
+            };
+
+            output.push_str(&format!("Export[{}] {}:\n", export_idx, export_name));
+
+            if header.first_entry_index >= 0 {
+                let start_idx = header.first_entry_index as usize;
+                let mut current_idx = start_idx;
+
+                for _ in 0..header.create_before_create_dependencies {
+                    let entry = &package.dependency_bundle_entries[current_idx];
+                    let dep_name = get_dependency_name(package, entry.local_import_or_export_index);
+                    output.push_str(&format!("    CBC: {}\n", dep_name));
+                    current_idx += 1;
+                }
+
+                for _ in 0..header.serialize_before_create_dependencies {
+                    let entry = &package.dependency_bundle_entries[current_idx];
+                    let dep_name = get_dependency_name(package, entry.local_import_or_export_index);
+                    output.push_str(&format!("    SBC: {}\n", dep_name));
+                    current_idx += 1;
+                }
+
+                for _ in 0..header.create_before_serialize_dependencies {
+                    let entry = &package.dependency_bundle_entries[current_idx];
+                    let dep_name = get_dependency_name(package, entry.local_import_or_export_index);
+                    output.push_str(&format!("    CBS: {}\n", dep_name));
+                    current_idx += 1;
+                }
+
+                for _i in 0..header.serialize_before_serialize_dependencies {
+                    let entry = &package.dependency_bundle_entries[current_idx];
+                    let dep_name = get_dependency_name(package, entry.local_import_or_export_index);
+                    output.push_str(&format!("    SBS: {}\n", dep_name));
+                    current_idx += 1;
+                }
+            }
+            output.push('\n');
+        }
+        output
+    }
+
     fn run_test(header: &str, exports: &str, original_zen: &str) -> anyhow::Result<()> {
         use pretty_assertions::assert_eq;
 
@@ -1153,6 +1224,15 @@ mod test {
 
         //dbg!(original_zen_asset_package.clone());
         //dbg!(converted_zen_asset_package.clone());
+
+        // let orig_deps = print_dependency_structure(&original_zen_asset_package);
+        // let conv_deps = print_dependency_structure(&converted_zen_asset_package);
+
+        // std::fs::write("orig.txt", &orig_deps)?;
+        // std::fs::write("conv.txt", &conv_deps)?;
+
+        // println!("Original dependencies:\n{}", orig_deps);
+        // println!("Converted dependencies:\n{}", conv_deps);
 
         // Make sure the header is equal between the original and the converted asset, minus the load order data
         assert_eq!(original_zen_asset_package.name_map.copy_raw_names(), converted_zen_asset_package.name_map.copy_raw_names());
