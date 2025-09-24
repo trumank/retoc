@@ -70,10 +70,6 @@ impl EngineVersion {
         }
     }
     pub(crate) fn package_file_version(self) -> FPackageFileVersion {
-        if self < UE5_0 {
-            FPackageFileVersion::create_ue4(self.object_ue4_version())
-        } else {
-            FPackageFileVersion::create_ue5(self.object_ue5_version())
-        }
+        if self < UE5_0 { FPackageFileVersion::create_ue4(self.object_ue4_version()) } else { FPackageFileVersion::create_ue5(self.object_ue5_version()) }
     }
 }

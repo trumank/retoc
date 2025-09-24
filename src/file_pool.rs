@@ -48,10 +48,7 @@ impl FilePool {
         Ok(FilePool {
             inner: Arc::new(FilePoolInner {
                 path,
-                state: Mutex::new(PoolState {
-                    available_files: VecDeque::new(),
-                    active_count: 0,
-                }),
+                state: Mutex::new(PoolState { available_files: VecDeque::new(), active_count: 0 }),
                 max_handles,
                 condvar: Condvar::new(),
             }),
@@ -64,20 +61,14 @@ impl FilePool {
         loop {
             // grab an available handle if exists
             if let Some(file) = state.available_files.pop_front() {
-                return Ok(PooledFileHandle {
-                    file: Some(file),
-                    pool: self.inner.clone(),
-                });
+                return Ok(PooledFileHandle { file: Some(file), pool: self.inner.clone() });
             }
 
             // open a new handle if max is not reached
             if state.active_count < self.inner.max_handles {
                 let file = fs::File::open(&self.inner.path)?;
                 state.active_count += 1;
-                return Ok(PooledFileHandle {
-                    file: Some(file),
-                    pool: self.inner.clone(),
-                });
+                return Ok(PooledFileHandle { file: Some(file), pool: self.inner.clone() });
             }
 
             // must wait for an available handle

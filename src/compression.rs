@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::io::{Read as _, Write};
 use strum::{AsRefStr, EnumString, VariantArray};
 
@@ -11,18 +11,11 @@ pub enum CompressionMethod {
 }
 impl CompressionMethod {
     pub(crate) fn from_str_ignore_case(value: &str) -> Option<Self> {
-        CompressionMethod::VARIANTS
-            .iter()
-            .copied()
-            .find(|v| v.as_ref().eq_ignore_ascii_case(value))
+        CompressionMethod::VARIANTS.iter().copied().find(|v| v.as_ref().eq_ignore_ascii_case(value))
     }
 }
 
-pub fn compress<S: Write>(
-    compression: CompressionMethod,
-    input: &[u8],
-    mut output: S,
-) -> Result<()> {
+pub fn compress<S: Write>(compression: CompressionMethod, input: &[u8], mut output: S) -> Result<()> {
     match compression {
         CompressionMethod::Zlib => {
             let mut encoder = flate2::write::ZlibEncoder::new(output, flate2::Compression::best());
@@ -38,11 +31,7 @@ pub fn compress<S: Write>(
             output.write_all(&buf)?;
         }
         CompressionMethod::Oodle => {
-            let buffer = oodle_loader::oodle()?.compress(
-                input,
-                oodle_loader::Compressor::Mermaid,
-                oodle_loader::CompressionLevel::Normal,
-            )?;
+            let buffer = oodle_loader::oodle()?.compress(input, oodle_loader::Compressor::Mermaid, oodle_loader::CompressionLevel::Normal)?;
             output.write_all(&buffer)?;
         }
     }
@@ -63,11 +52,7 @@ pub fn decompress(compression: CompressionMethod, input: &[u8], output: &mut [u8
         CompressionMethod::Oodle => {
             let status = oodle_loader::oodle()?.decompress(input, output);
             if status < 0 || status as usize != output.len() {
-                bail!(
-                    "Oodle decompression failed: expected {} output bytes, got {}",
-                    output.len(),
-                    status,
-                );
+                bail!("Oodle decompression failed: expected {} output bytes, got {}", output.len(), status,);
             }
         }
     }

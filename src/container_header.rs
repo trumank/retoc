@@ -42,18 +42,13 @@ impl Readable for FIoContainerHeader {
 }
 impl FIoContainerHeader {
     #[instrument(skip_all, name = "FIoContainerHeader")]
-    pub(crate) fn deserialize<S: Read>(
-        s: &mut S,
-        version_override: Option<EIoContainerHeaderVersion>,
-    ) -> Result<Self> {
+    pub(crate) fn deserialize<S: Read>(s: &mut S, version_override: Option<EIoContainerHeaderVersion>) -> Result<Self> {
         let signature: u32 = s.de()?;
         let version: EIoContainerHeaderVersion;
         let container_id;
         // if first 4 bytes are not MAGIC then header version must be Initial or earlier
         // if version override >= Initial, then first 4 bytes must be MAGIC, and version must be known
-        if version_override.is_some_and(|v| v <= EIoContainerHeaderVersion::Initial)
-            || signature != Self::MAGIC
-        {
+        if version_override.is_some_and(|v| v <= EIoContainerHeaderVersion::Initial) || signature != Self::MAGIC {
             version = version_override.unwrap_or(EIoContainerHeaderVersion::Initial);
             let mut id = [0; 8];
             id[0..4].copy_from_slice(&signature.to_le_bytes());
@@ -93,33 +88,21 @@ impl FIoContainerHeader {
             new.package_redirects = s.de()?;
 
             // Populate Source Package IDs of localized packages from the list we just read
-            new.localized_source_package_ids = new
-                .package_redirects
-                .iter()
-                .map(|x| x.source_package_id)
-                .collect();
+            new.localized_source_package_ids = new.package_redirects.iter().map(|x| x.source_package_id).collect();
 
             // Populate package redirects lookup from the package redirect list
-            new.package_redirect_lookup
-                .reserve(new.package_redirects.len());
+            new.package_redirect_lookup.reserve(new.package_redirects.len());
             for redirect_entry in &new.package_redirects {
-                new.package_redirect_lookup.insert(
-                    redirect_entry.source_package_id,
-                    redirect_entry.target_package_id,
-                );
+                new.package_redirect_lookup.insert(redirect_entry.source_package_id, redirect_entry.target_package_id);
             }
         } else {
             new.legacy_culture_package_map = s.de()?;
             new.legacy_package_redirects = s.de()?;
 
             // Populate package redirects lookup from the legacy package redirect list
-            new.package_redirect_lookup
-                .reserve(new.legacy_package_redirects.len());
+            new.package_redirect_lookup.reserve(new.legacy_package_redirects.len());
             for redirect_entry in &new.legacy_package_redirects {
-                new.package_redirect_lookup.insert(
-                    redirect_entry.source_package_id,
-                    redirect_entry.target_package_id,
-                );
+                new.package_redirect_lookup.insert(redirect_entry.source_package_id, redirect_entry.target_package_id);
             }
         }
 
@@ -147,8 +130,7 @@ impl Writeable for FIoContainerHeader {
 
         if self.version <= EIoContainerHeaderVersion::Initial {
             // Serialize container local name map. This map is generally empty in legacy UE4 containers because there are no fields that write to it
-            let (names_buffer, name_hashes_buffer) =
-                write_name_batch_parts(&self.redirect_name_map.copy_raw_names())?;
+            let (names_buffer, name_hashes_buffer) = write_name_batch_parts(&self.redirect_name_map.copy_raw_names())?;
             s.ser(&names_buffer)?;
             s.ser(&name_hashes_buffer)?;
         }
@@ -204,108 +186,67 @@ impl FIoContainerHeader {
         self.packages.0.insert(package_id, store_entry);
     }
 
-    pub(crate) fn add_localized_package(
-        &mut self,
-        package_culture: &str,
-        source_package_name: &str,
-        localized_package_id: FPackageId,
-    ) -> Result<()> {
+    pub(crate) fn add_localized_package(&mut self, package_culture: &str, source_package_name: &str, localized_package_id: FPackageId) -> Result<()> {
         let source_package_id = FPackageId::from_name(source_package_name);
 
         // New style localized packages do not track the localized package IDs, they only track the list of packages that are localized. Actual Package IDs for localized packages
         // are derived in runtime from package names. So we only need to create a single entry in the localized packages for each package
         if self.version > EIoContainerHeaderVersion::Initial {
-            if !self
-                .localized_source_package_ids
-                .contains(&source_package_id)
-            {
+            if !self.localized_source_package_ids.contains(&source_package_id) {
                 let source_package_mapped_name = self.redirect_name_map.store(source_package_name);
 
                 self.localized_source_package_ids.insert(source_package_id);
-                self.localized_packages
-                    .push(FIoContainerHeaderLocalizedPackage {
-                        source_package_id,
-                        source_package_name: source_package_mapped_name,
-                    });
+                self.localized_packages.push(FIoContainerHeaderLocalizedPackage {
+                    source_package_id,
+                    source_package_name: source_package_mapped_name,
+                });
             }
         } else {
             // Old style localized packages. They track individual packages and their localized variants for each culture
             // Key in the culture package map is the culture name, values are mappings of source package ID to localized package ID
-            let culture_localized_packages = self
-                .legacy_culture_package_map
-                .0
-                .entry(package_culture.to_string())
-                .or_default();
+            let culture_localized_packages = self.legacy_culture_package_map.0.entry(package_culture.to_string()).or_default();
             culture_localized_packages.push((source_package_id, localized_package_id));
         }
         Ok(())
     }
 
-    pub(crate) fn add_package_redirect(
-        &mut self,
-        source_package_name: &str,
-        redirect_package_id: FPackageId,
-    ) -> Result<()> {
+    pub(crate) fn add_package_redirect(&mut self, source_package_name: &str, redirect_package_id: FPackageId) -> Result<()> {
         let source_package_id = FPackageId::from_name(source_package_name);
 
         // New style redirects track the package name as well as it's package ID
         if self.version > EIoContainerHeaderVersion::Initial {
             let source_package_name = self.redirect_name_map.store(source_package_name);
 
-            self.package_redirects
-                .push(FIoContainerHeaderPackageRedirect {
-                    source_package_id,
-                    source_package_name,
-                    target_package_id: redirect_package_id,
-                });
-            self.package_redirect_lookup
-                .insert(source_package_id, redirect_package_id);
+            self.package_redirects.push(FIoContainerHeaderPackageRedirect {
+                source_package_id,
+                source_package_name,
+                target_package_id: redirect_package_id,
+            });
+            self.package_redirect_lookup.insert(source_package_id, redirect_package_id);
         } else {
             // Old style redirects only track bare source package ID and redirect package ID
-            self.legacy_package_redirects
-                .push(LegacyContainerHeaderPackageRedirect {
-                    source_package_id,
-                    target_package_id: redirect_package_id,
-                });
-            self.package_redirect_lookup
-                .insert(source_package_id, redirect_package_id);
+            self.legacy_package_redirects.push(LegacyContainerHeaderPackageRedirect {
+                source_package_id,
+                target_package_id: redirect_package_id,
+            });
+            self.package_redirect_lookup.insert(source_package_id, redirect_package_id);
         }
         Ok(())
     }
 
-    pub(crate) fn lookup_package_redirect(
-        &self,
-        source_package_id: FPackageId,
-    ) -> Option<FPackageId> {
-        self.package_redirect_lookup
-            .get(&source_package_id)
-            .cloned()
+    pub(crate) fn lookup_package_redirect(&self, source_package_id: FPackageId) -> Option<FPackageId> {
+        self.package_redirect_lookup.get(&source_package_id).cloned()
     }
 
     pub(crate) fn get_store_entry(&self, package_id: FPackageId) -> Option<StoreEntry> {
         self.packages.get(package_id)
     }
-    pub(crate) fn package_ids(
-        &self,
-    ) -> std::iter::Copied<std::collections::btree_map::Keys<'_, FPackageId, StoreEntry>> {
+    pub(crate) fn package_ids(&self) -> std::iter::Copied<std::collections::btree_map::Keys<'_, FPackageId, StoreEntry>> {
         self.packages.0.keys().copied()
     }
 }
 
-#[derive(
-    Default,
-    Debug,
-    Copy,
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    FromRepr,
-    clap::ValueEnum,
-    Serialize,
-    Deserialize,
-)]
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr, clap::ValueEnum, Serialize, Deserialize)]
 #[repr(i32)]
 #[clap(rename_all = "verbatim")]
 pub(crate) enum EIoContainerHeaderVersion {
@@ -321,8 +262,7 @@ impl Readable for EIoContainerHeaderVersion {
     #[instrument(skip_all, name = "EIoContainerHeaderVersion")]
     fn de<S: Read>(s: &mut S) -> Result<Self> {
         let value = s.de()?;
-        Self::from_repr(value)
-            .with_context(|| format!("invalid EIoContainerHeaderVersion value: {value}"))
+        Self::from_repr(value).with_context(|| format!("invalid EIoContainerHeaderVersion value: {value}"))
     }
 }
 impl Writeable for EIoContainerHeaderVersion {
@@ -386,10 +326,7 @@ struct FIoContainerHeaderSoftPackageReferences {
 impl Readable for FIoContainerHeaderSoftPackageReferences {
     #[instrument(skip_all, name = "FIoContainerHeaderSoftPackageReferences")]
     fn de<S: Read>(s: &mut S) -> Result<Self> {
-        Ok(Self {
-            package_ids: s.de()?,
-            package_indices: s.de()?,
-        })
+        Ok(Self { package_ids: s.de()?, package_indices: s.de()? })
     }
 }
 impl Writeable for FIoContainerHeaderSoftPackageReferences {
@@ -409,10 +346,7 @@ struct LegacyContainerHeaderPackageRedirect {
 impl Readable for LegacyContainerHeaderPackageRedirect {
     #[instrument(skip_all, name = "LegacyContainerHeaderPackageRedirect")]
     fn de<S: Read>(s: &mut S) -> Result<Self> {
-        Ok(Self {
-            source_package_id: s.de()?,
-            target_package_id: s.de()?,
-        })
+        Ok(Self { source_package_id: s.de()?, target_package_id: s.de()? })
     }
 }
 impl Writeable for LegacyContainerHeaderPackageRedirect {
@@ -460,9 +394,7 @@ impl StoreEntries {
             EIoContainerHeaderVersion::SoftPackageReferences => (0, 16),
         };
 
-        let entries = read_array(package_ids.len(), &mut cur, |s| {
-            FFilePackageStoreEntry::deserialize(s, version)
-        })?;
+        let entries = read_array(package_ids.len(), &mut cur, |s| FFilePackageStoreEntry::deserialize(s, version))?;
 
         let entries = entries
             .into_iter()
@@ -482,9 +414,7 @@ impl StoreEntries {
 
                 let num = entry.imported_packages.array_num as usize;
                 new.imported_packages = if num != 0 {
-                    let offset = offset
-                        + member_offset
-                        + entry.imported_packages.offset_to_data_from_this as usize; // offset_of(FFilePackageStoreEntry::imported_packages)
+                    let offset = offset + member_offset + entry.imported_packages.offset_to_data_from_this as usize; // offset_of(FFilePackageStoreEntry::imported_packages)
                     cur.seek(SeekFrom::Start(offset as u64))?;
                     cur.de_ctx(num)?
                 } else {
@@ -494,10 +424,7 @@ impl StoreEntries {
                 if version > EIoContainerHeaderVersion::Initial {
                     let num = entry.shader_map_hashes.array_num as usize;
                     new.shader_map_hashes = if num != 0 {
-                        let offset = offset
-                            + member_offset
-                            + entry.shader_map_hashes.offset_to_data_from_this as usize
-                            + 8; // offset_of(FFilePackageStoreEntry::shader_map_hashes)
+                        let offset = offset + member_offset + entry.shader_map_hashes.offset_to_data_from_this as usize + 8; // offset_of(FFilePackageStoreEntry::shader_map_hashes)
                         cur.seek(SeekFrom::Start(offset as u64))?;
                         cur.de_ctx(num)?
                     } else {
@@ -509,9 +436,7 @@ impl StoreEntries {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(Self(BTreeMap::from_iter(
-            package_ids.into_iter().zip(entries.into_iter()),
-        )))
+        Ok(Self(BTreeMap::from_iter(package_ids.into_iter().zip(entries.into_iter()))))
     }
     #[instrument(skip_all, name = "StoreEntries")]
     fn serialize<S: Write>(&self, s: &mut S, version: EIoContainerHeaderVersion) -> Result<()> {
@@ -666,8 +591,7 @@ impl Readable for FCulturePackageMap {
         let mut culture_package_map = BTreeMap::new();
         for _ in 0..culture_package_map_len {
             let key: String = s.de()?;
-            let value: Vec<(FPackageId, FPackageId)> =
-                read_array(s.de::<u32>()? as usize, s, |s| Ok((s.de()?, s.de()?)))?;
+            let value: Vec<(FPackageId, FPackageId)> = read_array(s.de::<u32>()? as usize, s, |s| Ok((s.de()?, s.de()?)))?;
             culture_package_map.insert(key, value);
         }
         Ok(Self(culture_package_map))
@@ -694,10 +618,7 @@ mod test {
 
     use fs_err as fs;
 
-    fn test_rw_container_header(
-        data: &[u8],
-        version_override: Option<EIoContainerHeaderVersion>,
-    ) -> Result<()> {
+    fn test_rw_container_header(data: &[u8], version_override: Option<EIoContainerHeaderVersion>) -> Result<()> {
         let header = FIoContainerHeader::deserialize(&mut Cursor::new(data), version_override)?;
 
         let mut out_cur = Cursor::new(vec![]);

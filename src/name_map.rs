@@ -15,21 +15,12 @@ fn name_hash(name: &str) -> u64 {
     if lower.is_ascii() {
         cityhasher::hash(lower.as_bytes())
     } else {
-        cityhasher::hash(
-            lower
-                .encode_utf16()
-                .flat_map(|s| s.to_le_bytes())
-                .collect::<Vec<u8>>(),
-        )
+        cityhasher::hash(lower.encode_utf16().flat_map(|s| s.to_le_bytes()).collect::<Vec<u8>>())
     }
 }
 
 fn name_header(name: &str) -> [u8; 2] {
-    let len = if name.is_ascii() {
-        name.len() as i16
-    } else {
-        name.encode_utf16().count() as i16 + i16::MIN
-    };
+    let len = if name.is_ascii() { name.len() as i16 } else { name.encode_utf16().count() as i16 + i16::MIN };
     len.to_be_bytes()
 }
 
@@ -56,11 +47,7 @@ pub(crate) fn read_name_batch<S: Read>(s: &mut S) -> Result<Vec<String>> {
 
 pub(crate) fn write_name_batch<S: Write>(s: &mut S, names: &[String]) -> Result<()> {
     fn name_byte_size(name: &str) -> u32 {
-        if name.is_ascii() {
-            name.len() as u32
-        } else {
-            name.encode_utf16().count() as u32 * 2
-        }
+        if name.is_ascii() { name.len() as u32 } else { name.encode_utf16().count() as u32 * 2 }
     }
 
     s.ser(&(names.len() as u32))?;
@@ -150,31 +137,19 @@ impl FNameMap {
 
 impl FNameMap {
     pub(crate) fn create(kind: EMappedNameType) -> Self {
-        Self {
-            kind,
-            names: Vec::new(),
-            name_lookup: HashMap::new(),
-        }
+        Self { kind, names: Vec::new(), name_lookup: HashMap::new() }
     }
     pub(crate) fn create_from_names(kind: EMappedNameType, names: Vec<String>) -> Self {
         let mut name_lookup: HashMap<String, usize> = HashMap::with_capacity(names.len());
         for (name_index, name) in names.iter().cloned().enumerate() {
             name_lookup.insert(name, name_index);
         }
-        Self {
-            kind,
-            names,
-            name_lookup,
-        }
+        Self { kind, names, name_lookup }
     }
     pub(crate) fn get(&self, name: FMappedName) -> Cow<'_, str> {
         assert_eq!(name.kind(), self.kind, "Attempt to map name of the different kind in this name map Name Kind is {}, but name map kind is {}", name.kind(), self.kind);
         let n = &self.names[name.index() as usize];
-        if name.number != 0 {
-            format!("{n}_{}", name.number - 1).into()
-        } else {
-            n.into()
-        }
+        if name.number != 0 { format!("{n}_{}", name.number - 1).into() } else { n.into() }
     }
 
     pub(crate) fn store(&mut self, name: &str) -> FMappedName {
@@ -187,8 +162,7 @@ impl FNameMap {
 
         // Create a new name and add it to the names list and to the name lookup
         let new_name_index = self.names.len();
-        self.name_lookup
-            .insert(name_without_number.to_string(), new_name_index);
+        self.name_lookup.insert(name_without_number.to_string(), new_name_index);
         self.names.push(name_without_number.to_string());
         FMappedName::create(new_name_index as u32, self.kind, name_number as u32)
     }
@@ -219,10 +193,7 @@ impl FMappedName {
     pub(crate) fn create(index: u32, kind: EMappedNameType, number: u32) -> Self {
         let shifted_type: u32 = (kind as u32) << Self::TYPE_SHIFT;
         let index_and_type: u32 = (index & Self::INDEX_MASK) | (shifted_type & Self::TYPE_MASK);
-        FMappedName {
-            index_and_type,
-            number,
-        }
+        FMappedName { index_and_type, number }
     }
     pub(crate) fn index(self) -> u32 {
         self.index_and_type & Self::INDEX_MASK
@@ -235,10 +206,7 @@ impl FMappedName {
 impl Readable for FMappedName {
     #[instrument(skip_all, name = "FMappedName")]
     fn de<S: Read>(s: &mut S) -> Result<Self> {
-        Ok(Self {
-            index_and_type: s.de()?,
-            number: s.de()?,
-        })
+        Ok(Self { index_and_type: s.de()?, number: s.de()? })
     }
 }
 impl Writeable for FMappedName {

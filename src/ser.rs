@@ -1,7 +1,7 @@
 use std::{io::Read, io::Write};
 
 use anyhow::Result;
-use byteorder::{ReadBytesExt, WriteBytesExt, LE};
+use byteorder::{LE, ReadBytesExt, WriteBytesExt};
 use tracing::instrument;
 
 pub(crate) trait Readable {

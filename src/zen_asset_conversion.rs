@@ -1,28 +1,26 @@
-use std::cmp::{max, Ordering};
 use crate::container_header::{EIoContainerHeaderVersion, StoreEntry};
-use crate::legacy_asset::{convert_localized_package_name_to_source, get_package_object_full_name, EPackageFlags, FLegacyPackageFileSummary, FLegacyPackageHeader, FSerializedAssetBundle};
+use crate::iostore_writer::IoStoreWriter;
+use crate::legacy_asset::{EPackageFlags, FLegacyPackageFileSummary, FLegacyPackageHeader, FSerializedAssetBundle, convert_localized_package_name_to_source, get_package_object_full_name};
+use crate::logging::{Log, log};
 use crate::name_map::{EMappedNameType, FNameMap};
 use crate::script_objects::{FPackageImportReference, FPackageObjectIndex, FPackageObjectIndexType};
+use crate::ser::{ReadExt, WriteExt};
 use crate::version_heuristics::heuristic_zen_version_from_package_file_version;
-use crate::zen::{EExportCommandType, EExportFilterFlags, EObjectFlags, EZenPackageVersion, ExternalPackageDependency, FBulkDataMapEntry, FDependencyBundleEntry, FDependencyBundleHeader, FExportBundleEntry, FExportBundleHeader, FExportMapEntry, FExternalDependencyArc, FInternalDependencyArc, FPackageFileVersion, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo};
+use crate::zen::{
+    EExportCommandType, EExportFilterFlags, EObjectFlags, EZenPackageVersion, ExternalPackageDependency, FBulkDataMapEntry, FDependencyBundleEntry, FDependencyBundleHeader, FExportBundleEntry, FExportBundleHeader, FExportMapEntry, FExternalDependencyArc, FInternalDependencyArc, FPackageFileVersion,
+    FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo,
+};
 use crate::{EIoChunkType, FIoChunkId, FPackageId, FSHAHash, UEPath, UEPathBuf};
 use anyhow::{anyhow, bail};
+use byteorder::{LE, ReadBytesExt};
+use std::cmp::{Ordering, max};
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::io::{Cursor, Seek, SeekFrom, Write};
 use std::sync::{Arc, RwLock};
-use byteorder::{ReadBytesExt, LE};
-use crate::iostore_writer::IoStoreWriter;
-use crate::logging::{log, Log};
-use crate::ser::{ReadExt, WriteExt};
 
 /// NOTE: assumes leading slash is already stripped
 fn get_public_export_hash(package_relative_export_path: &str) -> u64 {
-    cityhasher::hash(
-        package_relative_export_path
-            .encode_utf16()
-            .flat_map(u16::to_le_bytes)
-            .collect::<Vec<u8>>()
-    )
+    cityhasher::hash(package_relative_export_path.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>())
 }
 
 #[derive(Debug, Clone, Default)]
@@ -65,10 +63,13 @@ struct ZenPackageBuilder {
 
 // Flow is create_asset_builder -> setup_zen_package_summary -> build_zen_import_map -> build_zen_export_map -> build_zen_preload_dependencies -> serialize_zen_asset
 fn create_asset_builder(package: FLegacyPackageHeader, container_header_version: EIoContainerHeaderVersion, fixup_legacy_external_arcs: bool) -> ZenPackageBuilder {
-    ZenPackageBuilder{
+    ZenPackageBuilder {
         package_id: FPackageId::from_name(&package.summary.package_name),
         legacy_package: package,
-        zen_package: FZenPackageHeader{container_header_version, ..FZenPackageHeader::default()},
+        zen_package: FZenPackageHeader {
+            container_header_version,
+            ..FZenPackageHeader::default()
+        },
         container_header_version,
         package_import_lookup: HashMap::new(),
         import_to_package_id_lookup: HashMap::new(),
@@ -84,18 +85,16 @@ fn create_asset_builder(package: FLegacyPackageHeader, container_header_version:
 }
 
 fn setup_zen_package_summary(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
-
     let is_unversioned = builder.legacy_package.summary.versioning_info.is_unversioned;
 
     // Copy package flags
     builder.zen_package.summary.package_flags = builder.legacy_package.summary.package_flags;
 
     // Copy versioning info from the package, except the zen version, which is derived from package file version
-    let zen_version: EZenPackageVersion = heuristic_zen_version_from_package_file_version(
-        builder.legacy_package.summary.versioning_info.package_file_version, builder.container_header_version);
+    let zen_version: EZenPackageVersion = heuristic_zen_version_from_package_file_version(builder.legacy_package.summary.versioning_info.package_file_version, builder.container_header_version);
 
     builder.zen_package.is_unversioned = is_unversioned;
-    builder.zen_package.versioning_info = FZenPackageVersioningInfo{
+    builder.zen_package.versioning_info = FZenPackageVersioningInfo {
         zen_version,
         package_file_version: builder.legacy_package.summary.versioning_info.package_file_version,
         licensee_version: builder.legacy_package.summary.versioning_info.licensee_version,
@@ -130,7 +129,6 @@ fn setup_zen_package_summary(builder: &mut ZenPackageBuilder) -> anyhow::Result<
 
     // Check if this is a localized package, and track the culture and source package name if it is
     if let Some((source_package_name, culture_name)) = convert_localized_package_name_to_source(&builder.legacy_package.summary.package_name) {
-
         // Store source package name and the culture name for which this package is localized
         builder.source_package_name = Some(source_package_name);
         builder.localized_package_culture = Some(culture_name);
@@ -138,27 +136,28 @@ fn setup_zen_package_summary(builder: &mut ZenPackageBuilder) -> anyhow::Result<
 
     // Setup source package name for the UE4 zen packages. UE5.0+ zen packages do not internally track source package name, it is a part of the container header only
     if builder.container_header_version <= EIoContainerHeaderVersion::Initial {
-        
         // If this package is not a localized package, write None as the source package name. It has to always point to a valid name in the name map
         let source_package_name = builder.source_package_name.as_deref().unwrap_or("None");
         builder.zen_package.summary.source_name = builder.zen_package.name_map.store(source_package_name);
     }
 
     // Copy bulk resources from the legacy package without modifications
-    builder.zen_package.bulk_data = builder.legacy_package.data_resources.iter().map(|x| {
-        FBulkDataMapEntry{
+    builder.zen_package.bulk_data = builder
+        .legacy_package
+        .data_resources
+        .iter()
+        .map(|x| FBulkDataMapEntry {
             serial_offset: x.serial_offset,
             duplicate_serial_offset: x.duplicate_serial_offset,
             serial_size: x.serial_size,
             flags: x.legacy_bulk_data_flags,
             pad: 0,
-        }
-    }).collect();
+        })
+        .collect();
     Ok(())
 }
 
 fn resolve_zen_package_import(builder: &mut ZenPackageBuilder, package_id: FPackageId, package_name: &str, export_hash: u64) -> FPackageImportReference {
-
     // Resolve index of the imported package, if it's not found add it into the import list and into package names list
     let imported_package_index = if let Some(existing_index) = builder.package_import_lookup.get(&package_id) {
         *existing_index
@@ -181,7 +180,10 @@ fn resolve_zen_package_import(builder: &mut ZenPackageBuilder, package_id: FPack
         builder.export_hash_lookup.insert(export_hash, new_imported_export_hash_index);
         new_imported_export_hash_index
     };
-    FPackageImportReference{imported_package_index, imported_public_export_hash_index}
+    FPackageImportReference {
+        imported_package_index,
+        imported_public_export_hash_index,
+    }
 }
 
 // Returns package name and package-relative export path. Package-relative export path is lowercased and is prefixed with /, and uses / as a separator
@@ -195,7 +197,6 @@ fn resolve_legacy_package_object(package: &ZenPackageBuilder, object_index: FPac
 }
 
 fn convert_legacy_import_to_object_index(builder: &mut ZenPackageBuilder, import_index: usize) -> anyhow::Result<FPackageObjectIndex> {
-
     let (package_name, full_import_name) = resolve_legacy_package_object(builder, FPackageIndex::create_import(import_index as u32))?;
 
     // If this is a script import, just resolve it directly using the full import name as an index into script objects
@@ -226,17 +227,16 @@ fn convert_legacy_import_to_object_index(builder: &mut ZenPackageBuilder, import
     } else {
         // Old style (UE4.27) imports with full name of the export just converted into FPackageObjectIndex
         let global_import_index = FPackageObjectIndex::create_legacy_package_import_from_path(&full_import_name);
-        
+
         // Note that we still have to track this package ID in our imported packages, even if we are not indexing into it
         if let std::collections::hash_map::Entry::Vacant(e) = builder.package_import_lookup.entry(package_id) {
-            
             let package_import_index = builder.zen_package.imported_packages.len() as u32;
             builder.zen_package.imported_packages.push(package_id);
             e.insert(package_import_index);
         }
         global_import_index
     };
-    
+
     // Map the resulting import to the original package ID it came from. This is necessary to resolve legacy UE4 imports into package ID
     builder.import_to_package_id_lookup.insert(result_package_import, package_id);
 
@@ -244,7 +244,6 @@ fn convert_legacy_import_to_object_index(builder: &mut ZenPackageBuilder, import
 }
 
 fn build_zen_import_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
-
     builder.zen_package.import_map.reserve(builder.legacy_package.imports.len());
 
     for import_index in 0..builder.legacy_package.imports.len() {
@@ -255,22 +254,19 @@ fn build_zen_import_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
 }
 
 fn remap_package_index_reference(builder: &mut ZenPackageBuilder, package_index: FPackageIndex) -> FPackageObjectIndex {
-
     if package_index.is_export() {
-        return FPackageObjectIndex::create_export(package_index.to_export_index())
+        return FPackageObjectIndex::create_export(package_index.to_export_index());
     }
     if package_index.is_import() {
-        return builder.zen_package.import_map[package_index.to_import_index() as usize]
+        return builder.zen_package.import_map[package_index.to_import_index() as usize];
     }
     FPackageObjectIndex::create_null()
 }
 
 fn build_zen_export_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
-
     builder.zen_package.export_map.reserve(builder.legacy_package.exports.len());
 
     for export_index in 0..builder.legacy_package.exports.len() {
-
         let object_export = builder.legacy_package.exports[export_index].clone();
         let total_header_size = builder.legacy_package.summary.total_header_size as u64;
         let object_name = builder.legacy_package.name_map.get(object_export.object_name).to_string();
@@ -286,7 +282,7 @@ fn build_zen_export_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
 
         let should_have_public_export_hash = (object_export.object_flags & EObjectFlags::Public as u32) != 0 || object_export.generate_public_hash;
         let (export_package_name, full_export_name) = resolve_legacy_package_object(builder, FPackageIndex::create_export(export_index as u32))?;
-        
+
         let public_export_hash: u64 = if should_have_public_export_hash {
             // Use global import index converted to the raw representation for legacy packages, and get_public_export_hash otherwise
             if builder.container_header_version > EIoContainerHeaderVersion::Initial {
@@ -294,7 +290,9 @@ fn build_zen_export_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
             } else {
                 FPackageObjectIndex::create_legacy_package_import_from_path(&full_export_name).to_raw()
             }
-        } else { 0 };
+        } else {
+            0
+        };
 
         let filter_flags: EExportFilterFlags = if object_export.is_not_for_server {
             EExportFilterFlags::NotForServer
@@ -307,14 +305,18 @@ fn build_zen_export_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
         // Store the debug mapping of the ID of this import to the full name of it
         builder.debug_full_package_object_names.insert(FPackageIndex::create_export(export_index as u32), full_export_name.clone());
 
-        let zen_export = FExportMapEntry{
+        let zen_export = FExportMapEntry {
             cooked_serial_offset,
             cooked_serial_size: object_export.serial_size as u64,
             object_name: mapped_object_name,
             object_flags: object_export.object_flags,
-            outer_index, class_index, super_index, template_index,
+            outer_index,
+            class_index,
+            super_index,
+            template_index,
             public_export_hash,
-            filter_flags, padding: [0; 3]
+            filter_flags,
+            padding: [0; 3],
         };
         builder.zen_package.export_map.push(zen_export);
     }
@@ -328,7 +330,6 @@ struct ZenDependencyGraphNode {
 }
 
 fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_load_order: &[ZenExportGraphNode], export_dependencies: &HashMap<ZenDependencyGraphNode, Vec<ZenDependencyGraphNode>>) {
-
     let mut current_export_bundle_header_index: i64 = -1;
     let mut current_export_offset: u64 = 0;
     let mut export_to_bundle_map: HashMap<ZenDependencyGraphNode, usize> = HashMap::new();
@@ -339,7 +340,7 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
 
         // Skip non-export items in the dependency graph. Imports will occasionally appear in the graph when there is a requirement for both a creation and a serialization
         if !dependency_graph_node.package_index.is_export() {
-            continue
+            continue;
         }
 
         let export_index = dependency_graph_node.package_index.to_export_index() as usize;
@@ -347,19 +348,16 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
 
         // Open a new export bundle if we do not have one running
         if current_export_bundle_header_index == -1 {
-
             current_export_bundle_header_index = builder.zen_package.export_bundle_headers.len() as i64;
 
             let first_entry_index = builder.zen_package.export_bundle_entries.len() as u32;
             let serial_offset = current_export_offset;
 
-            builder.zen_package.export_bundle_headers.push(FExportBundleHeader{
-                serial_offset, first_entry_index, entry_count: 0
-            })
+            builder.zen_package.export_bundle_headers.push(FExportBundleHeader { serial_offset, first_entry_index, entry_count: 0 })
         }
 
         // Add current export as an entry into the currently open bundle
-        builder.zen_package.export_bundle_entries.push(FExportBundleEntry{
+        builder.zen_package.export_bundle_entries.push(FExportBundleEntry {
             local_export_index: export_index as u32,
             command_type: export_command_type,
         });
@@ -380,7 +378,7 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
             let export_global_index = builder.zen_package.export_map[export_index].legacy_global_import_index();
             let full_export_name = builder.debug_full_package_object_names.get(&FPackageIndex::create_export(export_index as u32)).cloned();
 
-            builder.legacy_export_bundle_mapping.push(ZenLegacyPackageExportBundleMapping{
+            builder.legacy_export_bundle_mapping.push(ZenLegacyPackageExportBundleMapping {
                 export_index: export_global_index,
                 export_command_type,
                 export_bundle_index: current_export_bundle_header_index as i32,
@@ -401,18 +399,15 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
 
     // Function to create export dependency arcs to the export's export bundle from another export's export bundle, or from an entry in the import map
     let mut create_dependency_arc_from_node = |to_export_bundle_index: i32, dependency_node: &ZenDependencyGraphNode, mut_builder: &mut ZenPackageBuilder| {
-
         // This is an export-to-export dependency
         if dependency_node.package_index.is_export() {
             let from_export_bundle_index = *export_to_bundle_map.get(dependency_node).unwrap() as i32;
 
             // Skip dependencies between exports that belong to the same bundle, they are already sorted
             if from_export_bundle_index != to_export_bundle_index {
-
                 // If we have not previously created a dependency from that export bundle to our export bundle, add one
-                let internal_dependency_arc = FInternalDependencyArc{from_export_bundle_index, to_export_bundle_index};
+                let internal_dependency_arc = FInternalDependencyArc { from_export_bundle_index, to_export_bundle_index };
                 if !internal_dependency_arcs.contains(&internal_dependency_arc) {
-
                     internal_dependency_arcs.insert(internal_dependency_arc);
                     // Note that internal dependency arcs are discarded in UE4.27, and export bundle N always has an implicit internal dependency arc to bundle N-1
                     // Since we create bundles in the export load order, such an implicit ordering works well and does not need to be represented by the internal dependency arc
@@ -422,22 +417,23 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
         }
         // This is an import-to-export dependency. We need to add a dependency arc for it unless it's a script import or a removed package import
         else if dependency_node.package_index.is_import() {
-
             let from_import_index = dependency_node.package_index.to_import_index() as i32;
             let from_command_type = dependency_node.command_type;
             let package_object_import = mut_builder.zen_package.import_map[from_import_index as usize];
 
             // Do not add external arcs for script imports and removed package imports (represented as Null in the zen import map)
             if package_object_import.kind() == FPackageObjectIndexType::PackageImport {
-
                 // New graph data will map a specific import to the specific export bundle for UE5.0+ zen assets
                 if mut_builder.container_header_version > EIoContainerHeaderVersion::Initial {
                     let imported_package_index = package_object_import.package_import().unwrap().imported_package_index as usize;
-                    let external_dependency_arc = FExternalDependencyArc{from_import_index, from_command_type, to_export_bundle_index};
+                    let external_dependency_arc = FExternalDependencyArc {
+                        from_import_index,
+                        from_command_type,
+                        to_export_bundle_index,
+                    };
 
                     // Only add the dependency arc if we have not previously created in
                     if !external_dependency_arcs.contains(&external_dependency_arc) {
-
                         external_dependency_arcs.insert(external_dependency_arc);
                         // We lay out external package dependencies to match imported package indices, so this is always safe
                         mut_builder.zen_package.external_package_dependencies[imported_package_index].external_dependency_arcs.push(external_dependency_arc);
@@ -445,16 +441,15 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
                 } else {
                     let imported_package_id = *mut_builder.import_to_package_id_lookup.get(&package_object_import).unwrap();
                     let imported_package_index = *mut_builder.package_import_lookup.get(&imported_package_id).unwrap() as usize;
-                    
+
                     // Legacy UE4 graph data will only map the export bundle index in this package to export bundle index in the imported package
                     // This requires knowledge of the export bundle layout of another package, which we do not have if fix-up is not possible. So just use -1 as a placeholder
                     // If we are intending to fix up the serialized data later though, write a placeholder value and emit the information necessary for the fixup
                     let from_export_bundle_index: i32 = if mut_builder.fixup_legacy_external_arcs {
-                        
                         let current_fixup_id = mut_builder.legacy_external_arc_counter;
                         let full_import_name = mut_builder.debug_full_package_object_names.get(&dependency_node.package_index).cloned();
 
-                        let fixup_data = ZenLegacyPackageExternalArcFixupData{
+                        let fixup_data = ZenLegacyPackageExternalArcFixupData {
                             fixup_from_bundle_id: current_fixup_id,
                             from_package_id: imported_package_id,
                             from_import_index: package_object_import,
@@ -465,12 +460,13 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
                         mut_builder.legacy_external_arc_fixup_data.push(fixup_data);
                         mut_builder.legacy_external_arc_counter += 1;
                         current_fixup_id
-                    } else { -1 };
+                    } else {
+                        -1
+                    };
 
                     // Prevent adding duplicate dependencies on the packages
-                    let legacy_dependency_arc = FInternalDependencyArc{from_export_bundle_index, to_export_bundle_index};
+                    let legacy_dependency_arc = FInternalDependencyArc { from_export_bundle_index, to_export_bundle_index };
                     if !legacy_dependency_arcs.contains(&(imported_package_id, legacy_dependency_arc)) {
-                        
                         legacy_dependency_arcs.insert((imported_package_id, legacy_dependency_arc));
                         mut_builder.zen_package.external_package_dependencies[imported_package_index].legacy_dependency_arcs.push(legacy_dependency_arc);
                     }
@@ -482,18 +478,23 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
     // Pre-initialize external package dependencies with the number of imported package IDs
     builder.zen_package.external_package_dependencies.reserve(builder.zen_package.imported_packages.len());
     for imported_package_id in &builder.zen_package.imported_packages {
-        builder.zen_package.external_package_dependencies.push(ExternalPackageDependency{
+        builder.zen_package.external_package_dependencies.push(ExternalPackageDependency {
             from_package_id: *imported_package_id,
             external_dependency_arcs: Vec::new(),
-            legacy_dependency_arcs: Vec::new()
+            legacy_dependency_arcs: Vec::new(),
         });
     }
 
     // Build internal and external dependency arcs
     for export_index in 0..builder.zen_package.export_map.len() {
-
-        let export_create_node = ZenDependencyGraphNode{package_index: FPackageIndex::create_export(export_index as u32), command_type: EExportCommandType::Create};
-        let export_serialize_node = ZenDependencyGraphNode{package_index: FPackageIndex::create_export(export_index as u32), command_type: EExportCommandType::Serialize};
+        let export_create_node = ZenDependencyGraphNode {
+            package_index: FPackageIndex::create_export(export_index as u32),
+            command_type: EExportCommandType::Create,
+        };
+        let export_serialize_node = ZenDependencyGraphNode {
+            package_index: FPackageIndex::create_export(export_index as u32),
+            command_type: EExportCommandType::Serialize,
+        };
 
         let export_create_bundle_index = *export_to_bundle_map.get(&export_create_node).unwrap();
         let export_serialize_bundle_index = *export_to_bundle_map.get(&export_serialize_node).unwrap();
@@ -508,21 +509,20 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
 }
 
 fn build_zen_dependency_bundle_new(builder: &mut ZenPackageBuilder, export_load_order: &[ZenExportGraphNode], export_dependencies: &HashMap<ZenDependencyGraphNode, Vec<ZenDependencyGraphNode>>) {
-
     // Create a single dependency bundle with all exports
     for dependency_graph in export_load_order {
         let dependency_graph_node = dependency_graph.node;
 
         // Skip non-export items in the dependency graph. Imports will occasionally appear in the graph when there is a requirement for both a creation and a serialization
         if !dependency_graph_node.package_index.is_export() {
-            continue
+            continue;
         }
 
         let export_index = dependency_graph_node.package_index.to_export_index() as usize;
         let export_command_type = dependency_graph_node.command_type;
 
         // Add current export as an entry into the currently open bundle
-        builder.zen_package.export_bundle_entries.push(FExportBundleEntry{
+        builder.zen_package.export_bundle_entries.push(FExportBundleEntry {
             local_export_index: export_index as u32,
             command_type: export_command_type,
         });
@@ -533,21 +533,21 @@ fn build_zen_dependency_bundle_new(builder: &mut ZenPackageBuilder, export_load_
         let mut result_dependencies: Vec<FDependencyBundleEntry> = Vec::new();
 
         for from_dependency_node in export_dependencies.get(to_dependency_node).unwrap_or(&Vec::new()) {
-
             // Skip nodes that do not have the matching command type, and nodes to ourselves (e.g. serialize depends on create)
             if from_dependency_node.command_type == from_command_type && from_dependency_node.package_index != to_dependency_node.package_index {
-
                 // If this is an export, add the dependency bundle entry at all times
                 if from_dependency_node.package_index.is_export() {
-                    result_dependencies.push(FDependencyBundleEntry{ local_import_or_export_index: from_dependency_node.package_index });
+                    result_dependencies.push(FDependencyBundleEntry {
+                        local_import_or_export_index: from_dependency_node.package_index,
+                    });
                 }
                 // Otherwise, if this is an import, we only add it if it's a package export import
                 else if from_dependency_node.package_index.is_import() {
-
                     let zen_import_package_index = immut_builder.zen_package.import_map[from_dependency_node.package_index.to_import_index() as usize];
                     if zen_import_package_index.kind() == FPackageObjectIndexType::PackageImport {
-
-                        result_dependencies.push(FDependencyBundleEntry{ local_import_or_export_index: from_dependency_node.package_index });
+                        result_dependencies.push(FDependencyBundleEntry {
+                            local_import_or_export_index: from_dependency_node.package_index,
+                        });
                     }
                 }
             }
@@ -557,9 +557,14 @@ fn build_zen_dependency_bundle_new(builder: &mut ZenPackageBuilder, export_load_
 
     // Build dependency bundles
     for export_index in 0..builder.zen_package.export_map.len() {
-
-        let export_create_node = ZenDependencyGraphNode { package_index: FPackageIndex::create_export(export_index as u32), command_type: EExportCommandType::Create };
-        let export_serialize_node = ZenDependencyGraphNode { package_index: FPackageIndex::create_export(export_index as u32), command_type: EExportCommandType::Serialize };
+        let export_create_node = ZenDependencyGraphNode {
+            package_index: FPackageIndex::create_export(export_index as u32),
+            command_type: EExportCommandType::Create,
+        };
+        let export_serialize_node = ZenDependencyGraphNode {
+            package_index: FPackageIndex::create_export(export_index as u32),
+            command_type: EExportCommandType::Serialize,
+        };
 
         let mut create_before_create_deps: Vec<FDependencyBundleEntry> = collect_export_dependencies(&export_create_node, EExportCommandType::Create, builder);
         let mut serialize_before_create_deps: Vec<FDependencyBundleEntry> = collect_export_dependencies(&export_create_node, EExportCommandType::Serialize, builder);
@@ -569,7 +574,7 @@ fn build_zen_dependency_bundle_new(builder: &mut ZenPackageBuilder, export_load_
         // Create dependency header for this export
         let first_entry_index = builder.zen_package.dependency_bundle_entries.len() as i32;
 
-        builder.zen_package.dependency_bundle_headers.push(FDependencyBundleHeader{
+        builder.zen_package.dependency_bundle_headers.push(FDependencyBundleHeader {
             first_entry_index,
             create_before_create_dependencies: create_before_create_deps.len() as u32,
             serialize_before_create_dependencies: serialize_before_create_deps.len() as u32,
@@ -597,7 +602,9 @@ impl PartialOrd for ZenExportGraphNode {
 }
 impl Ord for ZenExportGraphNode {
     fn cmp(&self, other: &Self) -> Ordering {
-        other.is_public_export.cmp(&self.is_public_export)
+        other
+            .is_public_export
+            .cmp(&self.is_public_export)
             .then(self.node.command_type.cmp(&other.node.command_type))
             .then(self.node.package_index.to_export_index().cmp(&other.node.package_index.to_export_index()))
             .reverse()
@@ -605,7 +612,6 @@ impl Ord for ZenExportGraphNode {
 }
 
 fn sort_dependencies_in_load_order(export_graph_nodes: &Vec<ZenExportGraphNode>, dependency_to_dependants: &HashMap<ZenExportGraphNode, Vec<ZenExportGraphNode>>) -> anyhow::Result<Vec<ZenExportGraphNode>> {
-
     let mut incoming_edge_count: HashMap<ZenExportGraphNode, usize> = HashMap::new();
 
     // Prime all nodes that have dependencies
@@ -626,14 +632,12 @@ fn sort_dependencies_in_load_order(export_graph_nodes: &Vec<ZenExportGraphNode>,
     // Take nodes with no dependencies until we run out of them
     let mut load_order: Vec<ZenExportGraphNode> = Vec::with_capacity(export_graph_nodes.len());
     while !nodes_with_no_incoming_edges.is_empty() {
-
         let removed_node = nodes_with_no_incoming_edges.pop().unwrap();
         load_order.push(removed_node);
 
         // Remove one edge from all the nodes that depend on this node
         if let Some(node_dependants) = dependency_to_dependants.get(&removed_node) {
             for to_node in node_dependants {
-
                 // Make sure the to node has the edge for this node
                 let incoming_edge_count = incoming_edge_count.entry(*to_node).or_default();
                 *incoming_edge_count -= 1;
@@ -654,19 +658,23 @@ fn sort_dependencies_in_load_order(export_graph_nodes: &Vec<ZenExportGraphNode>,
 }
 
 fn build_zen_preload_dependencies(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
-
     // Build a dependency map with each export and it's preload dependencies
     let export_count = builder.legacy_package.exports.len();
     let mut export_dependencies: HashMap<ZenDependencyGraphNode, Vec<ZenDependencyGraphNode>> = HashMap::with_capacity(export_count);
     let mut export_graph_nodes: Vec<ZenExportGraphNode> = Vec::with_capacity(export_count);
 
     for export_index in 0..export_count {
-
         let export_package_index = FPackageIndex::create_export(export_index as u32);
         let object_export = builder.legacy_package.exports[export_index].clone();
 
-        let create_graph_node = ZenDependencyGraphNode{package_index: export_package_index, command_type: EExportCommandType::Create};
-        let serialize_graph_node = ZenDependencyGraphNode{package_index: export_package_index, command_type: EExportCommandType::Serialize};
+        let create_graph_node = ZenDependencyGraphNode {
+            package_index: export_package_index,
+            command_type: EExportCommandType::Create,
+        };
+        let serialize_graph_node = ZenDependencyGraphNode {
+            package_index: export_package_index,
+            command_type: EExportCommandType::Serialize,
+        };
 
         let mut create_dependencies: Vec<ZenDependencyGraphNode> = Vec::new();
         let mut serialize_dependencies: Vec<ZenDependencyGraphNode> = Vec::new();
@@ -676,46 +684,51 @@ fn build_zen_preload_dependencies(builder: &mut ZenPackageBuilder) -> anyhow::Re
 
         // Collect create and serialize dependencies for this export
         if object_export.first_export_dependency_index != -1 {
-
             // Create before create dependencies. They go first because Package Store Optimizer puts them first
             for i in 0..object_export.create_before_create_dependencies {
-
-                let preload_dependency_index = object_export.first_export_dependency_index + object_export.serialize_before_serialize_dependencies +
-                    object_export.create_before_serialize_dependencies + object_export.serialize_before_create_dependencies + i;
+                let preload_dependency_index = object_export.first_export_dependency_index + object_export.serialize_before_serialize_dependencies + object_export.create_before_serialize_dependencies + object_export.serialize_before_create_dependencies + i;
                 let preload_dependency = builder.legacy_package.preload_dependencies[preload_dependency_index as usize];
 
-                let dependency = ZenDependencyGraphNode{package_index: preload_dependency, command_type: EExportCommandType::Create};
+                let dependency = ZenDependencyGraphNode {
+                    package_index: preload_dependency,
+                    command_type: EExportCommandType::Create,
+                };
                 create_dependencies.push(dependency);
             }
 
             // Serialize before create dependencies. They go second because Package Store Optimizer puts them second
             for i in 0..object_export.serialize_before_create_dependencies {
-
-                let preload_dependency_index = object_export.first_export_dependency_index + object_export.serialize_before_serialize_dependencies +
-                    object_export.create_before_serialize_dependencies + i;
+                let preload_dependency_index = object_export.first_export_dependency_index + object_export.serialize_before_serialize_dependencies + object_export.create_before_serialize_dependencies + i;
                 let preload_dependency = builder.legacy_package.preload_dependencies[preload_dependency_index as usize];
 
-                let dependency = ZenDependencyGraphNode{package_index: preload_dependency, command_type: EExportCommandType::Serialize};
+                let dependency = ZenDependencyGraphNode {
+                    package_index: preload_dependency,
+                    command_type: EExportCommandType::Serialize,
+                };
                 create_dependencies.push(dependency);
             }
 
             // Create before serialize dependencies. They go third because Package Store Optimizer puts them third
             for i in 0..object_export.create_before_serialize_dependencies {
-
                 let preload_dependency_index = object_export.first_export_dependency_index + object_export.serialize_before_serialize_dependencies + i;
                 let preload_dependency = builder.legacy_package.preload_dependencies[preload_dependency_index as usize];
 
-                let dependency = ZenDependencyGraphNode{package_index: preload_dependency, command_type: EExportCommandType::Create};
+                let dependency = ZenDependencyGraphNode {
+                    package_index: preload_dependency,
+                    command_type: EExportCommandType::Create,
+                };
                 serialize_dependencies.push(dependency);
             }
 
             // Serialize before serialize dependencies. They go last because Package Store Optimizer puts them last
             for i in 0..object_export.serialize_before_serialize_dependencies {
-
                 let preload_dependency_index = object_export.first_export_dependency_index + i;
                 let preload_dependency = builder.legacy_package.preload_dependencies[preload_dependency_index as usize];
 
-                let dependency = ZenDependencyGraphNode{package_index: preload_dependency, command_type: EExportCommandType::Serialize};
+                let dependency = ZenDependencyGraphNode {
+                    package_index: preload_dependency,
+                    command_type: EExportCommandType::Serialize,
+                };
                 serialize_dependencies.push(dependency);
             }
         }
@@ -723,8 +736,8 @@ fn build_zen_preload_dependencies(builder: &mut ZenPackageBuilder) -> anyhow::Re
         // Add create and serialize graph nodes for this export
         // Nodes are added into the graph in export order, Create first, then Serialize. So Export0Create -> Export0Serialize -> Export1Create -> Export1Serialize -> etc
         let is_public_export = builder.zen_package.export_map[export_index].is_public_export();
-        export_graph_nodes.push(ZenExportGraphNode{node: create_graph_node, is_public_export});
-        export_graph_nodes.push(ZenExportGraphNode{node: serialize_graph_node, is_public_export});
+        export_graph_nodes.push(ZenExportGraphNode { node: create_graph_node, is_public_export });
+        export_graph_nodes.push(ZenExportGraphNode { node: serialize_graph_node, is_public_export });
 
         // Remember dependencies associated with each node. This is necessary for building dependency arcs later
         export_dependencies.insert(create_graph_node, create_dependencies);
@@ -736,14 +749,15 @@ fn build_zen_preload_dependencies(builder: &mut ZenPackageBuilder) -> anyhow::Re
     for dependant_node in &export_graph_nodes {
         if let Some(dependencies) = export_dependencies.get(&dependant_node.node) {
             for raw_dependency_node in dependencies {
-
                 // Skip non-export dependencies from exports. They do not matter for graph building purposes
-                if !raw_dependency_node.package_index.is_export() { continue }
+                if !raw_dependency_node.package_index.is_export() {
+                    continue;
+                }
                 // Determine whenever this export is public or not to create a ZenExportGraphNode
                 let is_public_export = builder.zen_package.export_map[raw_dependency_node.package_index.to_export_index() as usize].is_public_export();
 
                 // Create the dependency node and add the dependant node to it's dependants list
-                let dependency_node = ZenExportGraphNode{node: *raw_dependency_node, is_public_export};
+                let dependency_node = ZenExportGraphNode { node: *raw_dependency_node, is_public_export };
                 dependency_to_dependants.entry(dependency_node).or_default().push(*dependant_node);
             }
         }
@@ -762,29 +776,29 @@ fn build_zen_preload_dependencies(builder: &mut ZenPackageBuilder) -> anyhow::Re
 }
 
 fn write_exports_in_bundle_order<S: Write>(writer: &mut S, builder: &ZenPackageBuilder, exports_buffer: &[u8]) -> anyhow::Result<()> {
-
     let total_header_size = builder.legacy_package.summary.total_header_size as u64;
     let mut current_export_offset: u64 = 0;
     let mut largest_exports_buffer_export_end_offset: usize = 0;
 
     for export_bundle_header_index in 0..builder.zen_package.export_bundle_headers.len() {
-
         let export_bundle_header = builder.zen_package.export_bundle_headers[export_bundle_header_index];
 
         // Make sure bundle data is actually being placed at the correct offset
         if export_bundle_header.serial_offset != current_export_offset {
-            bail!("Export bundle {} serial offset does not match it's actual placement. Expected bundle data to be placed at {}, but it's placed at {}",
-            export_bundle_header_index, export_bundle_header.serial_offset, current_export_offset);
+            bail!(
+                "Export bundle {} serial offset does not match it's actual placement. Expected bundle data to be placed at {}, but it's placed at {}",
+                export_bundle_header_index,
+                export_bundle_header.serial_offset,
+                current_export_offset
+            );
         }
 
         for i in 0..export_bundle_header.entry_count {
-
             let export_bundle_entry_index = export_bundle_header.first_entry_index + i;
             let export_bundle_entry = builder.zen_package.export_bundle_entries[export_bundle_entry_index as usize];
 
             // Only Serialize command actually means the export data placement
             if export_bundle_entry.command_type == EExportCommandType::Serialize {
-
                 let export_index = export_bundle_entry.local_export_index as usize;
 
                 // Export serial offset here is actually relative to the legacy package header size, so we need to subtract it to get the real position in the exports buffer
@@ -819,7 +833,6 @@ fn write_exports_in_bundle_order<S: Write>(writer: &mut S, builder: &ZenPackageB
 }
 
 fn serialize_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: &FSerializedAssetBundle) -> anyhow::Result<(StoreEntry, Vec<u8>, Vec<u64>)> {
-
     let mut result_package_buffer: Vec<u8> = Vec::new();
     let mut result_package_writer = Cursor::new(&mut result_package_buffer);
     let mut result_store_entry: StoreEntry = StoreEntry::default();
@@ -838,7 +851,6 @@ fn serialize_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: &FSeria
 }
 
 fn build_converted_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: FSerializedAssetBundle, path: &UEPath, package_name_to_referenced_shader_maps: &HashMap<String, Vec<FSHAHash>>) -> anyhow::Result<ConvertedZenAssetBundle> {
-
     let (mut result_store_entry, result_package_buffer, legacy_external_arc_serialized_offsets) = serialize_zen_asset(builder, &legacy_asset_bundle)?;
 
     // Append shader map hashes to the store entry from the package name to shader maps lookup
@@ -884,48 +896,64 @@ impl ConvertedZenAssetBundle {
         self.package_buffer.len()
     }
     pub(crate) fn fixup_legacy_external_arcs(&mut self, global_package_lookup: &HashMap<FPackageId, Arc<RwLock<ConvertedZenAssetBundle>>>, log: &Log) -> anyhow::Result<()> {
-        
         for legacy_serialized_offset in &self.legacy_external_arc_serialized_offsets {
-
             // Seek to the relevant position and read the ID of the placeholder from bundle index
             let placeholder_from_bundle_index: i32 = {
                 let mut package_buffer_reader = Cursor::new(&self.package_buffer);
                 package_buffer_reader.seek(SeekFrom::Start(*legacy_serialized_offset))?;
                 package_buffer_reader.de()?
             };
-            
+
             // Resolve the fixup data for this arc
-            let fixup_data = self.legacy_external_arc_fixup_data.iter()
+            let fixup_data = self
+                .legacy_external_arc_fixup_data
+                .iter()
                 .find(|x| x.fixup_from_bundle_id == placeholder_from_bundle_index)
-                .cloned().ok_or_else(|| { anyhow!("Failed to find fixup data for placeholder ID {}", placeholder_from_bundle_index) })?;
-            
+                .cloned()
+                .ok_or_else(|| anyhow!("Failed to find fixup data for placeholder ID {}", placeholder_from_bundle_index))?;
+
             // Attempt to find the package in the lookup to which this import maps
             let result_from_bundle_index: i32 = if let Some(referenced_asset_bundle_lock) = global_package_lookup.get(&fixup_data.from_package_id) {
-                
                 // Resolve the export this reference is mapping to
                 let referenced_asset_bundle = referenced_asset_bundle_lock.read().unwrap();
-                let export_bundle_mapping = referenced_asset_bundle.legacy_export_bundle_mapping_data.iter()
+                let export_bundle_mapping = referenced_asset_bundle
+                    .legacy_export_bundle_mapping_data
+                    .iter()
                     .find(|x| x.export_index == fixup_data.from_import_index && x.export_command_type == fixup_data.from_command_type)
-                    .cloned().ok_or_else(|| {
+                    .cloned()
+                    .ok_or_else(|| {
                         dbg!(referenced_asset_bundle.legacy_export_bundle_mapping_data.clone());
-                        anyhow!("Failed to find export in the package {} ({}) mapping to the import {} (full name: {}) dependency {:?} in package {} ({})",
-                            referenced_asset_bundle.package_name.clone(), referenced_asset_bundle.package_id,
-                            fixup_data.from_import_index, fixup_data.debug_full_import_name.clone().unwrap_or(String::from("unknown")), fixup_data.from_command_type,
-                            self.package_name.clone(), self.package_id)
+                        anyhow!(
+                            "Failed to find export in the package {} ({}) mapping to the import {} (full name: {}) dependency {:?} in package {} ({})",
+                            referenced_asset_bundle.package_name.clone(),
+                            referenced_asset_bundle.package_id,
+                            fixup_data.from_import_index,
+                            fixup_data.debug_full_import_name.clone().unwrap_or(String::from("unknown")),
+                            fixup_data.from_command_type,
+                            self.package_name.clone(),
+                            self.package_id
+                        )
                     })?;
-                
+
                 if log.debug_enabled() {
-                    log!(log, "Applying fixup to package {} for import of package {} export {} command {:?}. Resolved export bundle for the export: {}",
-                        self.package_id.clone(), fixup_data.from_package_id.clone(), fixup_data.from_import_index, fixup_data.from_command_type, export_bundle_mapping.export_bundle_index);
+                    log!(
+                        log,
+                        "Applying fixup to package {} for import of package {} export {} command {:?}. Resolved export bundle for the export: {}",
+                        self.package_id.clone(),
+                        fixup_data.from_package_id.clone(),
+                        fixup_data.from_import_index,
+                        fixup_data.from_command_type,
+                        export_bundle_mapping.export_bundle_index
+                    );
                 }
-                
+
                 // We found the export bundle this dependency maps to
                 export_bundle_mapping.export_bundle_index
             } else {
                 // This import is not found in the global package lookup, so assume it is external and use -1 as a value meaning "last export bundle in the package"
                 -1
             };
-            
+
             // Write the fixed-up from export bundle index to the correct position
             let mut package_buffer_writer = Cursor::new(&mut self.package_buffer);
             package_buffer_writer.seek(SeekFrom::Start(*legacy_serialized_offset))?;
@@ -933,14 +961,14 @@ impl ConvertedZenAssetBundle {
         }
         Ok(())
     }
-    
+
     // Writes both the package data and the bulk data in one go
     pub(crate) fn write(&mut self, writer: &mut IoStoreWriter) -> anyhow::Result<()> {
         self.write_package_data(writer)?;
         self.write_and_release_bulk_data(writer)?;
         Ok(())
     }
-    
+
     // Writes package data into the container, and releases the reference to it
     pub(crate) fn write_package_data(&mut self, writer: &mut IoStoreWriter) -> anyhow::Result<()> {
         let package_chunk_id = FIoChunkId::from_package_id(self.package_id, 0, EIoChunkType::ExportBundleData);
@@ -954,11 +982,11 @@ impl ConvertedZenAssetBundle {
         else if let Some(source_package_name) = &self.source_package_name {
             writer.add_package_redirect(source_package_name, self.package_id)?;
         }
-        
+
         self.package_buffer = Vec::new();
         Ok(())
     }
-    
+
     // Writes bulk data into the container, and releases the reference to it so that it is no longer stored in memory. Needed for two-stage processing of legacy UE4.27 zen assets
     pub(crate) fn write_and_release_bulk_data(&mut self, writer: &mut IoStoreWriter) -> anyhow::Result<()> {
         // Write bulk data chunk if it is present
@@ -976,7 +1004,7 @@ impl ConvertedZenAssetBundle {
             let memory_mapped_bulk_data_chunk_id = FIoChunkId::from_package_id(self.package_id, 0, EIoChunkType::MemoryMappedBulkData);
             writer.write_chunk(memory_mapped_bulk_data_chunk_id, Some(&self.path.with_extension("m.ubulk")), memory_mapped_bulk_data_buffer)?;
         }
-        
+
         // Release the buffers to free the memory taken by them
         self.bulk_data_buffer = None;
         self.optional_bulk_data_buffer = None;
@@ -986,7 +1014,6 @@ impl ConvertedZenAssetBundle {
 }
 
 fn build_zen_asset_internal(legacy_asset: &FSerializedAssetBundle, container_header_version: EIoContainerHeaderVersion, package_version_fallback: Option<FPackageFileVersion>, fixup_legacy_external_arcs: bool) -> anyhow::Result<ZenPackageBuilder> {
-
     // Read legacy package header
     let mut asset_header_reader = Cursor::new(&legacy_asset.asset_file_buffer);
     let legacy_package_header = FLegacyPackageHeader::deserialize(&mut asset_header_reader, package_version_fallback)?;
@@ -1004,8 +1031,14 @@ fn build_zen_asset_internal(legacy_asset: &FSerializedAssetBundle, container_hea
 }
 
 // Builds zen asset and writes it into the container using the provided serialized legacy asset and package version
-pub(crate) fn build_zen_asset(legacy_asset: FSerializedAssetBundle, package_name_to_referenced_shader_maps: &HashMap<String, Vec<FSHAHash>>, path: &UEPath, package_version_fallback: Option<FPackageFileVersion>, container_header_version: EIoContainerHeaderVersion, allow_fixup: bool) -> anyhow::Result<ConvertedZenAssetBundle> {
-
+pub(crate) fn build_zen_asset(
+    legacy_asset: FSerializedAssetBundle,
+    package_name_to_referenced_shader_maps: &HashMap<String, Vec<FSHAHash>>,
+    path: &UEPath,
+    package_version_fallback: Option<FPackageFileVersion>,
+    container_header_version: EIoContainerHeaderVersion,
+    allow_fixup: bool,
+) -> anyhow::Result<ConvertedZenAssetBundle> {
     // We want to fixup this asset once we have converted all the packages
     let final_allow_fixup = container_header_version <= EIoContainerHeaderVersion::Initial && allow_fixup;
     let builder = build_zen_asset_internal(&legacy_asset, container_header_version, package_version_fallback, final_allow_fixup)?;
@@ -1017,13 +1050,12 @@ pub(crate) fn build_zen_asset(legacy_asset: FSerializedAssetBundle, package_name
 #[cfg(test)]
 mod test {
     use super::*;
-    use fs_err as fs;
     use crate::EIoStoreTocVersion;
     use crate::zen::EUnrealEngineObjectUE5Version;
+    use fs_err as fs;
 
     // Builds zen asset and returns the resulting package ID, chunk data buffer, and it's store entry. Zen package conversion does not modify bulk data in any way.
     pub(crate) fn build_serialize_zen_asset(legacy_asset: &FSerializedAssetBundle, container_header_version: EIoContainerHeaderVersion, package_version_fallback: Option<FPackageFileVersion>) -> anyhow::Result<(FPackageId, StoreEntry, Vec<u8>)> {
-
         // Do not allow legacy external arc fixup, just emit the asset that does not require fixup immediately using only the information available from this asset
         let builder = build_zen_asset_internal(legacy_asset, container_header_version, package_version_fallback, false)?;
 
@@ -1033,17 +1065,9 @@ mod test {
 
     #[test]
     fn test_zen_asset_identity_conversion() -> anyhow::Result<()> {
-        run_test(
-            "tests/UE5.4/BP_Table_Lamp.uasset",
-            "tests/UE5.4/BP_Table_Lamp.uexp",
-            "tests/UE5.4/BP_Table_Lamp.uzenasset",
-        )?;
+        run_test("tests/UE5.4/BP_Table_Lamp.uasset", "tests/UE5.4/BP_Table_Lamp.uexp", "tests/UE5.4/BP_Table_Lamp.uzenasset")?;
 
-        run_test(
-            "tests/UE5.4/Randy.uasset",
-            "tests/UE5.4/Randy.uexp",
-            "tests/UE5.4/Randy.uzenasset",
-        )?;
+        run_test("tests/UE5.4/Randy.uasset", "tests/UE5.4/Randy.uexp", "tests/UE5.4/Randy.uzenasset")?;
 
         Ok(())
     }
@@ -1054,10 +1078,12 @@ mod test {
         let asset_header_buffer = fs::read(header)?;
         let asset_exports_buffer = fs::read(exports)?;
 
-        let serialized_asset_bundle = FSerializedAssetBundle{
+        let serialized_asset_bundle = FSerializedAssetBundle {
             asset_file_buffer: asset_header_buffer,
             exports_file_buffer: asset_exports_buffer.clone(),
-            bulk_data_buffer: None, optional_bulk_data_buffer: None, memory_mapped_bulk_data_buffer: None,
+            bulk_data_buffer: None,
+            optional_bulk_data_buffer: None,
+            memory_mapped_bulk_data_buffer: None,
         };
 
         // UE5.4, NoExportInfo zen header, OnDemandMetaData TOC version, and PropertyTagCompleteTypeName package file version
@@ -1089,7 +1115,11 @@ mod test {
 
         // Make sure export blob is identical after the header size. Offsets in export map are relative to the end of the header so if they are correct and this data is correct exports are correct
         assert_eq!(original_zen_asset[(original_zen_asset_package.summary.header_size as usize)..].to_vec(), asset_exports_buffer.clone(), "Uexp file and the original zen asset exports do not match");
-        assert_eq!(original_zen_asset[(original_zen_asset_package.summary.header_size as usize)..].to_vec(), converted_zen_asset[(converted_zen_asset_package.summary.header_size as usize)..].to_vec(), "Original zen asset and converted zen asset exports do not match");
+        assert_eq!(
+            original_zen_asset[(original_zen_asset_package.summary.header_size as usize)..].to_vec(),
+            converted_zen_asset[(converted_zen_asset_package.summary.header_size as usize)..].to_vec(),
+            "Original zen asset and converted zen asset exports do not match"
+        );
 
         assert_eq!(original_zen_asset, converted_zen_asset, "Original and converted asset binary equality check failed");
         Ok(())

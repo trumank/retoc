@@ -169,11 +169,7 @@ fn read_field<S: Read>(stream: &mut Ctx<S>, mut tag: ECbFieldTypeFlags) -> Resul
     if tag.has_field_type() {
         tag = stream.de()?;
     }
-    let name = if tag.has_field_name() {
-        Some(read_string(stream)?)
-    } else {
-        None
-    };
+    let name = if tag.has_field_name() { Some(read_string(stream)?) } else { None };
 
     Ok(Field {
         name,
@@ -233,9 +229,7 @@ fn read_field<S: Read>(stream: &mut Ctx<S>, mut tag: ECbFieldTypeFlags) -> Resul
             //ECbFieldType::BoolFalse = 0x0c,
             //ECbFieldType::BoolTrue = 0x0d,
             //ECbFieldType::ObjectAttachment = 0x0e,
-            ECbFieldType::BinaryAttachment => {
-                FieldValue::BinaryAttachment(stream.de::<[u8; 20]>()?)
-            }
+            ECbFieldType::BinaryAttachment => FieldValue::BinaryAttachment(stream.de::<[u8; 20]>()?),
             //ECbFieldType::Hash = 0x10,
             //ECbFieldType::Uuid = 0x11,
             //ECbFieldType::DateTime = 0x12,
@@ -269,14 +263,9 @@ mod test {
             a.sort_by(|x, y| key(x).cmp(key(y)));
         }
 
-        sort_by_key_ref(
-            field.value.unwrap_uniform_object_mut()["oplog"].unwrap_uniform_object_mut()["entries"]
-                .unwrap_uniform_array_mut(),
-            |op| {
-                op.unwrap_object()["packagestoreentry"].unwrap_uniform_object()["packagename"]
-                    .unwrap_string()
-            },
-        );
+        sort_by_key_ref(field.value.unwrap_uniform_object_mut()["oplog"].unwrap_uniform_object_mut()["entries"].unwrap_uniform_array_mut(), |op| {
+            op.unwrap_object()["packagestoreentry"].unwrap_uniform_object()["packagename"].unwrap_string()
+        });
 
         fs::create_dir("out").ok();
         fs::write("out/packagestore.json", serde_json::to_vec(&field)?)?;

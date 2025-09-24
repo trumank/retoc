@@ -7,7 +7,7 @@ use serde::Serializer;
 use strum::FromRepr;
 use tracing::instrument;
 
-use crate::name_map::{read_name_batch_parts, EMappedNameType};
+use crate::name_map::{EMappedNameType, read_name_batch_parts};
 use crate::{
     name_map::{FMappedName, FNameMap},
     ser::*,
@@ -27,22 +27,16 @@ impl ZenScriptObjects {
     }
     #[instrument(skip_all, name = "ZenScriptObjects")]
     pub(crate) fn deserialize_old<S: Read>(s: &mut S, names: &[u8]) -> Result<Self> {
-        let global_name_map: FNameMap =
-            FNameMap::create_from_names(EMappedNameType::Global, read_name_batch_parts(names)?);
+        let global_name_map: FNameMap = FNameMap::create_from_names(EMappedNameType::Global, read_name_batch_parts(names)?);
         Ok(Self::new(s.de()?, global_name_map))
     }
     fn new(script_objects: Vec<FScriptObjectEntry>, global_name_map: FNameMap) -> Self {
         // Build lookup by package object index for fast access
-        let mut script_object_lookup: HashMap<FPackageObjectIndex, FScriptObjectEntry> =
-            HashMap::with_capacity(script_objects.len());
+        let mut script_object_lookup: HashMap<FPackageObjectIndex, FScriptObjectEntry> = HashMap::with_capacity(script_objects.len());
         script_objects.iter().for_each(|script_object| {
             script_object_lookup.insert(script_object.global_index, *script_object);
         });
-        Self {
-            global_name_map,
-            script_objects,
-            script_object_lookup,
-        }
+        Self { global_name_map, script_objects, script_object_lookup }
     }
     pub(crate) fn print(&self) {
         for s in &self.script_objects {
@@ -128,8 +122,7 @@ impl FPackageObjectIndex {
         Self::create(FPackageObjectIndexType::ScriptImport, import_hash)
     }
     pub(crate) fn create_package_import(import_ref: FPackageImportReference) -> Self {
-        let import_value = import_ref.imported_public_export_hash_index as u64
-            | ((import_ref.imported_package_index as u64) << 32);
+        let import_value = import_ref.imported_public_export_hash_index as u64 | ((import_ref.imported_package_index as u64) << 32);
         Self::create(FPackageObjectIndexType::PackageImport, import_value)
     }
     // Function to create a legacy UE4 zen package import from the full, lower-case name of the imported/exported object using / as a separator
@@ -151,8 +144,7 @@ impl FPackageObjectIndex {
     }
     pub(crate) fn package_import(self) -> Option<FPackageImportReference> {
         (self.kind() == FPackageObjectIndexType::PackageImport).then_some(FPackageImportReference {
-            imported_package_index: ((self.type_and_id & FPackageObjectIndex::INDEX_MASK) >> 32)
-                as u32,
+            imported_package_index: ((self.type_and_id & FPackageObjectIndex::INDEX_MASK) >> 32) as u32,
             imported_public_export_hash_index: (self.type_and_id as u32),
         })
     }
@@ -171,12 +163,7 @@ impl FPackageObjectIndex {
                 c => c.to_ascii_lowercase(),
             })
             .collect::<String>();
-        let mut hash: u64 = cityhasher::hash(
-            lower_slash_path
-                .encode_utf16()
-                .flat_map(u16::to_le_bytes)
-                .collect::<Vec<u8>>(),
-        );
+        let mut hash: u64 = cityhasher::hash(lower_slash_path.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>());
         hash &= !(3 << 62);
         hash
     }
@@ -184,9 +171,7 @@ impl FPackageObjectIndex {
 impl Readable for FPackageObjectIndex {
     #[instrument(skip_all, name = "FPackageObjectIndex")]
     fn de<S: Read>(s: &mut S) -> Result<Self> {
-        Ok(Self {
-            type_and_id: s.de()?,
-        })
+        Ok(Self { type_and_id: s.de()? })
     }
 }
 impl Display for FPackageObjectIndex {
@@ -204,21 +189,9 @@ impl Writeable for FPackageObjectIndex {
 impl std::fmt::Debug for FPackageObjectIndex {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self.kind() {
-            FPackageObjectIndexType::Export => write!(
-                f,
-                "FPackageObjectIndex::Export({:X?})",
-                self.export().unwrap()
-            ),
-            FPackageObjectIndexType::ScriptImport => write!(
-                f,
-                "FPackageObjectIndex::ScriptImport({:X?})",
-                self.raw_index()
-            ),
-            FPackageObjectIndexType::PackageImport => write!(
-                f,
-                "FPackageObjectIndex::PackageImport({:X?})",
-                self.package_import().unwrap()
-            ),
+            FPackageObjectIndexType::Export => write!(f, "FPackageObjectIndex::Export({:X?})", self.export().unwrap()),
+            FPackageObjectIndexType::ScriptImport => write!(f, "FPackageObjectIndex::ScriptImport({:X?})", self.raw_index()),
+            FPackageObjectIndexType::PackageImport => write!(f, "FPackageObjectIndex::PackageImport({:X?})", self.package_import().unwrap()),
             FPackageObjectIndexType::Null => write!(f, "FPackageObjectIndex::Null"),
         }
     }
@@ -230,10 +203,7 @@ mod test {
     use std::io::BufReader;
     use ue_reflection::ObjectType;
 
-    use crate::{
-        name_map::write_name_batch_parts, EIoChunkType, EngineVersion, FIoChunkId, IoStoreWriter,
-        UEPathBuf,
-    };
+    use crate::{EIoChunkType, EngineVersion, FIoChunkId, IoStoreWriter, UEPathBuf, name_map::write_name_batch_parts};
 
     use super::*;
     #[test]
@@ -260,8 +230,7 @@ mod test {
     /// generate script objects from refelection dump generated by https://github.com/trumank/meatloaf/tree/master/dumper
     //#[test]
     fn test_gen_script_objects() -> Result<()> {
-        let dump: HashMap<String, ue_reflection::ObjectType> =
-            serde_json::from_reader(std::io::BufReader::new(fs::File::open("fsd.json")?))?;
+        let dump: HashMap<String, ue_reflection::ObjectType> = serde_json::from_reader(std::io::BufReader::new(fs::File::open("fsd.json")?))?;
 
         // map CDO => Class
         let mut cdos = HashMap::<&str, &str>::new();
@@ -303,16 +272,8 @@ mod test {
                 }
                 .outer;
 
-                let outer_index = outer
-                    .as_ref()
-                    .map_or(FPackageObjectIndex::create_null(), |outer| {
-                        FPackageObjectIndex::create_script_import(&outer)
-                    });
-                let cdo_class_index = cdos
-                    .get(path.as_str())
-                    .map_or(FPackageObjectIndex::create_null(), |outer| {
-                        FPackageObjectIndex::create_script_import(&outer)
-                    });
+                let outer_index = outer.as_ref().map_or(FPackageObjectIndex::create_null(), |outer| FPackageObjectIndex::create_script_import(&outer));
+                let cdo_class_index = cdos.get(path.as_str()).map_or(FPackageObjectIndex::create_null(), |outer| FPackageObjectIndex::create_script_import(&outer));
                 script_objects.push(FScriptObjectEntry {
                     object_name: names.store(name),
                     global_index: FPackageObjectIndex::create_script_import(&path),
@@ -329,12 +290,7 @@ mod test {
         }
 
         let ue_version = EngineVersion::UE4_27;
-        let mut writer = IoStoreWriter::new(
-            "global.utoc",
-            ue_version.toc_version(),
-            None,
-            UEPathBuf::new(),
-        )?;
+        let mut writer = IoStoreWriter::new("global.utoc", ue_version.toc_version(), None, UEPathBuf::new())?;
 
         let (buf_names, buf_name_hashes) = write_name_batch_parts(&names.copy_raw_names())?;
         let buf_script_objects = {
@@ -343,21 +299,9 @@ mod test {
             buf
         };
 
-        writer.write_chunk(
-            FIoChunkId::create(0, 0, EIoChunkType::LoaderGlobalNames),
-            None,
-            &buf_names,
-        )?;
-        writer.write_chunk(
-            FIoChunkId::create(0, 0, EIoChunkType::LoaderGlobalNameHashes),
-            None,
-            &buf_name_hashes,
-        )?;
-        writer.write_chunk(
-            FIoChunkId::create(0, 0, EIoChunkType::LoaderInitialLoadMeta),
-            None,
-            &buf_script_objects,
-        )?;
+        writer.write_chunk(FIoChunkId::create(0, 0, EIoChunkType::LoaderGlobalNames), None, &buf_names)?;
+        writer.write_chunk(FIoChunkId::create(0, 0, EIoChunkType::LoaderGlobalNameHashes), None, &buf_name_hashes)?;
+        writer.write_chunk(FIoChunkId::create(0, 0, EIoChunkType::LoaderInitialLoadMeta), None, &buf_script_objects)?;
 
         writer.finalize()?;
 

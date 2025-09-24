@@ -267,9 +267,7 @@ fn main() -> Result<()> {
         ..Default::default()
     };
     if let Some(aes) = args.aes_key {
-        config
-            .aes_keys
-            .insert(FGuid::default(), AesKey::from_str(&aes)?);
+        config.aes_keys.insert(FGuid::default(), AesKey::from_str(&aes)?);
     }
     let config = Arc::new(config);
 
@@ -300,58 +298,39 @@ fn action_manifest(args: ActionManifest, config: Arc<Config>) -> Result<()> {
     let container_header_version = iostore.container_header_version().unwrap();
     let toc_version = iostore.container_file_version().unwrap();
 
-    iostore
-        .packages()
-        .par_bridge()
-        .try_for_each(|package_info| -> Result<()> {
-            let chunk_id =
-                FIoChunkId::from_package_id(package_info.id(), 0, EIoChunkType::ExportBundleData)
-                    .with_version(toc_version);
-            let package_path = iostore
-                .chunk_path(chunk_id)
-                .with_context(|| format!("{:?} has no path name entry", package_info.id()))?;
-            let data = package_info.container().read(chunk_id)?;
+    iostore.packages().par_bridge().try_for_each(|package_info| -> Result<()> {
+        let chunk_id = FIoChunkId::from_package_id(package_info.id(), 0, EIoChunkType::ExportBundleData).with_version(toc_version);
+        let package_path = iostore.chunk_path(chunk_id).with_context(|| format!("{:?} has no path name entry", package_info.id()))?;
+        let data = package_info.container().read(chunk_id)?;
 
-            let package_name = get_package_name(&data, container_header_version)
-                .with_context(|| package_path.to_string())?;
+        let package_name = get_package_name(&data, container_header_version).with_context(|| package_path.to_string())?;
 
-            let mut entry = manifest::Op {
-                packagestoreentry: manifest::PackageStoreEntry {
-                    packagename: package_name,
-                },
-                packagedata: vec![manifest::ChunkData {
-                    id: chunk_id.get_raw(),
-                    filename: package_path.to_string(),
-                }],
-                bulkdata: vec![],
-            };
+        let mut entry = manifest::Op {
+            packagestoreentry: manifest::PackageStoreEntry { packagename: package_name },
+            packagedata: vec![manifest::ChunkData {
+                id: chunk_id.get_raw(),
+                filename: package_path.to_string(),
+            }],
+            bulkdata: vec![],
+        };
 
-            let bulk_id = FIoChunkId::from_package_id(package_info.id(), 0, EIoChunkType::BulkData)
-                .with_version(toc_version);
-            if iostore.has_chunk_id(bulk_id) {
-                entry.bulkdata.push(manifest::ChunkData {
-                    id: bulk_id.get_raw(),
-                    filename: UEPath::new(&package_path)
-                        .with_extension("ubulk")
-                        .to_string(),
-                });
-            }
+        let bulk_id = FIoChunkId::from_package_id(package_info.id(), 0, EIoChunkType::BulkData).with_version(toc_version);
+        if iostore.has_chunk_id(bulk_id) {
+            entry.bulkdata.push(manifest::ChunkData {
+                id: bulk_id.get_raw(),
+                filename: UEPath::new(&package_path).with_extension("ubulk").to_string(),
+            });
+        }
 
-            entries.lock().unwrap().push(entry);
-            Ok(())
-        })?;
+        entries.lock().unwrap().push(entry);
+        Ok(())
+    })?;
 
     let mut entries = Arc::into_inner(entries).unwrap().into_inner().unwrap();
     //entries.sort_by_key(|op| op.packagedata.first().map(|c| c.filename.clone()));
-    entries.sort_by(|a, b| {
-        a.packagestoreentry
-            .packagename
-            .cmp(&b.packagestoreentry.packagename)
-    });
+    entries.sort_by(|a, b| a.packagestoreentry.packagename.cmp(&b.packagestoreentry.packagename));
 
-    let manifest = manifest::PackageStoreManifest {
-        oplog: manifest::OpLog { entries },
-    };
+    let manifest = manifest::PackageStoreManifest { oplog: manifest::OpLog { entries } };
 
     let path = "pakstore.json";
     fs::write(path, serde_json::to_vec(&manifest)?)?;
@@ -370,21 +349,13 @@ fn action_info(args: ActionInfo, config: Arc<Config>) -> Result<()> {
 fn action_list(args: ActionList, config: Arc<Config>) -> Result<()> {
     let iostore = iostore::open(args.utoc, config)?;
 
-    let chunks = if args.all {
-        iostore.chunks_all()
-    } else {
-        iostore.chunks()
-    };
+    let chunks = if args.all { iostore.chunks_all() } else { iostore.chunks() };
 
     for chunk in chunks {
         let id = chunk.id();
         let chunk_type = id.get_chunk_type();
 
-        let package_id: Cow<str> = if chunk_type == EIoChunkType::ExportBundleData {
-            FPackageId(id.get_chunk_id()).0.to_string().into()
-        } else {
-            "-".into()
-        };
+        let package_id: Cow<str> = if chunk_type == EIoChunkType::ExportBundleData { FPackageId(id.get_chunk_id()).0.to_string().into() } else { "-".into() };
 
         use std::fmt::Write;
         let mut line = String::new();
@@ -416,10 +387,7 @@ fn action_list(args: ActionList, config: Arc<Config>) -> Result<()> {
         }
         if args.store {
             let package_store_entry = if chunk_type == EIoChunkType::ExportBundleData {
-                let entry = chunk
-                    .container()
-                    .package_store_entry(id.get_package_id())
-                    .unwrap();
+                let entry = chunk.container().package_store_entry(id.get_package_id()).unwrap();
                 format!("{entry:?}")
             } else {
                 "-".to_string()
@@ -528,11 +496,7 @@ fn action_unpack(args: ActionUnpack, config: Arc<Config>) -> Result<()> {
         },
     )?;
 
-    println!(
-        "unpacked {} files to {}",
-        toc.file_map.len(),
-        output.to_string_lossy()
-    );
+    println!("unpacked {} files to {}", toc.file_map.len(), output.to_string_lossy());
 
     Ok(())
 }
@@ -551,9 +515,7 @@ mod raw {
         pub(crate) mount_point: String,
     }
     #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    pub(crate) struct ChunkId(
-        #[serde(serialize_with = "to_hex", deserialize_with = "from_hex")] pub(crate) FIoChunkIdRaw,
-    );
+    pub(crate) struct ChunkId(#[serde(serialize_with = "to_hex", deserialize_with = "from_hex")] pub(crate) FIoChunkIdRaw);
     impl From<FIoChunkIdRaw> for ChunkId {
         fn from(value: FIoChunkIdRaw) -> Self {
             Self(value)
@@ -573,9 +535,7 @@ mod raw {
         let s: String = Deserialize::deserialize(deserializer)?;
         let v = hex::decode(s).map_err(serde::de::Error::custom)?;
         Ok(FIoChunkIdRaw {
-            id: v.try_into().map_err(|v: Vec<u8>| {
-                serde::de::Error::invalid_length(v.len(), &"a 12 byte hex string")
-            })?,
+            id: v.try_into().map_err(|v: Vec<u8>| serde::de::Error::invalid_length(v.len(), &"a 12 byte hex string"))?,
         })
     }
 }
@@ -600,34 +560,21 @@ fn action_unpack_raw(args: ActionUnpackRaw, config: Arc<Config>) -> Result<()> {
         let data = chunk.read()?;
         fs::write(chunks_dir.join(hex::encode(chunk.id().get_raw())), data)?;
         if let Some(path) = chunk.path() {
-            manifest
-                .chunk_paths
-                .insert(chunk.id().get_raw().into(), path);
+            manifest.chunk_paths.insert(chunk.id().get_raw().into(), path);
         }
     }
 
     serde_json::to_writer_pretty(BufWriter::new(fs::File::create(manifest_path)?), &manifest)?;
 
-    println!(
-        "unpacked {} chunks to {}",
-        iostore.chunks().count(),
-        output.to_string_lossy()
-    );
+    println!("unpacked {} chunks to {}", iostore.chunks().count(), output.to_string_lossy());
 
     Ok(())
 }
 
 fn action_pack_raw(args: ActionPackRaw, _config: Arc<Config>) -> Result<()> {
-    let manifest: raw::RawIoManifest = serde_json::from_reader(BufReader::new(fs::File::open(
-        args.input.join("manifest.json"),
-    )?))?;
+    let manifest: raw::RawIoManifest = serde_json::from_reader(BufReader::new(fs::File::open(args.input.join("manifest.json"))?))?;
 
-    let mut writer = IoStoreWriter::new(
-        args.utoc,
-        manifest.version,
-        None,
-        manifest.mount_point.into(),
-    )?;
+    let mut writer = IoStoreWriter::new(args.utoc, manifest.version, None, manifest.mount_point.into())?;
     for entry in args.input.join("chunks").read_dir()? {
         let entry = entry?;
         let chunk_id = FIoChunkIdRaw::from_str(entry.file_name().to_string_lossy().as_ref())?;
@@ -718,9 +665,7 @@ impl FileReaderTrait for FSFileReader {
         let mut files = vec![];
         visit_dirs(&self.dir, &mut |file| {
             let file_path = file.path();
-            let file_relative_path = file_path
-                .strip_prefix(&self.dir)
-                .expect("Failed to strip dir prefix");
+            let file_relative_path = file_path.strip_prefix(&self.dir).expect("Failed to strip dir prefix");
             files.push(to_ue_path(file_relative_path));
         })?;
         Ok(files)
@@ -761,14 +706,12 @@ fn action_to_legacy(args: ActionToLegacy, config: Arc<Config>) -> Result<()> {
         action_to_legacy_inner(args, config, &NullFileWriter, &log)?;
     } else if args.output.extension() == Some(std::ffi::OsStr::new("pak")) {
         let mut file = BufWriter::new(fs::File::create(&args.output)?);
-        let mut pak = repak::PakBuilder::new()
-            .compression([repak::Compression::Oodle])
-            .writer(
-                &mut file,
-                repak::Version::V11, // TODO V11 is compatible with most IO store versions but will need to be changed for <= 4.26
-                "../../../".to_string(),
-                None,
-            );
+        let mut pak = repak::PakBuilder::new().compression([repak::Compression::Oodle]).writer(
+            &mut file,
+            repak::Version::V11, // TODO V11 is compatible with most IO store versions but will need to be changed for <= 4.26
+            "../../../".to_string(),
+            None,
+        );
 
         // some stack space to store action result
         let mut result = None;
@@ -776,10 +719,7 @@ fn action_to_legacy(args: ActionToLegacy, config: Arc<Config>) -> Result<()> {
         rayon::in_place_scope(|scope| -> Result<()> {
             let (tx, rx) = std::sync::mpsc::sync_channel(0);
 
-            let writer = ParallelPakWriter {
-                entry_builder: pak.entry_builder(),
-                tx,
-            };
+            let writer = ParallelPakWriter { entry_builder: pak.entry_builder(), tx };
 
             scope.spawn(move |_| {
                 *result_ref = Some(action_to_legacy_inner(args, config, &writer, &log));
@@ -801,12 +741,7 @@ fn action_to_legacy(args: ActionToLegacy, config: Arc<Config>) -> Result<()> {
     Ok(())
 }
 
-fn action_to_legacy_inner(
-    args: ActionToLegacy,
-    config: Arc<Config>,
-    file_writer: &dyn FileWriterTrait,
-    log: &Log,
-) -> Result<()> {
+fn action_to_legacy_inner(args: ActionToLegacy, config: Arc<Config>, file_writer: &dyn FileWriterTrait, log: &Log) -> Result<()> {
     let iostore = iostore::open(&args.input, config.clone())?;
     if !args.no_assets {
         action_to_legacy_assets(&args, file_writer, &*iostore, log)?;
@@ -818,29 +753,14 @@ fn action_to_legacy_inner(
 }
 
 fn progress_style() -> indicatif::ProgressStyle {
-    indicatif::ProgressStyle::with_template(
-        "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {wide_msg}",
-    )
-    .unwrap()
-    .progress_chars("##-")
+    indicatif::ProgressStyle::with_template("[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {wide_msg}").unwrap().progress_chars("##-")
 }
 
-fn action_to_legacy_assets(
-    args: &ActionToLegacy,
-    file_writer: &dyn FileWriterTrait,
-    iostore: &dyn IoStoreTrait,
-    log: &Log,
-) -> Result<()> {
+fn action_to_legacy_assets(args: &ActionToLegacy, file_writer: &dyn FileWriterTrait, iostore: &dyn IoStoreTrait, log: &Log) -> Result<()> {
     let mut packages_to_extract = vec![];
     for package_info in iostore.packages() {
-        let chunk_id =
-            FIoChunkId::from_package_id(package_info.id(), 0, EIoChunkType::ExportBundleData);
-        let package_path = iostore.chunk_path(chunk_id).with_context(|| {
-            format!(
-                "{:?} has no path name entry. Cannot extract",
-                package_info.id()
-            )
-        })?;
+        let chunk_id = FIoChunkId::from_package_id(package_info.id(), 0, EIoChunkType::ExportBundleData);
+        let package_path = iostore.chunk_path(chunk_id).with_context(|| format!("{:?} has no path name entry. Cannot extract", package_info.id()))?;
 
         if !args.filter.is_empty() && !args.filter.iter().any(|f| package_path.contains(f)) {
             continue;
@@ -849,8 +769,7 @@ fn action_to_legacy_assets(
         packages_to_extract.push((package_info, package_path));
     }
 
-    let package_file_version: Option<FPackageFileVersion> =
-        args.version.map(|v| v.package_file_version());
+    let package_file_version: Option<FPackageFileVersion> = args.version.map(|v| v.package_file_version());
     let package_context = FZenPackageContext::create(iostore, package_file_version, log);
 
     let count = packages_to_extract.len();
@@ -863,19 +782,11 @@ fn action_to_legacy_assets(
         verbose!(log, "{package_path}");
 
         // TODO make configurable
-        let path = package_path
-            .strip_prefix("../../../")
-            .with_context(|| format!("failed to strip mount prefix from {package_path}"))?;
+        let path = package_path.strip_prefix("../../../").with_context(|| format!("failed to strip mount prefix from {package_path}"))?;
 
         prog_ref.inspect(|p| p.set_message(path.to_string()));
 
-        let res = asset_conversion::build_legacy(
-            &package_context,
-            package_info.id(),
-            UEPath::new(&path),
-            file_writer,
-        )
-        .with_context(|| format!("Failed to convert {}", package_path.clone()));
+        let res = asset_conversion::build_legacy(&package_context, package_info.id(), UEPath::new(&path), file_writer).with_context(|| format!("Failed to convert {}", package_path.clone()));
         if let Err(err) = res {
             log!(log, "{err:#}");
             failed_count.fetch_add(1, Ordering::SeqCst);
@@ -894,62 +805,32 @@ fn action_to_legacy_assets(
     log.set_progress(None);
 
     let failed_count = failed_count.load(Ordering::SeqCst);
-    log!(
-        log,
-        "Extracted {} ({failed_count} failed) legacy assets to {:?}",
-        count - failed_count,
-        args.output
-    );
+    log!(log, "Extracted {} ({failed_count} failed) legacy assets to {:?}", count - failed_count, args.output);
 
     Ok(())
 }
 
-fn action_to_legacy_shaders(
-    args: &ActionToLegacy,
-    file_writer: &dyn FileWriterTrait,
-    iostore: &dyn IoStoreTrait,
-    log: &Log,
-) -> Result<()> {
+fn action_to_legacy_shaders(args: &ActionToLegacy, file_writer: &dyn FileWriterTrait, iostore: &dyn IoStoreTrait, log: &Log) -> Result<()> {
     let compress_shaders = !args.no_compres_shaders;
     let mut libraries_extracted = 0;
-    for chunk_info in iostore
-        .chunks()
-        .filter(|x| x.id().get_chunk_type() == EIoChunkType::ShaderCodeLibrary)
-    {
-        let shader_library_path = chunk_info.path().with_context(|| {
-            format!(
-                "Failed to retrieve pathname for shader library chunk {:?}",
-                chunk_info.id()
-            )
-        })?;
+    for chunk_info in iostore.chunks().filter(|x| x.id().get_chunk_type() == EIoChunkType::ShaderCodeLibrary) {
+        let shader_library_path = chunk_info.path().with_context(|| format!("Failed to retrieve pathname for shader library chunk {:?}", chunk_info.id()))?;
 
         if !args.filter.is_empty() && !args.filter.iter().any(|f| shader_library_path.contains(f)) {
             continue;
         }
         verbose!(log, "Extracting Shader Library: {shader_library_path}");
         // TODO make configurable
-        let path = shader_library_path
-            .strip_prefix("../../../")
-            .with_context(|| format!("failed to strip mount prefix from {shader_library_path}"))?;
+        let path = shader_library_path.strip_prefix("../../../").with_context(|| format!("failed to strip mount prefix from {shader_library_path}"))?;
 
         let shader_asset_info_path = get_shader_asset_info_filename_from_library_filename(path)?;
-        let (shader_library_buffer, shader_asset_info_buffer) =
-            rebuild_shader_library_from_io_store(iostore, chunk_info.id(), log, compress_shaders)?;
+        let (shader_library_buffer, shader_asset_info_buffer) = rebuild_shader_library_from_io_store(iostore, chunk_info.id(), log, compress_shaders)?;
         file_writer.write_file(path.to_string(), false, shader_library_buffer)?;
-        file_writer.write_file(
-            shader_asset_info_path,
-            compress_shaders,
-            shader_asset_info_buffer,
-        )?;
+        file_writer.write_file(shader_asset_info_path, compress_shaders, shader_asset_info_buffer)?;
         libraries_extracted += 1;
     }
 
-    log!(
-        log,
-        "Extracted {} shader code libraries to {:?}",
-        libraries_extracted,
-        args.output
-    );
+    log!(log, "Extracted {} shader code libraries to {:?}", libraries_extracted, args.output);
 
     Ok(())
 }
@@ -957,37 +838,20 @@ fn action_to_legacy_shaders(
 fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
     let mount_point = UEPath::new("../../../");
 
-    let input: Box<dyn FileReaderTrait> = if args.input.is_dir() {
-        Box::new(FSFileReader::new(args.input))
-    } else {
-        Box::new(PakFileReader::new(args.input)?)
-    };
+    let input: Box<dyn FileReaderTrait> = if args.input.is_dir() { Box::new(FSFileReader::new(args.input)) } else { Box::new(PakFileReader::new(args.input)?) };
 
-    let container_header_version = config
-        .container_header_version_override
-        .unwrap_or(args.version.container_header_version());
+    let container_header_version = config.container_header_version_override.unwrap_or(args.version.container_header_version());
 
-    let toc_version = config
-        .toc_version_override
-        .unwrap_or(args.version.toc_version());
+    let toc_version = config.toc_version_override.unwrap_or(args.version.toc_version());
 
-    let mut writer = IoStoreWriter::new(
-        &args.output,
-        toc_version,
-        Some(container_header_version),
-        mount_point.into(),
-    )?;
+    let mut writer = IoStoreWriter::new(&args.output, toc_version, Some(container_header_version), mount_point.into())?;
 
     let log = Log::new(args.verbose, args.debug);
     let mut asset_paths = vec![];
     let mut shader_lib_paths = vec![];
 
     let check_path = |path: &UEPath| {
-        if args.filter.is_empty() {
-            true
-        } else {
-            args.filter.iter().any(|f| path.as_str().contains(f))
-        }
+        if args.filter.is_empty() { true } else { args.filter.iter().any(|f| path.as_str().contains(f)) }
     };
 
     let files = input.list_files()?;
@@ -1002,10 +866,7 @@ fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
             if files_set.contains(&uexp) {
                 asset_paths.push(path);
             } else {
-                log!(
-                    &log,
-                    "Skipping {path} because it does not have a split exports file. Are you sure the package is cooked?"
-                );
+                log!(&log, "Skipping {path} because it does not have a split exports file. Are you sure the package is cooked?");
             }
         }
         let is_shader_lib = Some("ushaderbytecode") == ext;
@@ -1020,33 +881,19 @@ fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
         log!(&log, "converting shader library {path}");
         let shader_library_buffer = input.read(path)?;
         let path = UEPath::new(&path);
-        let asset_metadata_filename = UEPathBuf::from(
-            get_shader_asset_info_filename_from_library_filename(path.file_name().unwrap())?,
-        );
-        let asset_metadata_path = path
-            .parent()
-            .map(|x| x.join(&asset_metadata_filename))
-            .unwrap_or(asset_metadata_filename);
+        let asset_metadata_filename = UEPathBuf::from(get_shader_asset_info_filename_from_library_filename(path.file_name().unwrap())?);
+        let asset_metadata_path = path.parent().map(|x| x.join(&asset_metadata_filename)).unwrap_or(asset_metadata_filename);
 
         // Read asset metadata and store it into the global map to be picked up by zen packages later
         if let Some(shader_asset_info_buffer) = input.read_opt(&asset_metadata_path)? {
-            shader_library::read_shader_asset_info(
-                &shader_asset_info_buffer,
-                &mut package_name_to_referenced_shader_maps,
-            )?;
+            shader_library::read_shader_asset_info(&shader_asset_info_buffer, &mut package_name_to_referenced_shader_maps)?;
         }
 
         // Convert shader library to the container shader chunks
-        shader_library::write_io_store_library(
-            &mut writer,
-            &shader_library_buffer,
-            &mount_point.join(path),
-            &log,
-        )?;
+        shader_library::write_io_store_library(&mut writer, &shader_library_buffer, &mount_point.join(path), &log)?;
     }
 
-    let progress =
-        Some(indicatif::ProgressBar::new(asset_paths.len() as u64).with_style(progress_style()));
+    let progress = Some(indicatif::ProgressBar::new(asset_paths.len() as u64).with_style(progress_style()));
     log.set_progress(progress.as_ref());
     let prog_ref = progress.as_ref();
 
@@ -1071,14 +918,7 @@ fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
                 memory_mapped_bulk_data_buffer: input.read_opt(&path.with_extension("m.ubulk"))?,
             };
 
-            let converted = zen_asset_conversion::build_zen_asset(
-                bundle,
-                &package_name_to_referenced_shader_maps,
-                &mount_point.join(path),
-                Some(args.version.package_file_version()),
-                container_header_version,
-                needs_asset_import_fixup,
-            )?;
+            let converted = zen_asset_conversion::build_zen_asset(bundle, &package_name_to_referenced_shader_maps, &mount_point.join(path), Some(args.version.package_file_version()), container_header_version, needs_asset_import_fixup)?;
 
             tx.send(converted)?;
 
@@ -1086,11 +926,7 @@ fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
             Ok(())
         };
 
-        if args.no_parallel {
-            asset_paths.iter().try_for_each(process)
-        } else {
-            asset_paths.par_iter().try_for_each(process)
-        }
+        if args.no_parallel { asset_paths.iter().try_for_each(process) } else { asset_paths.par_iter().try_for_each(process) }
     };
     let mut result = None;
     let result_ref = &mut result;
@@ -1102,8 +938,7 @@ fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
         });
 
         if needs_asset_import_fixup {
-            let mut converted_lookup: HashMap<FPackageId, Arc<RwLock<ConvertedZenAssetBundle>>> =
-                HashMap::new();
+            let mut converted_lookup: HashMap<FPackageId, Arc<RwLock<ConvertedZenAssetBundle>>> = HashMap::new();
             let mut all_converted: Vec<Arc<RwLock<ConvertedZenAssetBundle>>> = Vec::new();
             let mut total_package_data_size: usize = 0;
 
@@ -1115,26 +950,16 @@ fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
 
                 // Add the package data and the metadata necessary for the import fixup into the list
                 let converted_arc = Arc::new(RwLock::new(converted));
-                converted_lookup.insert(
-                    converted_arc.read().unwrap().package_id,
-                    converted_arc.clone(),
-                );
+                converted_lookup.insert(converted_arc.read().unwrap().package_id, converted_arc.clone());
                 all_converted.push(converted_arc);
             }
 
-            log!(
-                log,
-                "Applying import fix-ups to the converted assets. Package data in memory: {}MB",
-                total_package_data_size / 1024 / 1024
-            );
+            log!(log, "Applying import fix-ups to the converted assets. Package data in memory: {}MB", total_package_data_size / 1024 / 1024);
             prog_ref.inspect(|x| x.set_position(0));
 
             // Process fixups on all the assets in their original processing order
             for converted in &all_converted {
-                converted
-                    .write()
-                    .unwrap()
-                    .fixup_legacy_external_arcs(&converted_lookup, &log)?;
+                converted.write().unwrap().fixup_legacy_external_arcs(&converted_lookup, &log)?;
                 prog_ref.inspect(|x| x.inc(1));
             }
             log!(log, "Writing converted assets");
@@ -1163,14 +988,7 @@ fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
     // create empty pak file if one does not already exist (necessary for game to detect and load container)
     let pak_path = Path::new(&args.output).with_extension("pak");
     if !pak_path.exists() {
-        repak::PakBuilder::new()
-            .writer(
-                &mut BufWriter::new(fs::File::create(pak_path)?),
-                repak::Version::V11,
-                mount_point.to_string(),
-                None,
-            )
-            .write_index()?;
+        repak::PakBuilder::new().writer(&mut BufWriter::new(fs::File::create(pak_path)?), repak::Version::V11, mount_point.to_string(), None).write_index()?;
     }
 
     Ok(())
@@ -1181,11 +999,7 @@ fn action_get(args: ActionGet, config: Arc<Config>) -> Result<()> {
     let data = iostore.read_raw(args.chunk_id)?;
 
     let mut output: Box<dyn Write> = if let Some(output) = args.output {
-        if output == OsStr::new("-") {
-            Box::new(std::io::stdout())
-        } else {
-            Box::new(BufWriter::new(fs::File::create(output)?))
-        }
+        if output == OsStr::new("-") { Box::new(std::io::stdout()) } else { Box::new(BufWriter::new(fs::File::create(output)?)) }
     } else {
         Box::new(std::io::stdout())
     };
@@ -1198,9 +1012,7 @@ fn action_dump_test(args: ActionDumpTest, config: Arc<Config>) -> Result<()> {
     let iostore = iostore::open(args.input, config)?;
 
     let chunk_id = FIoChunkId::from_package_id(args.package_id, 0, EIoChunkType::ExportBundleData);
-    let game_path = iostore
-        .chunk_path(chunk_id)
-        .context("no path found for package")?;
+    let game_path = iostore.chunk_path(chunk_id).context("no path found for package")?;
     let name = UEPath::new(&game_path).file_name().unwrap();
     let path = args.output_dir.join(name);
     let data = iostore.read(chunk_id)?;
@@ -1215,22 +1027,12 @@ fn action_dump_test(args: ActionDumpTest, config: Arc<Config>) -> Result<()> {
         store_entry: Some(store_entry),
     };
 
-    fs::write(
-        path.with_extension("metadata.json"),
-        serde_json::to_vec_pretty(&metadata)?,
-    )?;
+    fs::write(path.with_extension("metadata.json"), serde_json::to_vec_pretty(&metadata)?)?;
 
     {
-        let mut stream =
-            ser_hex::TraceStream::new(path.with_extension("trace.json"), Cursor::new(data));
+        let mut stream = ser_hex::TraceStream::new(path.with_extension("trace.json"), Cursor::new(data));
 
-        let header = zen::FZenPackageHeader::deserialize(
-            &mut stream,
-            metadata.store_entry,
-            metadata.toc_version,
-            metadata.container_header_version,
-            metadata.package_file_version,
-        )?;
+        let header = zen::FZenPackageHeader::deserialize(&mut stream, metadata.store_entry, metadata.toc_version, metadata.container_header_version, metadata.package_file_version)?;
 
         fs::write(path.with_extension("header.txt"), format!("{header:#?}"))?;
     }
@@ -1247,8 +1049,7 @@ fn action_dump_test(args: ActionDumpTest, config: Arc<Config>) -> Result<()> {
         fs::write(path.with_extension("uptnl"), data)?;
     }
 
-    let chunk_id =
-        FIoChunkId::from_package_id(args.package_id, 0, EIoChunkType::MemoryMappedBulkData);
+    let chunk_id = FIoChunkId::from_package_id(args.package_id, 0, EIoChunkType::MemoryMappedBulkData);
     if iostore.has_chunk_id(chunk_id) {
         let data = iostore.read(chunk_id)?;
         fs::write(path.with_extension("m.ubulk"), data)?;
@@ -1291,12 +1092,7 @@ impl std::str::FromStr for AesKey {
         hex::decode(s.strip_prefix("0x").unwrap_or(s))
             .ok()
             .and_then(try_parse)
-            .or_else(|| {
-                general_purpose::STANDARD_NO_PAD
-                    .decode(s.trim_end_matches('='))
-                    .ok()
-                    .and_then(try_parse)
-            })
+            .or_else(|| general_purpose::STANDARD_NO_PAD.decode(s.trim_end_matches('=')).ok().and_then(try_parse))
             .context("invalid AES key")
     }
 }
@@ -1368,24 +1164,16 @@ impl Writeable for FIoStoreTocHeader {
 
 #[instrument(skip_all)]
 fn read_chunk_ids<R: Read>(stream: &mut R, header: &FIoStoreTocHeader) -> Result<Vec<FIoChunkId>> {
-    read_array(header.toc_entry_count as usize, stream, |s| {
-        s.de_ctx(header.version)
-    })
+    read_array(header.toc_entry_count as usize, stream, |s| s.de_ctx(header.version))
 }
 
 #[instrument(skip_all)]
-fn read_chunk_offsets<R: Read>(
-    stream: &mut R,
-    header: &FIoStoreTocHeader,
-) -> Result<Vec<FIoOffsetAndLength>> {
+fn read_chunk_offsets<R: Read>(stream: &mut R, header: &FIoStoreTocHeader) -> Result<Vec<FIoOffsetAndLength>> {
     stream.de_ctx(header.toc_entry_count as usize)
 }
 
 #[instrument(skip_all)]
-fn read_hash_map<R: Read>(
-    stream: &mut R,
-    header: &FIoStoreTocHeader,
-) -> Result<(Vec<i32>, Vec<i32>)> {
+fn read_hash_map<R: Read>(stream: &mut R, header: &FIoStoreTocHeader) -> Result<(Vec<i32>, Vec<i32>)> {
     let mut perfect_hash_seeds_count = 0;
     let mut chunks_without_perfect_hash_count = 0;
 
@@ -1397,36 +1185,22 @@ fn read_hash_map<R: Read>(
         chunks_without_perfect_hash_count = 0;
     }
     let chunk_perfect_hash_seeds = stream.de_ctx(perfect_hash_seeds_count as usize)?;
-    let chunk_indices_without_perfect_hash =
-        stream.de_ctx(chunks_without_perfect_hash_count as usize)?;
+    let chunk_indices_without_perfect_hash = stream.de_ctx(chunks_without_perfect_hash_count as usize)?;
 
     Ok((chunk_perfect_hash_seeds, chunk_indices_without_perfect_hash))
 }
 
 #[instrument(skip_all)]
-fn read_compression_blocks<R: Read>(
-    stream: &mut R,
-    header: &FIoStoreTocHeader,
-) -> Result<Vec<FIoStoreTocCompressedBlockEntry>> {
+fn read_compression_blocks<R: Read>(stream: &mut R, header: &FIoStoreTocHeader) -> Result<Vec<FIoStoreTocCompressedBlockEntry>> {
     stream.de_ctx(header.toc_compressed_block_entry_count as usize)
 }
 
 #[instrument(skip_all)]
-fn read_compression_methods<R: Read>(
-    stream: &mut R,
-    header: &FIoStoreTocHeader,
-) -> Result<Vec<CompressionMethod>> {
+fn read_compression_methods<R: Read>(stream: &mut R, header: &FIoStoreTocHeader) -> Result<Vec<CompressionMethod>> {
     let mut methods = vec![];
     for _ in 0..header.compression_method_name_count {
-        let name = String::from_utf8(
-            stream
-                .de_ctx::<Vec<u8>, _>(header.compression_method_name_length as usize)?
-                .into_iter()
-                .take_while(|&b| b != 0)
-                .collect(),
-        )?;
-        let method = CompressionMethod::from_str_ignore_case(&name)
-            .with_context(|| format!("unknown compression method: {name:?}"))?;
+        let name = String::from_utf8(stream.de_ctx::<Vec<u8>, _>(header.compression_method_name_length as usize)?.into_iter().take_while(|&b| b != 0).collect())?;
+        let method = CompressionMethod::from_str_ignore_case(&name).with_context(|| format!("unknown compression method: {name:?}"))?;
         methods.push(method);
     }
     Ok(methods)
@@ -1434,32 +1208,21 @@ fn read_compression_methods<R: Read>(
 #[instrument(skip_all)]
 fn write_compression_methods<S: Write>(s: &mut S, toc: &Toc) -> Result<()> {
     for name in &toc.compression_methods {
-        let buffer: Vec<u8> = name
-            .as_ref()
-            .as_bytes()
-            .iter()
-            .copied()
-            .chain(std::iter::repeat(0))
-            .take(32)
-            .collect();
+        let buffer: Vec<u8> = name.as_ref().as_bytes().iter().copied().chain(std::iter::repeat(0)).take(32).collect();
         s.ser_no_length(&buffer)?;
     }
     Ok(())
 }
 
 #[instrument(skip_all)]
-fn read_chunk_block_signatures<R: Read>(
-    stream: &mut R,
-    header: &FIoStoreTocHeader,
-) -> Result<Option<TocSignatures>> {
+fn read_chunk_block_signatures<R: Read>(stream: &mut R, header: &FIoStoreTocHeader) -> Result<Option<TocSignatures>> {
     let is_signed = header.container_flags.contains(EIoContainerFlags::Signed);
     Ok(if is_signed {
         let size = stream.de::<u32>()? as usize;
         Some(TocSignatures {
             toc_signature: stream.de_ctx(size)?,
             block_signature: stream.de_ctx(size)?,
-            chunk_block_signatures: stream
-                .de_ctx(header.toc_compressed_block_entry_count as usize)?,
+            chunk_block_signatures: stream.de_ctx(header.toc_compressed_block_entry_count as usize)?,
         })
     } else {
         None
@@ -1467,23 +1230,13 @@ fn read_chunk_block_signatures<R: Read>(
 }
 
 #[instrument(skip_all)]
-fn read_directory_index<R: Read>(
-    stream: &mut R,
-    header: &FIoStoreTocHeader,
-    config: &Config,
-) -> Result<Vec<u8>> {
+fn read_directory_index<R: Read>(stream: &mut R, header: &FIoStoreTocHeader, config: &Config) -> Result<Vec<u8>> {
     let mut buf: Vec<u8> = stream.de_ctx(header.directory_index_size as usize)?;
 
-    if header
-        .container_flags
-        .contains(EIoContainerFlags::Encrypted)
-    {
+    if header.container_flags.contains(EIoContainerFlags::Encrypted) {
         use aes::cipher::BlockDecrypt;
 
-        let key = config
-            .aes_keys
-            .get(&header.encryption_key_guid)
-            .context("missing encryption key")?;
+        let key = config.aes_keys.get(&header.encryption_key_guid).context("missing encryption key")?;
         for block in buf.chunks_mut(16) {
             key.0.decrypt_block(block.into());
         }
@@ -1530,10 +1283,7 @@ type UEPathBuf = typed_path::Utf8UnixPathBuf;
 type UEPathComponent<'a> = typed_path::Utf8UnixComponent<'a>;
 
 fn to_ue_path(path: &Path) -> UEPathBuf {
-    let native_path = typed_path::Utf8NativePath::from_bytes_path(typed_path::NativePath::new(
-        path.as_os_str().as_encoded_bytes(),
-    ))
-    .expect("Path did not contain valid UTF-8 characters");
+    let native_path = typed_path::Utf8NativePath::from_bytes_path(typed_path::NativePath::new(path.as_os_str().as_encoded_bytes())).expect("Path did not contain valid UTF-8 characters");
     native_path.with_encoding()
 }
 
@@ -1583,8 +1333,7 @@ impl ReadableCtx<Arc<Config>> for Toc {
 
         let chunk_ids = read_chunk_ids(stream, &header)?;
         let chunk_offset_lengths = read_chunk_offsets(stream, &header)?;
-        let (chunk_perfect_hash_seeds, chunk_indices_without_perfect_hash) =
-            read_hash_map(stream, &header)?;
+        let (chunk_perfect_hash_seeds, chunk_indices_without_perfect_hash) = read_hash_map(stream, &header)?;
         let compression_blocks = read_compression_blocks(stream, &header)?;
         let compression_methods = read_compression_methods(stream, &header)?;
 
@@ -1601,22 +1350,14 @@ impl ReadableCtx<Arc<Config>> for Toc {
         let mut file_map: HashMap<String, u32> = Default::default();
         let mut file_map_lower: HashMap<String, u32> = Default::default();
         let mut file_map_rev: HashMap<u32, String> = Default::default();
-        let directory_index = if !directory_index.is_empty() {
-            FIoDirectoryIndexResource::de(&mut Cursor::new(directory_index))?
-        } else {
-            FIoDirectoryIndexResource::default()
-        };
+        let directory_index = if !directory_index.is_empty() { FIoDirectoryIndexResource::de(&mut Cursor::new(directory_index))? } else { FIoDirectoryIndexResource::default() };
         directory_index.iter_root(|user_data, path| {
             let path = path.join("/");
             file_map_lower.insert(path.to_ascii_lowercase(), user_data);
             file_map.insert(path.clone(), user_data);
             file_map_rev.insert(user_data, path);
         });
-        let chunk_id_map = chunk_ids
-            .iter()
-            .enumerate()
-            .map(|(i, &chunk_id)| (chunk_id, i as u32))
-            .collect();
+        let chunk_id_map = chunk_ids.iter().enumerate().map(|(i, &chunk_id)| (chunk_id, i as u32)).collect();
 
         Ok(Toc {
             config,
@@ -1652,8 +1393,7 @@ impl Writeable for Toc {
 
         container_flags |= EIoContainerFlags::Indexed;
         let mut directory_index_buffer = vec![];
-        self.directory_index
-            .ser(&mut Cursor::new(&mut directory_index_buffer))?;
+        self.directory_index.ser(&mut Cursor::new(&mut directory_index_buffer))?;
         // TODO encrypt directory index
 
         let header = FIoStoreTocHeader {
@@ -1664,8 +1404,7 @@ impl Writeable for Toc {
             toc_header_size: std::mem::size_of::<FIoStoreTocHeader>() as u32,
             toc_entry_count: self.chunks.len() as u32,
             toc_compressed_block_entry_count: self.compression_blocks.len() as u32,
-            toc_compressed_block_entry_size: std::mem::size_of::<FIoStoreTocCompressedBlockEntry>()
-                as u32,
+            toc_compressed_block_entry_size: std::mem::size_of::<FIoStoreTocCompressedBlockEntry>() as u32,
             compression_method_name_count: self.compression_methods.len() as u32,
             compression_method_name_length: 32,
             compression_block_size: self.compression_block_size,
@@ -1729,11 +1468,7 @@ impl Toc {
         self.chunk_id_map
             .get(&chunk_id.with_version(self.version))
             .and_then(|index| self.file_map_rev.get(index))
-            .map(|path| {
-                UEPath::new(&self.directory_index.mount_point)
-                    .join(path)
-                    .to_string()
-            })
+            .map(|path| UEPath::new(&self.directory_index.mount_point).join(path).to_string())
     }
     //fn get_chunk_info(&self, toc_entry_index: u32) {
     fn get_chunk_info(&self, file_name: &str) -> FIoStoreTocChunkInfo {
@@ -1750,8 +1485,7 @@ impl Toc {
 
         let compression_block_size = self.compression_block_size;
         let first_block_index = (offset / compression_block_size as u64) as usize;
-        let last_block_index = ((align_u64(offset + size, compression_block_size as u64) - 1)
-            / compression_block_size as u64) as usize;
+        let last_block_index = ((align_u64(offset + size, compression_block_size as u64) - 1) / compression_block_size as u64) as usize;
 
         let num_compressed_blocks = (1 + last_block_index - first_block_index) as u32;
         let offset_on_disk = self.compression_blocks[first_block_index].get_offset();
@@ -1786,10 +1520,7 @@ impl Toc {
         }
     }
     fn get_chunk_id_entry_index(&self, chunk_id: FIoChunkId) -> Result<u32> {
-        self.chunk_id_map
-            .get(&chunk_id)
-            .copied()
-            .with_context(|| "container does not contain entry for {chunk_id}")
+        self.chunk_id_map.get(&chunk_id).copied().with_context(|| "container does not contain entry for {chunk_id}")
     }
     fn read<C: Read + Seek>(&self, cas_stream: &mut C, toc_entry_index: u32) -> Result<Vec<u8>> {
         let offset_and_length = &self.chunk_offset_lengths[toc_entry_index as usize];
@@ -1798,22 +1529,11 @@ impl Toc {
 
         let compression_block_size = self.compression_block_size;
         let first_block_index = (offset / compression_block_size as u64) as usize;
-        let last_block_index = ((align_u64(offset + size, compression_block_size as u64) - 1)
-            / compression_block_size as u64) as usize;
+        let last_block_index = ((align_u64(offset + size, compression_block_size as u64) - 1) / compression_block_size as u64) as usize;
 
         let blocks = &self.compression_blocks[first_block_index..=last_block_index];
         let aes_key = if self.container_flags.contains(EIoContainerFlags::Encrypted) {
-            Some(
-                self.config
-                    .aes_keys
-                    .get(&self.encryption_key_guid)
-                    .with_context(|| {
-                        format!(
-                            "container is encrypted but no AES key for {:?} supplied",
-                            self.encryption_key_guid
-                        )
-                    })?,
-            )
+            Some(self.config.aes_keys.get(&self.encryption_key_guid).with_context(|| format!("container is encrypted but no AES key for {:?} supplied", self.encryption_key_guid))?)
         } else {
             None
         };
@@ -1837,11 +1557,7 @@ impl Toc {
             cas_stream.seek(SeekFrom::Start(block.get_offset()))?;
 
             let compression_method_index = block.get_compression_method_index() as usize;
-            let compression_method = if compression_method_index == 0 {
-                None
-            } else {
-                Some(self.compression_methods[compression_method_index - 1])
-            };
+            let compression_method = if compression_method_index == 0 { None } else { Some(self.compression_methods[compression_method_index - 1]) };
             match compression_method {
                 None => {
                     if let Some(key) = aes_key {
@@ -1879,9 +1595,7 @@ impl Toc {
     }
 }
 
-#[derive(
-    Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
-)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 struct FPackageId(u64);
 impl Readable for FPackageId {
     fn de<S: Read>(s: &mut S) -> Result<Self> {
@@ -1912,11 +1626,7 @@ impl FromStr for FPackageId {
 }
 
 fn lower_utf16_cityhash(s: &str) -> u64 {
-    let bytes = s
-        .to_ascii_lowercase()
-        .encode_utf16()
-        .flat_map(u16::to_le_bytes)
-        .collect::<Vec<u8>>();
+    let bytes = s.to_ascii_lowercase().encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>();
     cityhasher::hash(bytes)
 }
 
@@ -1942,9 +1652,7 @@ mod chunk_id {
     }
     impl std::fmt::Debug for FIoChunkIdRaw {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.debug_struct("FIoChunkIdRaw")
-                .field("chunk_id", &hex::encode(self.id))
-                .finish()
+            f.debug_struct("FIoChunkIdRaw").field("chunk_id", &hex::encode(self.id)).finish()
         }
     }
     impl Readable for FIoChunkIdRaw {
@@ -1961,10 +1669,7 @@ mod chunk_id {
         type Err = anyhow::Error;
 
         fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-            let id = hex::decode(s)
-                .ok()
-                .and_then(|bytes| bytes.try_into().ok())
-                .context("expected 12 byte hex string")?;
+            let id = hex::decode(s).ok().and_then(|bytes| bytes.try_into().ok()).context("expected 12 byte hex string")?;
             Ok(FIoChunkIdRaw { id })
         }
     }
@@ -1977,9 +1682,7 @@ mod chunk_id {
         type Error = Vec<u8>;
 
         fn try_from(value: Vec<u8>) -> std::result::Result<Self, Self::Error> {
-            Ok(Self {
-                id: value.try_into()?,
-            })
+            Ok(Self { id: value.try_into()? })
         }
     }
 
@@ -2024,10 +1727,7 @@ mod chunk_id {
                 // version info unknown so raw byte value unknown
                 write!(&mut buf, "??").unwrap();
             }
-            f.debug_struct("FIoChunkId")
-                .field("chunk_id", &buf)
-                .field("chunk_type", &self.get_chunk_type())
-                .finish()
+            f.debug_struct("FIoChunkId").field("chunk_id", &buf).field("chunk_type", &self.get_chunk_type()).finish()
         }
     }
     impl ReadableCtx<EIoStoreTocVersion> for FIoChunkId {
@@ -2064,11 +1764,7 @@ mod chunk_id {
             id[11] = chunk_type as u8;
             Self { id }
         }
-        pub(crate) fn from_package_id(
-            package_id: FPackageId,
-            chunk_index: u16,
-            chunk_type: EIoChunkType,
-        ) -> Self {
+        pub(crate) fn from_package_id(package_id: FPackageId, chunk_index: u16, chunk_type: EIoChunkType) -> Self {
             Self::create(package_id.0, chunk_index, chunk_type)
         }
         pub(crate) fn create_shader_code_chunk_id(shader_hash: &FSHAHash) -> Self {
@@ -2077,10 +1773,7 @@ mod chunk_id {
             id[11] = EIoChunkType::ShaderCode as u8;
             Self { id }
         }
-        pub(crate) fn create_shader_library_chunk_id(
-            shader_library_name: &str,
-            shader_format_name: &str,
-        ) -> Self {
+        pub(crate) fn create_shader_library_chunk_id(shader_library_name: &str, shader_format_name: &str) -> Self {
             let name = format!("{shader_library_name}-{shader_format_name}");
             let hash = lower_utf16_cityhash(&name);
             Self::create(hash, 0, EIoChunkType::ShaderCodeLibrary)
@@ -2171,10 +1864,7 @@ impl std::fmt::Debug for FIoStoreTocCompressedBlockEntry {
             .field("offset", &self.get_offset())
             .field("compressed_size", &self.get_compressed_size())
             .field("uncompressed_size", &self.get_uncompressed_size())
-            .field(
-                "compression_method_index",
-                &self.get_compression_method_index(),
-            )
+            .field("compression_method_index", &self.get_compression_method_index())
             .finish()
     }
 }
@@ -2189,12 +1879,7 @@ impl Writeable for FIoStoreTocCompressedBlockEntry {
     }
 }
 impl FIoStoreTocCompressedBlockEntry {
-    pub(crate) fn new(
-        offset: u64,
-        compressed_size: u32,
-        uncompressed_size: u32,
-        compression_method_index: u8,
-    ) -> Self {
+    pub(crate) fn new(offset: u64, compressed_size: u32, uncompressed_size: u32, compression_method_index: u8) -> Self {
         let mut new = Self::default();
         new.set_offset(offset);
         new.set_compressed_size(compressed_size);
@@ -2264,10 +1949,7 @@ struct FIoStoreTocEntryMeta {
 }
 impl Readable for FIoStoreTocEntryMeta {
     fn de<S: Read>(stream: &mut S) -> Result<Self> {
-        Ok(Self {
-            chunk_hash: stream.de()?,
-            flags: stream.de()?,
-        })
+        Ok(Self { chunk_hash: stream.de()?, flags: stream.de()? })
     }
 }
 impl Writeable for FIoStoreTocEntryMeta {
@@ -2361,20 +2043,7 @@ impl Writeable for FIoStoreTocEntryMetaFlags {
     }
 }
 
-#[derive(
-    Debug,
-    Default,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    FromRepr,
-    clap::ValueEnum,
-    Serialize,
-    Deserialize,
-)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, FromRepr, clap::ValueEnum, Serialize, Deserialize)]
 #[repr(u8)]
 #[clap(rename_all = "verbatim")]
 enum EIoStoreTocVersion {
@@ -2557,9 +2226,7 @@ impl EIoChunkType {
 
 use crate::asset_conversion::FZenPackageContext;
 use crate::container_header::EIoContainerHeaderVersion;
-use crate::shader_library::{
-    get_shader_asset_info_filename_from_library_filename, rebuild_shader_library_from_io_store,
-};
+use crate::shader_library::{get_shader_asset_info_filename_from_library_filename, rebuild_shader_library_from_io_store};
 use crate::zen::FPackageFileVersion;
 use directory_index::*;
 use zen::get_package_name;
@@ -2706,15 +2373,10 @@ mod directory_index {
             id
         }
         fn get_or_create_name(&mut self, name: &str) -> IdName {
-            IdName(
-                self.string_table
-                    .iter()
-                    .position(|n| n == name)
-                    .unwrap_or_else(|| {
-                        self.string_table.push(name.to_string());
-                        self.string_table.len() - 1
-                    }) as u32,
-            )
+            IdName(self.string_table.iter().position(|n| n == name).unwrap_or_else(|| {
+                self.string_table.push(name.to_string());
+                self.string_table.len() - 1
+            }) as u32)
         }
         pub fn add_file(&mut self, path: &UEPath, user_data: u32) {
             let mut components = path.components();
@@ -2830,12 +2492,7 @@ mod directory_index {
                 string_table: Default::default(),
             };
 
-            let entries = HashMap::from([
-                ("this/b/test2.txt".to_string(), 1),
-                ("this/is/a/test1.txt".to_string(), 2),
-                ("this/test2.txt".to_string(), 3),
-                ("this/is/a/test2.txt".to_string(), 4),
-            ]);
+            let entries = HashMap::from([("this/b/test2.txt".to_string(), 1), ("this/is/a/test1.txt".to_string(), 2), ("this/test2.txt".to_string(), 3), ("this/is/a/test2.txt".to_string(), 4)]);
 
             for (path, data) in &entries {
                 index.add_file(UEPath::new(path), *data);

@@ -32,11 +32,7 @@ pub(crate) struct Log {
 }
 impl Log {
     pub(crate) fn new(verbose: bool, debug: bool) -> Self {
-        Self {
-            verbose,
-            debug,
-            progress: Default::default(),
-        }
+        Self { verbose, debug, progress: Default::default() }
     }
     pub(crate) fn set_progress(&self, progress: Option<&indicatif::ProgressBar>) {
         *self.progress.lock().unwrap() = progress.cloned();
