@@ -1121,6 +1121,8 @@ mod test {
 
         run_test("tests/UE5.5/SM_Cube.uasset", "tests/UE5.5/SM_Cube.uexp", "tests/UE5.5/SM_Cube.uzenasset")?;
 
+        run_test("tests/UE5.5/BP_ThirdPersonCharacter.uasset", "tests/UE5.5/BP_ThirdPersonCharacter.uexp", "tests/UE5.5/BP_ThirdPersonCharacter.uzenasset")?;
+
         Ok(())
     }
 
