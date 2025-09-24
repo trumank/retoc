@@ -1070,6 +1070,10 @@ mod test {
 
         run_test("tests/UE5.4/Randy.uasset", "tests/UE5.4/Randy.uexp", "tests/UE5.4/Randy.uzenasset")?;
 
+        run_test("tests/UE5.5/T_Test.uasset", "tests/UE5.5/T_Test.uexp", "tests/UE5.5/T_Test.uzenasset")?;
+
+        run_test("tests/UE5.5/SM_Cube.uasset", "tests/UE5.5/SM_Cube.uexp", "tests/UE5.5/SM_Cube.uzenasset")?;
+
         Ok(())
     }
 
