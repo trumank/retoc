@@ -670,9 +670,9 @@ impl Readable for FZenPackageImportedPackageNamesContainer {
         let mut imported_package_names: Vec<String> = read_name_batch(s)?;
 
         let imported_package_name_numbers: Vec<i32> = s.de_ctx(imported_package_names.len())?;
-        for (index, item) in imported_package_names.iter_mut().enumerate() {
-            if imported_package_name_numbers[index] != 0 {
-                *item = format!("{item}_{}", imported_package_name_numbers[index] - 1)
+        for (name, number) in imported_package_names.iter_mut().zip(imported_package_name_numbers) {
+            if number != 0 {
+                *name = format!("{name}_{}", number - 1)
             }
         }
         Ok(Self { imported_package_names })
