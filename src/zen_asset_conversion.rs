@@ -492,7 +492,7 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
                     let imported_package_index = *mut_builder.package_import_lookup.get(&imported_package_id).unwrap() as usize;
 
                     // Legacy UE4 graph data will only map the export bundle index in this package to export bundle index in the imported package
-                    // This requires knowledge of the export bundle layout of another package, which we do not have if fix-up is not possible. So just use -1 as a placeholder
+                    // This requires knowledge of the export bundle layout of another package, which we do not have if fix-up is not possible.
                     // If we are intending to fix up the serialized data later though, write a placeholder value and emit the information necessary for the fixup
                     let from_export_bundle_index: i32 = if mut_builder.fixup_legacy_external_arcs {
                         let current_fixup_id = mut_builder.legacy_external_arc_counter;
@@ -510,7 +510,8 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
                         mut_builder.legacy_external_arc_counter += 1;
                         current_fixup_id
                     } else {
-                        -1
+                        // Assume the first index because there is only one export bundle because export bundles are per package and there is only ever one package per asset.
+                        0
                     };
 
                     // Prevent adding duplicate dependencies on the packages
