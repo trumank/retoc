@@ -526,7 +526,9 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
 
     // Pre-initialize external package dependencies with the number of imported package IDs
     builder.zen_package.external_package_dependencies.reserve(builder.zen_package.imported_packages.len());
-    for imported_package_id in &builder.zen_package.imported_packages {
+    let mut sorted_imported_packages = builder.zen_package.imported_packages.clone();
+    sorted_imported_packages.sort_by_key(|package_id| package_id.0);
+    for imported_package_id in &sorted_imported_packages {
         builder.zen_package.external_package_dependencies.push(ExternalPackageDependency {
             from_package_id: *imported_package_id,
             external_dependency_arcs: Vec::new(),
