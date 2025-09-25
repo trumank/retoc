@@ -1248,8 +1248,10 @@ mod test {
         assert_eq!(original_zen_asset_package.export_map, converted_zen_asset_package.export_map);
         assert_eq!(original_zen_asset_package.dependency_bundle_headers, converted_zen_asset_package.dependency_bundle_headers);
         assert_eq!(original_zen_asset_package.dependency_bundle_entries, converted_zen_asset_package.dependency_bundle_entries);
+        assert_eq!(original_zen_asset_package.export_bundle_headers, converted_zen_asset_package.export_bundle_headers);
         assert_eq!(original_zen_asset_package.export_bundle_entries, converted_zen_asset_package.export_bundle_entries);
         assert_eq!(original_zen_asset_package.summary, converted_zen_asset_package.summary);
+        assert_eq!(original_zen_asset_package.external_package_dependencies, converted_zen_asset_package.external_package_dependencies);
 
         // Make sure export blob is identical after the header size. Offsets in export map are relative to the end of the header so if they are correct and this data is correct exports are correct
         assert_eq!(original_zen_asset[(original_zen_asset_package.summary.header_size as usize)..], asset_exports_buffer, "Uexp file and the original zen asset exports do not match");
