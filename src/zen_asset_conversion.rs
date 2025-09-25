@@ -321,8 +321,11 @@ fn build_zen_export_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
         let total_header_size = builder.legacy_package.summary.total_header_size as u64;
         let object_name = builder.legacy_package.name_map.get(object_export.object_name).to_string();
 
-        // Zen cooked serial offset does not include header size, but legacy asset one does
-        let cooked_serial_offset = object_export.serial_offset as u64 - total_header_size;
+        let mut cooked_serial_offset = object_export.serial_offset as u64;
+        if builder.container_header_version > EIoContainerHeaderVersion::Initial {
+            // Zen cooked serial offset does not include header size, but legacy asset one does
+            cooked_serial_offset -= total_header_size;
+        }
         let mapped_object_name = builder.zen_package.name_map.store(&object_name);
 
         let outer_index = remap_package_index_reference(builder, object_export.outer_index);
