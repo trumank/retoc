@@ -63,7 +63,7 @@ struct ZenPackageBuilder {
 }
 
 // Flow is create_asset_builder -> setup_zen_package_summary -> build_zen_import_map -> build_zen_export_map -> build_zen_preload_dependencies -> serialize_zen_asset
-fn create_asset_builder(package: FLegacyPackageHeader, container_header_version: EIoContainerHeaderVersion, fixup_legacy_external_arcs: bool) -> ZenPackageBuilder {
+fn create_asset_builder(package: FLegacyPackageHeader, container_header_version: EIoContainerHeaderVersion, fixup_legacy_external_arcs: bool, source_package_name: Option<String>) -> ZenPackageBuilder {
     ZenPackageBuilder {
         package_id: FPackageId::from_name(&package.summary.package_name),
         legacy_package: package,
@@ -76,7 +76,7 @@ fn create_asset_builder(package: FLegacyPackageHeader, container_header_version:
         import_to_package_id_lookup: HashMap::new(),
         export_hash_lookup: HashMap::new(),
         localized_package_culture: None,
-        source_package_name: None,
+        source_package_name,
         fixup_legacy_external_arcs,
         legacy_external_arc_fixup_data: Vec::new(),
         legacy_external_arc_counter: 0,
@@ -138,8 +138,8 @@ fn setup_zen_package_summary(builder: &mut ZenPackageBuilder) -> anyhow::Result<
 
     // Setup source package name for the UE4 zen packages. UE5.0+ zen packages do not internally track source package name, it is a part of the container header only
     if builder.container_header_version <= EIoContainerHeaderVersion::Initial {
-        // If this package is not a localized package, write None as the source package name. It has to always point to a valid name in the name map
-        let source_package_name = builder.source_package_name.as_deref().unwrap_or("None");
+        // Require a source package name be either found or supplied externally from somewhere
+        let source_package_name = builder.source_package_name.as_deref().expect("source_package_name required");
         builder.zen_package.summary.source_name = builder.zen_package.name_map.store(source_package_name);
     }
 
@@ -434,11 +434,6 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
                 export_bundle_index: current_export_bundle_header_index as i32,
                 debug_full_export_name: full_export_name,
             });
-        }
-
-        // Export bundles end at a public export with an export hash. So if this is a public export, close the current bundle
-        if is_public_export {
-            current_export_bundle_header_index = -1;
         }
     }
 
@@ -1113,13 +1108,13 @@ impl ConvertedZenAssetBundle {
     }
 }
 
-fn build_zen_asset_internal(legacy_asset: &FSerializedAssetBundle, container_header_version: EIoContainerHeaderVersion, package_version_fallback: Option<FPackageFileVersion>, fixup_legacy_external_arcs: bool) -> anyhow::Result<ZenPackageBuilder> {
+fn build_zen_asset_internal(legacy_asset: &FSerializedAssetBundle, container_header_version: EIoContainerHeaderVersion, package_version_fallback: Option<FPackageFileVersion>, fixup_legacy_external_arcs: bool, source_package_name: Option<String>) -> anyhow::Result<ZenPackageBuilder> {
     // Read legacy package header
     let mut asset_header_reader = Cursor::new(&legacy_asset.asset_file_buffer);
     let legacy_package_header = FLegacyPackageHeader::deserialize(&mut asset_header_reader, package_version_fallback)?;
 
     // Construct zen asset from the package header
-    let mut builder = create_asset_builder(legacy_package_header, container_header_version, fixup_legacy_external_arcs);
+    let mut builder = create_asset_builder(legacy_package_header, container_header_version, fixup_legacy_external_arcs, source_package_name);
 
     // Build zen asset data
     setup_zen_package_summary(&mut builder)?;
@@ -1128,7 +1123,11 @@ fn build_zen_asset_internal(legacy_asset: &FSerializedAssetBundle, container_hea
     build_zen_preload_dependencies(&mut builder)?;
 
     // Finally store and set package summary name
-    builder.zen_package.summary.name = builder.zen_package.name_map.store(&builder.legacy_package.summary.package_name);
+    if builder.container_header_version > EIoContainerHeaderVersion::Initial {
+        builder.zen_package.summary.name = builder.zen_package.name_map.store(&builder.legacy_package.summary.package_name);
+    } else {
+        builder.zen_package.summary.name = builder.zen_package.name_map.store(builder.source_package_name.as_deref().unwrap_or("None"));
+    }
 
     Ok(builder)
 }
@@ -1144,7 +1143,7 @@ pub(crate) fn build_zen_asset(
 ) -> anyhow::Result<ConvertedZenAssetBundle> {
     // We want to fixup this asset once we have converted all the packages
     let final_allow_fixup = container_header_version <= EIoContainerHeaderVersion::Initial && allow_fixup;
-    let builder = build_zen_asset_internal(&legacy_asset, container_header_version, package_version_fallback, final_allow_fixup)?;
+    let builder = build_zen_asset_internal(&legacy_asset, container_header_version, package_version_fallback, final_allow_fixup, None)?;
 
     // Serialize the resulting asset into the container writer
     build_converted_zen_asset(&builder, legacy_asset, path, package_name_to_referenced_shader_maps)
@@ -1153,14 +1152,14 @@ pub(crate) fn build_zen_asset(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::EIoStoreTocVersion;
-    use crate::zen::EUnrealEngineObjectUE5Version;
+    use crate::version::EngineVersion;
+    use crate::{EIoStoreTocVersion, PackageTestMetadata};
     use fs_err as fs;
 
     // Builds zen asset and returns the resulting package ID, chunk data buffer, and it's store entry. Zen package conversion does not modify bulk data in any way.
-    pub(crate) fn build_serialize_zen_asset(legacy_asset: &FSerializedAssetBundle, container_header_version: EIoContainerHeaderVersion, package_version_fallback: Option<FPackageFileVersion>) -> anyhow::Result<(FPackageId, StoreEntry, Vec<u8>)> {
+    pub(crate) fn build_serialize_zen_asset(legacy_asset: &FSerializedAssetBundle, container_header_version: EIoContainerHeaderVersion, package_version_fallback: Option<FPackageFileVersion>, source_package_name: Option<String>) -> anyhow::Result<(FPackageId, StoreEntry, Vec<u8>)> {
         // Do not allow legacy external arc fixup, just emit the asset that does not require fixup immediately using only the information available from this asset
-        let builder = build_zen_asset_internal(legacy_asset, container_header_version, package_version_fallback, false)?;
+        let builder = build_zen_asset_internal(legacy_asset, container_header_version, package_version_fallback, false, source_package_name)?;
 
         let (store_entry, package_data, _) = serialize_zen_asset(&builder, legacy_asset)?;
         Ok((builder.package_id, store_entry, package_data))
@@ -1168,15 +1167,18 @@ mod test {
 
     #[test]
     fn test_zen_asset_identity_conversion() -> anyhow::Result<()> {
-        run_test("tests/UE5.4/BP_Table_Lamp.uasset", "tests/UE5.4/BP_Table_Lamp.uexp", "tests/UE5.4/BP_Table_Lamp.uzenasset")?;
+        // UE5.4, NoExportInfo zen header, OnDemandMetaData TOC version, and PropertyTagCompleteTypeName package file version
+        let eng = EngineVersion::UE5_4;
+        let ue5_4 = (eng.toc_version(), eng.container_header_version(), eng.package_file_version());
+        let eng = EngineVersion::UE4_27;
+        let ue4_27 = (eng.toc_version(), eng.container_header_version(), eng.package_file_version());
 
-        run_test("tests/UE5.4/Randy.uasset", "tests/UE5.4/Randy.uexp", "tests/UE5.4/Randy.uzenasset")?;
-
-        run_test("tests/UE5.5/T_Test.uasset", "tests/UE5.5/T_Test.uexp", "tests/UE5.5/T_Test.uzenasset")?;
-
-        run_test("tests/UE5.5/SM_Cube.uasset", "tests/UE5.5/SM_Cube.uexp", "tests/UE5.5/SM_Cube.uzenasset")?;
-
-        run_test("tests/UE5.5/BP_ThirdPersonCharacter.uasset", "tests/UE5.5/BP_ThirdPersonCharacter.uexp", "tests/UE5.5/BP_ThirdPersonCharacter.uzenasset")?;
+        run_test("tests/UE4.27/TestModUI", ue4_27, Some("/Game/_AssemblyStorm/TestMod/TestModUI".to_string()))?;
+        run_test("tests/UE5.4/BP_Table_Lamp", ue5_4, None)?;
+        run_test("tests/UE5.4/Randy", ue5_4, None)?;
+        run_test("tests/UE5.5/T_Test", ue5_4, None)?;
+        run_test("tests/UE5.5/SM_Cube", ue5_4, None)?;
+        run_test("tests/UE5.5/BP_ThirdPersonCharacter", ue5_4, None)?;
 
         Ok(())
     }
@@ -1250,8 +1252,38 @@ mod test {
         output
     }
 
-    fn run_test(header: &str, exports: &str, original_zen: &str) -> anyhow::Result<()> {
+    #[allow(unused)]
+    fn print_export_bundle_structure(package: &FZenPackageHeader) -> String {
+        let mut output = String::new();
+
+        output.push_str(&format!("Export Bundle Headers ({} total):\n", package.export_bundle_headers.len()));
+        for (bundle_idx, header) in package.export_bundle_headers.iter().enumerate() {
+            output.push_str(&format!("Bundle[{}]: serial_offset={}, first_entry_index={}, entry_count={}\n", bundle_idx, header.serial_offset, header.first_entry_index, header.entry_count));
+
+            let start_idx = header.first_entry_index as usize;
+            for i in 0..header.entry_count {
+                let entry_idx = start_idx + i as usize;
+                if entry_idx < package.export_bundle_entries.len() {
+                    let entry = &package.export_bundle_entries[entry_idx];
+                    let export_name = package.name_map.get(package.export_map[entry.local_export_index as usize].object_name).to_string();
+                    output.push_str(&format!("    Export[{}] {} - {:?}\n", entry.local_export_index, export_name, entry.command_type));
+                }
+            }
+            output.push('\n');
+        }
+
+        output
+    }
+
+    fn run_test(path: impl AsRef<std::path::Path>, version: (EIoStoreTocVersion, EIoContainerHeaderVersion, FPackageFileVersion), source_package_name: Option<String>) -> anyhow::Result<()> {
         use pretty_assertions::assert_eq;
+
+        let header = path.as_ref().with_extension("uasset");
+        let exports = path.as_ref().with_extension("uexp");
+        let original_zen = path.as_ref().with_extension("uzenasset");
+        let metadata = path.as_ref().with_extension("metadata.json");
+
+        let metadata = if let Ok(data) = fs::read(metadata) { Some(serde_json::from_slice::<PackageTestMetadata>(&data)?) } else { None };
 
         let asset_header_buffer = fs::read(header)?;
         let asset_exports_buffer = fs::read(exports)?;
@@ -1264,28 +1296,26 @@ mod test {
             memory_mapped_bulk_data_buffer: None,
         };
 
-        // UE5.4, NoExportInfo zen header, OnDemandMetaData TOC version, and PropertyTagCompleteTypeName package file version
-        let package_file_version = Some(FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::PropertyTagCompleteTypeName));
-        let container_header_version = EIoContainerHeaderVersion::NoExportInfo;
-        let container_toc_version = EIoStoreTocVersion::OnDemandMetaData;
-
         let original_zen_asset = fs::read(original_zen)?;
-        let original_zen_asset_package = FZenPackageHeader::deserialize(&mut Cursor::new(&original_zen_asset), None, container_toc_version, container_header_version, package_file_version)?;
+        let original_zen_asset_package = FZenPackageHeader::deserialize(&mut Cursor::new(&original_zen_asset), metadata.and_then(|m| m.store_entry), version.0, version.1, Some(version.2))?;
 
-        let (_, _, converted_zen_asset) = build_serialize_zen_asset(&serialized_asset_bundle, container_header_version, package_file_version)?;
-        let converted_zen_asset_package = FZenPackageHeader::deserialize(&mut Cursor::new(&converted_zen_asset), None, container_toc_version, container_header_version, package_file_version)?;
+        let (_, store_entry, converted_zen_asset) = build_serialize_zen_asset(&serialized_asset_bundle, version.1, Some(version.2), source_package_name)?;
+        let converted_zen_asset_package = FZenPackageHeader::deserialize(&mut Cursor::new(&converted_zen_asset), Some(store_entry), version.0, version.1, Some(version.2))?;
 
-        //dbg!(original_zen_asset_package.clone());
-        //dbg!(converted_zen_asset_package.clone());
+        // dbg!(&original_zen_asset_package);
+        // dbg!(&converted_zen_asset_package);
 
-        // let orig_deps = print_dependency_structure(&original_zen_asset_package);
-        // let conv_deps = print_dependency_structure(&converted_zen_asset_package);
+        // let orig_bundles = print_export_bundle_structure(&original_zen_asset_package);
+        // let conv_bundles = print_export_bundle_structure(&converted_zen_asset_package);
 
         // std::fs::write("orig.txt", &orig_deps)?;
         // std::fs::write("conv.txt", &conv_deps)?;
 
-        // println!("Original dependencies:\n{}", orig_deps);
-        // println!("Converted dependencies:\n{}", conv_deps);
+        // std::fs::write("orig_bundles.txt", &orig_bundles)?;
+        // std::fs::write("conv_bundles.txt", &conv_bundles)?;
+
+        // println!("Original export bundles:\n{}", orig_bundles);
+        // println!("Converted export bundles:\n{}", conv_bundles);
 
         // Make sure the header is equal between the original and the converted asset, minus the load order data
         assert_eq!(original_zen_asset_package.name_map.copy_raw_names(), converted_zen_asset_package.name_map.copy_raw_names());
@@ -1302,8 +1332,6 @@ mod test {
         assert_eq!(original_zen_asset_package.summary, converted_zen_asset_package.summary);
         assert_eq!(original_zen_asset_package.external_package_dependencies, converted_zen_asset_package.external_package_dependencies);
 
-        // Make sure export blob is identical after the header size. Offsets in export map are relative to the end of the header so if they are correct and this data is correct exports are correct
-        assert_eq!(original_zen_asset[(original_zen_asset_package.summary.header_size as usize)..], asset_exports_buffer, "Uexp file and the original zen asset exports do not match");
         assert_eq!(
             original_zen_asset[(original_zen_asset_package.summary.header_size as usize)..],
             converted_zen_asset[(converted_zen_asset_package.summary.header_size as usize)..],

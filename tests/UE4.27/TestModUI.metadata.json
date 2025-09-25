@@ -1,0 +1,23 @@
+{
+  "toc_version": "PartitionSize",
+  "container_header_version": "Initial",
+  "package_file_version": null,
+  "store_entry": {
+    "export_bundles_size": 95689,
+    "load_order": 1650,
+    "export_count": 220,
+    "export_bundle_count": 1,
+    "imported_packages": [
+      3919398313328258468,
+      13831284728458346051,
+      5381538759339041582,
+      1530355090648548848,
+      15491805652760110486,
+      9340788855762109896,
+      1547304778992541020,
+      7612827517325892753,
+      9288674249659578994
+    ],
+    "shader_map_hashes": []
+  }
+}
