@@ -698,7 +698,7 @@ impl FObjectExport {
 
         // Assume public hash to be generated for assets before UE5
         let should_serialize_generate_public_hash = summary.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::OptionalResources as i32;
-        let generate_public_hash: bool = if should_serialize_generate_public_hash { s.de()? } else { true };
+        let generate_public_hash: bool = if should_serialize_generate_public_hash { s.de()? } else { false };
 
         let first_export_dependency_index: i32 = s.de()?;
         let serialize_before_serialize_dependencies: i32 = s.de()?;

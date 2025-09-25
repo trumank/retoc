@@ -330,18 +330,14 @@ fn build_zen_export_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
         let super_index = remap_package_index_reference(builder, object_export.super_index);
         let template_index = remap_package_index_reference(builder, object_export.template_index);
 
-        let should_have_public_export_hash = (object_export.object_flags & EObjectFlags::Public as u32) != 0 || object_export.generate_public_hash;
+        let gen_hash = (object_export.object_flags & EObjectFlags::Public as u32) != 0 || object_export.generate_public_hash;
         let (export_package_name, full_export_name) = resolve_legacy_package_object(builder, FPackageIndex::create_export(export_index as u32))?;
 
-        let public_export_hash: u64 = if should_have_public_export_hash {
-            // Use global import index converted to the raw representation for legacy packages, and get_public_export_hash otherwise
-            if builder.container_header_version > EIoContainerHeaderVersion::Initial {
-                get_public_export_hash(&full_export_name[export_package_name.len() + 1..])
-            } else {
-                FPackageObjectIndex::create_legacy_package_import_from_path(&full_export_name).to_raw()
-            }
+        // Use global import index converted to the raw representation for legacy packages, and get_public_export_hash otherwise
+        let public_export_hash: u64 = if builder.container_header_version > EIoContainerHeaderVersion::Initial {
+            if gen_hash { get_public_export_hash(&full_export_name[export_package_name.len() + 1..]) } else { 0 }
         } else {
-            0
+            if gen_hash { FPackageObjectIndex::create_legacy_package_import_from_path(&full_export_name) } else { FPackageObjectIndex::create_null() }.to_raw()
         };
 
         let filter_flags: EExportFilterFlags = if object_export.is_not_for_server {
