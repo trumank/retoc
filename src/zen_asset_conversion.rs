@@ -1240,22 +1240,22 @@ mod test {
 
         // Make sure the header is equal between the original and the converted asset, minus the load order data
         assert_eq!(original_zen_asset_package.name_map.copy_raw_names(), converted_zen_asset_package.name_map.copy_raw_names());
-        assert_eq!(original_zen_asset_package.bulk_data.clone(), converted_zen_asset_package.bulk_data.clone());
-        assert_eq!(original_zen_asset_package.imported_package_names.clone(), converted_zen_asset_package.imported_package_names.clone());
-        assert_eq!(original_zen_asset_package.imported_packages.clone(), converted_zen_asset_package.imported_packages.clone());
-        assert_eq!(original_zen_asset_package.imported_public_export_hashes.clone(), converted_zen_asset_package.imported_public_export_hashes.clone());
-        assert_eq!(original_zen_asset_package.import_map.clone(), converted_zen_asset_package.import_map.clone());
-        assert_eq!(original_zen_asset_package.export_map.clone(), converted_zen_asset_package.export_map.clone());
-        assert_eq!(original_zen_asset_package.dependency_bundle_headers.clone(), converted_zen_asset_package.dependency_bundle_headers.clone());
-        assert_eq!(original_zen_asset_package.dependency_bundle_entries.clone(), converted_zen_asset_package.dependency_bundle_entries.clone());
-        assert_eq!(original_zen_asset_package.export_bundle_entries.clone(), converted_zen_asset_package.export_bundle_entries.clone());
-        assert_eq!(original_zen_asset_package.summary.clone(), converted_zen_asset_package.summary.clone());
+        assert_eq!(original_zen_asset_package.bulk_data, converted_zen_asset_package.bulk_data);
+        assert_eq!(original_zen_asset_package.imported_package_names, converted_zen_asset_package.imported_package_names);
+        assert_eq!(original_zen_asset_package.imported_packages, converted_zen_asset_package.imported_packages);
+        assert_eq!(original_zen_asset_package.imported_public_export_hashes, converted_zen_asset_package.imported_public_export_hashes);
+        assert_eq!(original_zen_asset_package.import_map, converted_zen_asset_package.import_map);
+        assert_eq!(original_zen_asset_package.export_map, converted_zen_asset_package.export_map);
+        assert_eq!(original_zen_asset_package.dependency_bundle_headers, converted_zen_asset_package.dependency_bundle_headers);
+        assert_eq!(original_zen_asset_package.dependency_bundle_entries, converted_zen_asset_package.dependency_bundle_entries);
+        assert_eq!(original_zen_asset_package.export_bundle_entries, converted_zen_asset_package.export_bundle_entries);
+        assert_eq!(original_zen_asset_package.summary, converted_zen_asset_package.summary);
 
         // Make sure export blob is identical after the header size. Offsets in export map are relative to the end of the header so if they are correct and this data is correct exports are correct
-        assert_eq!(original_zen_asset[(original_zen_asset_package.summary.header_size as usize)..].to_vec(), asset_exports_buffer.clone(), "Uexp file and the original zen asset exports do not match");
+        assert_eq!(original_zen_asset[(original_zen_asset_package.summary.header_size as usize)..], asset_exports_buffer, "Uexp file and the original zen asset exports do not match");
         assert_eq!(
-            original_zen_asset[(original_zen_asset_package.summary.header_size as usize)..].to_vec(),
-            converted_zen_asset[(converted_zen_asset_package.summary.header_size as usize)..].to_vec(),
+            original_zen_asset[(original_zen_asset_package.summary.header_size as usize)..],
+            converted_zen_asset[(converted_zen_asset_package.summary.header_size as usize)..],
             "Original zen asset and converted zen asset exports do not match"
         );
 
