@@ -16,6 +16,7 @@ use byteorder::{LE, ReadBytesExt};
 use std::cmp::{Ordering, max};
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::io::{Cursor, Seek, SeekFrom, Write};
+use std::ops::Deref;
 use std::sync::{Arc, RwLock};
 
 /// NOTE: assumes leading slash is already stripped
@@ -647,12 +648,26 @@ struct ZenExportGraphNode {
     node: ZenDependencyGraphNode,
     is_public_export: bool,
 }
-impl PartialOrd for ZenExportGraphNode {
+
+#[derive(PartialEq, Eq, Copy, Clone, Hash)]
+struct OrdNew(ZenExportGraphNode);
+impl From<ZenExportGraphNode> for OrdNew {
+    fn from(value: ZenExportGraphNode) -> Self {
+        Self(value)
+    }
+}
+impl Deref for OrdNew {
+    type Target = ZenExportGraphNode;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl PartialOrd for OrdNew {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-impl Ord for ZenExportGraphNode {
+impl Ord for OrdNew {
     fn cmp(&self, other: &Self) -> Ordering {
         other
             .is_public_export
@@ -663,7 +678,34 @@ impl Ord for ZenExportGraphNode {
     }
 }
 
-fn sort_dependencies_in_load_order(export_graph_nodes: &Vec<ZenExportGraphNode>, dependency_to_dependants: &HashMap<ZenExportGraphNode, Vec<ZenExportGraphNode>>) -> anyhow::Result<Vec<ZenExportGraphNode>> {
+#[derive(PartialEq, Eq, Copy, Clone, Hash)]
+struct OrdOld(ZenExportGraphNode);
+impl From<ZenExportGraphNode> for OrdOld {
+    fn from(value: ZenExportGraphNode) -> Self {
+        Self(value)
+    }
+}
+impl Deref for OrdOld {
+    type Target = ZenExportGraphNode;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl PartialOrd for OrdOld {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for OrdOld {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.node.package_index.to_export_index().cmp(&other.node.package_index.to_export_index()).then(self.node.command_type.cmp(&other.node.command_type)).reverse()
+    }
+}
+
+fn sort_dependencies_in_load_order<O>(export_graph_nodes: &Vec<ZenExportGraphNode>, dependency_to_dependants: &HashMap<ZenExportGraphNode, Vec<ZenExportGraphNode>>) -> anyhow::Result<Vec<ZenExportGraphNode>>
+where
+    O: From<ZenExportGraphNode> + Ord + Deref<Target = ZenExportGraphNode>,
+{
     let mut incoming_edge_count: HashMap<ZenExportGraphNode, usize> = HashMap::new();
 
     // Prime all nodes that have dependencies
@@ -674,10 +716,10 @@ fn sort_dependencies_in_load_order(export_graph_nodes: &Vec<ZenExportGraphNode>,
     }
 
     // Prime list of nodes that have no dependencies on other nodes
-    let mut nodes_with_no_incoming_edges: BinaryHeap<ZenExportGraphNode> = BinaryHeap::with_capacity(export_graph_nodes.len());
+    let mut nodes_with_no_incoming_edges: BinaryHeap<O> = BinaryHeap::with_capacity(export_graph_nodes.len());
     for export_node in export_graph_nodes {
         if *incoming_edge_count.entry(*export_node).or_default() == 0 {
-            nodes_with_no_incoming_edges.push(*export_node);
+            nodes_with_no_incoming_edges.push((*export_node).into());
         }
     }
 
@@ -685,7 +727,7 @@ fn sort_dependencies_in_load_order(export_graph_nodes: &Vec<ZenExportGraphNode>,
     let mut load_order: Vec<ZenExportGraphNode> = Vec::with_capacity(export_graph_nodes.len());
     while !nodes_with_no_incoming_edges.is_empty() {
         let removed_node = nodes_with_no_incoming_edges.pop().unwrap();
-        load_order.push(removed_node);
+        load_order.push(*removed_node);
 
         // Remove one edge from all the nodes that depend on this node
         if let Some(node_dependants) = dependency_to_dependants.get(&removed_node) {
@@ -696,7 +738,7 @@ fn sort_dependencies_in_load_order(export_graph_nodes: &Vec<ZenExportGraphNode>,
 
                 // If to node no longer has any dependencies that are still unsatisfied, add it to the list of nodes with no incoming edges to be processed later
                 if *incoming_edge_count == 0 {
-                    nodes_with_no_incoming_edges.push(*to_node);
+                    nodes_with_no_incoming_edges.push((*to_node).into());
                 }
             }
         }
@@ -818,7 +860,11 @@ fn build_zen_preload_dependencies(builder: &mut ZenPackageBuilder) -> anyhow::Re
     }
 
     // Sort the export graph nodes in load order
-    let sorted_node_list = sort_dependencies_in_load_order(&export_graph_nodes, &dependency_to_dependants)?;
+    let sorted_node_list = if builder.container_header_version > EIoContainerHeaderVersion::Initial {
+        sort_dependencies_in_load_order::<OrdNew>(&export_graph_nodes, &dependency_to_dependants)
+    } else {
+        sort_dependencies_in_load_order::<OrdOld>(&export_graph_nodes, &dependency_to_dependants)
+    }?;
 
     // Use legacy path for versions before NoExportInfo, and a new one for versions after
     if builder.container_header_version >= EIoContainerHeaderVersion::NoExportInfo {
