@@ -179,7 +179,7 @@ pub(crate) enum EZenPackageVersion {
     ExtraDependencies,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub(crate) struct FPackageFileVersion {
     pub(crate) file_version_ue4: i32,
     pub(crate) file_version_ue5: i32,
@@ -213,7 +213,7 @@ impl Writeable for FPackageFileVersion {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Default)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub(crate) struct FCustomVersion {
     pub(crate) key: FGuid,
     pub(crate) version: i32,
@@ -233,7 +233,7 @@ impl Writeable for FCustomVersion {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct FZenPackageVersioningInfo {
     pub(crate) zen_version: EZenPackageVersion,
     pub(crate) package_file_version: FPackageFileVersion,
@@ -587,7 +587,7 @@ pub(crate) struct ExternalPackageDependency {
 }
 
 // Legacy, UE 5.2 and below, when there were multiple export bundles instead of just one
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 #[repr(C)] // needed to determine the offset of the arc data
 pub(crate) struct FExportBundleHeader {
     // Serial offset to the first serialized export in this bundle. Each bundle begins with an export, and all serialized exports in the bundle are laid out in sequence,
@@ -697,7 +697,7 @@ impl Writeable for FZenPackageImportedPackageNamesContainer {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct FZenPackageHeader {
     pub(crate) summary: FZenPackageSummary,
     pub(crate) versioning_info: FZenPackageVersioningInfo,

@@ -117,7 +117,7 @@ pub(crate) fn write_name_batch_parts(names: &[String]) -> Result<(Vec<u8>, Vec<u
     Ok((cur_names.into_inner(), cur_hashes.into_inner()))
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct FNameMap {
     kind: EMappedNameType,
     names: Vec<String>,
@@ -172,7 +172,7 @@ impl FNameMap {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default, Display, FromRepr, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display, FromRepr, Serialize, Deserialize)]
 #[repr(u32)]
 pub(crate) enum EMappedNameType {
     #[default]
