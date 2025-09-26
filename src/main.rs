@@ -53,6 +53,9 @@ use tracing::instrument;
 use version::EngineVersion;
 use zen_asset_conversion::ConvertedZenAssetBundle;
 
+use name_map::{EMappedNameType, FNameMap, write_name_batch_parts};
+use script_objects::{FPackageObjectIndex, FScriptObjectEntry};
+
 #[derive(Parser, Debug)]
 struct ActionManifest {
     #[arg(index = 1)]
@@ -216,6 +219,26 @@ struct ActionDumpTest {
 }
 
 #[derive(Parser, Debug)]
+struct ActionGenScriptObjects {
+    /// Input reflection data JSON dump
+    #[arg(index = 1)]
+    input: PathBuf,
+    /// Output .utoc file
+    #[arg(index = 2)]
+    output: PathBuf,
+    /// Engine version
+    #[arg(long)]
+    version: EngineVersion,
+}
+
+#[derive(Parser, Debug)]
+struct ActionPrintScriptObjects {
+    /// Input .utoc file containing script objects
+    #[arg(index = 1)]
+    input: PathBuf,
+}
+
+#[derive(Parser, Debug)]
 enum Action {
     /// Extract manifest from .utoc
     Manifest(ActionManifest),
@@ -243,6 +266,13 @@ enum Action {
 
     /// Dump test
     DumpTest(ActionDumpTest),
+
+    /// Generate script objects global container from UE reflection data JSON
+    /// see https://github.com/trumank/meatloaf
+    GenScriptObjects(ActionGenScriptObjects),
+
+    /// Print script objects from container
+    PrintScriptObjects(ActionPrintScriptObjects),
 }
 
 #[derive(Parser, Debug)]
@@ -287,6 +317,10 @@ fn main() -> Result<()> {
         Action::Get(action) => action_get(action, config),
 
         Action::DumpTest(action) => action_dump_test(action, config),
+
+        Action::GenScriptObjects(action) => action_gen_script_objects(action, config),
+
+        Action::PrintScriptObjects(action) => action_print_script_objects(action, config),
     }
 }
 
@@ -1055,6 +1089,92 @@ fn action_dump_test(args: ActionDumpTest, config: Arc<Config>) -> Result<()> {
         fs::write(path.with_extension("m.ubulk"), data)?;
     }
 
+    Ok(())
+}
+
+fn action_gen_script_objects(args: ActionGenScriptObjects, _config: Arc<Config>) -> Result<()> {
+    let dump: ue_reflection::ReflectionData = serde_json::from_reader(BufReader::new(fs::File::open(&args.input)?))?;
+
+    // map CDO => Class
+    let mut cdos = HashMap::<&str, &str>::new();
+
+    let mut names = FNameMap::create(EMappedNameType::Global);
+    let mut script_objects = vec![];
+
+    for (path, object) in &dump.objects {
+        if path.starts_with("/Script/")
+            && let ue_reflection::ObjectType::Class(class) = &object
+            && let Some(cdo) = &class.class_default_object
+        {
+            cdos.insert(cdo, path);
+        }
+    }
+
+    for (path, object) in &dump.objects {
+        if path.starts_with("/Script/") {
+            if let ue_reflection::ObjectType::Class(class) = &object
+                && let Some(cdo) = &class.class_default_object
+            {
+                cdos.insert(cdo, path);
+            }
+            let mut components = path.rsplit(['/', '.', ':']);
+            let name = components.next().unwrap();
+            let count = components.count();
+            let name = if count == 2 {
+                // special case for /Script/ package objects
+                path
+            } else {
+                name
+            };
+
+            let outer_index = object.get_object().outer.as_ref().map_or(FPackageObjectIndex::create_null(), |outer| FPackageObjectIndex::create_script_import(outer));
+            let cdo_class_index = cdos.get(path.as_str()).map_or(FPackageObjectIndex::create_null(), |outer| FPackageObjectIndex::create_script_import(outer));
+            script_objects.push(FScriptObjectEntry {
+                object_name: names.store(name),
+                global_index: FPackageObjectIndex::create_script_import(path),
+                outer_index,
+                cdo_class_index,
+            });
+        }
+    }
+
+    let mut writer = IoStoreWriter::new(&args.output, args.version.toc_version(), None, UEPathBuf::new())?;
+
+    let use_new_format = args.version.toc_version() > EIoStoreTocVersion::PerfectHash;
+
+    if use_new_format {
+        let buf_script_objects = {
+            let mut buf = vec![];
+            names.serialize(&mut buf)?;
+            WriteExt::ser(&mut buf, &script_objects)?;
+            buf
+        };
+
+        writer.write_chunk(FIoChunkId::create(0, 0, EIoChunkType::ScriptObjects), None, &buf_script_objects)?;
+    } else {
+        let (buf_names, buf_name_hashes) = write_name_batch_parts(&names.copy_raw_names())?;
+        let buf_script_objects = {
+            let mut buf = vec![];
+            WriteExt::ser(&mut buf, &script_objects)?;
+            buf
+        };
+
+        writer.write_chunk(FIoChunkId::create(0, 0, EIoChunkType::LoaderGlobalNames), None, &buf_names)?;
+        writer.write_chunk(FIoChunkId::create(0, 0, EIoChunkType::LoaderGlobalNameHashes), None, &buf_name_hashes)?;
+        writer.write_chunk(FIoChunkId::create(0, 0, EIoChunkType::LoaderInitialLoadMeta), None, &buf_script_objects)?;
+    }
+
+    writer.finalize()?;
+
+    println!("Generated script objects container with {} objects using {} format", script_objects.len(), if use_new_format { "new" } else { "old" });
+
+    Ok(())
+}
+
+fn action_print_script_objects(args: ActionPrintScriptObjects, config: Arc<Config>) -> Result<()> {
+    let iostore = iostore::open(args.input, config)?;
+    let script_objects = iostore.load_script_objects()?;
+    script_objects.print();
     Ok(())
 }
 
