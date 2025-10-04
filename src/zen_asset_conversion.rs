@@ -951,7 +951,7 @@ fn serialize_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: &FSeria
 fn build_converted_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: FSerializedAssetBundle, path: &UEPath, package_name_to_referenced_shader_maps: &HashMap<String, Vec<FSHAHash>>) -> anyhow::Result<ConvertedZenAssetBundle> {
     let (mut result_store_entry, result_package_buffer, legacy_external_arc_serialized_offsets) = serialize_zen_asset(builder, &legacy_asset_bundle)?;
 
-    let package_name = builder.source_package_name.clone().unwrap();
+    let package_name = builder.source_package_name.as_ref().unwrap_or(&builder.legacy_package.summary.package_name).clone();
 
     // Append shader map hashes to the store entry from the package name to shader maps lookup
     if let Some(referenced_shader_maps) = package_name_to_referenced_shader_maps.get(&package_name) {
