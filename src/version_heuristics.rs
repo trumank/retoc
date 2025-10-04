@@ -34,11 +34,11 @@ pub(crate) fn heuristic_zen_version_from_package_file_version(package_file_versi
             EZenPackageVersion::DataResourceTable
         // UE 5.3: extra dependencies
         } else {
-            EZenPackageVersion::ExtraDependencies
+            EZenPackageVersion::ExportDependencies
         }
     // UE 5.4+: extra dependencies
     } else {
-        EZenPackageVersion::ExtraDependencies
+        EZenPackageVersion::ExportDependencies
     }
 }
 

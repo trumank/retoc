@@ -176,7 +176,7 @@ pub(crate) enum EZenPackageVersion {
     DataResourceTable,
     ImportedPackageNames,
     #[default]
-    ExtraDependencies,
+    ExportDependencies,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
