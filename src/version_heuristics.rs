@@ -73,6 +73,9 @@ pub(crate) fn heuristic_zen_package_version(optional_package_version: Option<FPa
                 } else {
                     None
                 }
+            } else if container_header_version == EIoContainerHeaderVersion::SoftPackageReferencesOffset {
+                // 5.6 is OsSubObjectShadowSerialization
+                Some(FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::OsSubObjectShadowSerialization))
             } else {
                 None
             }
@@ -123,6 +126,7 @@ pub(crate) fn heuristic_package_version_from_legacy_package<S: Read + Seek>(s: &
     // Try these package versions for the supported engine versions. First version to read the full header size and not overflow is the presumed package version
     let package_versions_to_try: Vec<FPackageFileVersion> = vec![
         // Note that AssetRegistryPackageBuildDependencies and PropertyTagCompleteTypeName cannot be told apart, so package will always assume 5.5 instead of 5.4
+        FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::OsSubObjectShadowSerialization),        // UE 5.6
         FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::AssetRegistryPackageBuildDependencies), // UE 5.5
         FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::PropertyTagCompleteTypeName),           // UE 5.4
         FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::DataResources),                         // UE 5.3 and 5.2

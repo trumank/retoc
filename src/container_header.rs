@@ -3,9 +3,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::{
     collections::BTreeMap,
-    io::{Cursor, Read, Seek as _, SeekFrom, Write},
+    io::{Cursor, Read, SeekFrom, Write},
     marker::PhantomData,
 };
+use std::io::Seek;
 use strum::FromRepr;
 use tracing::instrument;
 
@@ -107,17 +108,25 @@ impl FIoContainerHeader {
         }
 
         if version >= EIoContainerHeaderVersion::SoftPackageReferences {
-            let has_soft_package_references: bool = s.de()?;
-            if has_soft_package_references {
-                new.soft_package_references = Some(s.de()?);
+            if version >= EIoContainerHeaderVersion::SoftPackageReferencesOffset {
+                let soft_package_references_serial_info: FIoContainerHeaderSerialInfo = s.de()?;
+                if soft_package_references_serial_info.size > 0 {
+                    let has_soft_package_references: bool = s.de()?;
+                    if has_soft_package_references {
+                        new.soft_package_references = Some(s.de()?);
+                    }
+                }
+            } else {
+                let has_soft_package_references: bool = s.de()?;
+                if has_soft_package_references {
+                    new.soft_package_references = Some(s.de()?);
+                }
             }
         }
 
         Ok(new)
     }
-}
-impl Writeable for FIoContainerHeader {
-    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+    pub(crate) fn serialize<S: Write + Seek>(&self, s: &mut S) -> Result<()> {
         if self.version > EIoContainerHeaderVersion::Initial {
             s.ser(&Self::MAGIC)?;
             s.ser(&self.version)?;
@@ -152,9 +161,27 @@ impl Writeable for FIoContainerHeader {
         }
 
         if self.version >= EIoContainerHeaderVersion::SoftPackageReferences {
-            s.ser(&self.soft_package_references.is_some())?;
-            if let Some(soft_package_references) = &self.soft_package_references {
-                s.ser(soft_package_references)?;
+            if self.version >= EIoContainerHeaderVersion::SoftPackageReferencesOffset {
+                let serial_info_offset = s.stream_position()?;
+                let mut soft_package_references_serial_info = FIoContainerHeaderSerialInfo::default();
+                s.ser(&soft_package_references_serial_info)?;
+
+                soft_package_references_serial_info.offset = s.stream_position()? as i64;
+                s.ser(&self.soft_package_references.is_some())?;
+                if let Some(soft_package_references) = &self.soft_package_references {
+                    s.ser(soft_package_references)?;
+                }
+                soft_package_references_serial_info.size = s.stream_position()? as i64 - soft_package_references_serial_info.offset;
+
+                let soft_package_references_end_offset = s.stream_position()?;
+                s.seek(SeekFrom::Start(serial_info_offset))?;
+                s.ser(&soft_package_references_serial_info)?;
+                s.seek(SeekFrom::Start(soft_package_references_end_offset))?;
+            } else {
+                s.ser(&self.soft_package_references.is_some())?;
+                if let Some(soft_package_references) = &self.soft_package_references {
+                    s.ser(soft_package_references)?;
+                }
             }
         }
 
@@ -255,8 +282,9 @@ pub(crate) enum EIoContainerHeaderVersion {
     LocalizedPackages = 1,
     OptionalSegmentPackages = 2,
     NoExportInfo = 3,
-    #[default]
     SoftPackageReferences = 4,
+    #[default]
+    SoftPackageReferencesOffset = 5,
 }
 impl Readable for EIoContainerHeaderVersion {
     #[instrument(skip_all, name = "EIoContainerHeaderVersion")]
@@ -337,6 +365,25 @@ impl Writeable for FIoContainerHeaderSoftPackageReferences {
     }
 }
 
+#[derive(Debug, PartialEq, Default, Serialize, Deserialize)]
+struct FIoContainerHeaderSerialInfo {
+    offset: i64,
+    size: i64,
+}
+impl Readable for FIoContainerHeaderSerialInfo {
+    #[instrument(skip_all, name = "FIoContainerHeaderSerialInfo")]
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        Ok(Self { offset: s.de()?, size: s.de()? })
+    }
+}
+impl Writeable for FIoContainerHeaderSerialInfo {
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.offset)?;
+        s.ser(&self.size)?;
+        Ok(())
+    }
+}
+
 // Used for UE4.27 package redirects that do not provide a source package name
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 struct LegacyContainerHeaderPackageRedirect {
@@ -392,6 +439,7 @@ impl StoreEntries {
             EIoContainerHeaderVersion::OptionalSegmentPackages => (8, 24),
             EIoContainerHeaderVersion::NoExportInfo => (0, 16),
             EIoContainerHeaderVersion::SoftPackageReferences => (0, 16),
+            EIoContainerHeaderVersion::SoftPackageReferencesOffset => (0, 16),
         };
 
         let entries = read_array(package_ids.len(), &mut cur, |s| FFilePackageStoreEntry::deserialize(s, version))?;
@@ -455,6 +503,7 @@ impl StoreEntries {
             EIoContainerHeaderVersion::OptionalSegmentPackages => (8, 24),
             EIoContainerHeaderVersion::NoExportInfo => (0, 16),
             EIoContainerHeaderVersion::SoftPackageReferences => (0, 16),
+            EIoContainerHeaderVersion::SoftPackageReferencesOffset => (0, 16),
         };
 
         // calculate end of entries to start writing arrays
@@ -622,7 +671,7 @@ mod test {
         let header = FIoContainerHeader::deserialize(&mut Cursor::new(data), version_override)?;
 
         let mut out_cur = Cursor::new(vec![]);
-        out_cur.ser(&header)?;
+        header.serialize(&mut out_cur)?;
         out_cur.set_position(0);
 
         let header2 = FIoContainerHeader::deserialize(&mut out_cur, version_override)?;

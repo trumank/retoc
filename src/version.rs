@@ -17,6 +17,7 @@ pub(crate) enum EngineVersion {
     UE5_3,
     UE5_4,
     UE5_5,
+    UE5_6,
 }
 
 impl EngineVersion {
@@ -32,6 +33,7 @@ impl EngineVersion {
             UE5_3 => PerfectHashWithOverflow,
             UE5_4 => OnDemandMetaData,
             UE5_5 => ReplaceIoChunkHashWithIoHash,
+            UE5_6 => ReplaceIoChunkHashWithIoHash,
         }
     }
     pub(crate) fn container_header_version(self) -> EIoContainerHeaderVersion {
@@ -46,6 +48,7 @@ impl EngineVersion {
             UE5_3 => NoExportInfo,
             UE5_4 => NoExportInfo,
             UE5_5 => SoftPackageReferences,
+            UE5_6 => SoftPackageReferencesOffset,
         }
     }
     pub(crate) fn object_ue4_version(self) -> EUnrealEngineObjectUE4Version {
@@ -66,6 +69,7 @@ impl EngineVersion {
             UE5_3 => DataResources,
             UE5_4 => PropertyTagCompleteTypeName,
             UE5_5 => AssetRegistryPackageBuildDependencies,
+            UE5_6 => OsSubObjectShadowSerialization,
             _ => unreachable!(),
         }
     }

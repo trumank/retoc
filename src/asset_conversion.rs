@@ -1,14 +1,12 @@
 use crate::container_header::EIoContainerHeaderVersion;
 use crate::iostore::IoStoreTrait;
-use crate::legacy_asset::{
-    CLASS_CLASS_NAME, CORE_OBJECT_PACKAGE_NAME, FLegacyPackageFileSummary, FLegacyPackageHeader, FLegacyPackageVersioningInfo, FObjectDataResource, FObjectExport, FObjectImport, FPackageNameMap, FSerializedAssetBundle, OBJECT_CLASS_NAME, PACKAGE_CLASS_NAME, PRESTREAM_PACKAGE_CLASS_NAME,
-};
+use crate::legacy_asset::{CLASS_CLASS_NAME, CORE_OBJECT_PACKAGE_NAME, FLegacyPackageFileSummary, FLegacyPackageHeader, FLegacyPackageVersioningInfo, FObjectDataResource, FObjectExport, FObjectImport, FPackageNameMap, FSerializedAssetBundle, OBJECT_CLASS_NAME, PACKAGE_CLASS_NAME, PRESTREAM_PACKAGE_CLASS_NAME, FCellImport, FCellExport};
 use crate::logging::Log;
 use crate::logging::*;
 use crate::name_map::FMappedName;
 use crate::script_objects::{FPackageObjectIndex, FPackageObjectIndexType, FScriptObjectEntry, ZenScriptObjects};
-use crate::ser::WriteExt;
-use crate::zen::{EExportCommandType, EExportFilterFlags, EObjectFlags, FExportMapEntry, FExternalDependencyArc, FInternalDependencyArc, FPackageFileVersion, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo};
+use crate::ser::{ReadExt, Utf8String, WriteExt};
+use crate::zen::{EExportCommandType, EExportFilterFlags, EObjectFlags, FCellExportMapEntry, FExportMapEntry, FExternalDependencyArc, FInternalDependencyArc, FPackageFileVersion, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo, ZenScriptCellsStore};
 use crate::{EIoChunkType, FGuid, FIoChunkId, FPackageId, FileWriterTrait, UEPath};
 use anyhow::{anyhow, bail};
 use key_mutex::KeyMutex;
@@ -16,37 +14,44 @@ use std::cmp::max;
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Seek, SeekFrom, Write};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
+use crate::verse_vm_types::VPackage;
+use crate::zen_asset_conversion::get_cell_export_hash;
 
 // Cache that stores the packages that were retrieved for the purpose of dependency resolution, to avoid loading and parsing them multiple times
 pub(crate) struct FZenPackageContext<'a> {
     store_access: &'a dyn IoStoreTrait,
     fallback_package_file_version: Option<FPackageFileVersion>,
     log: &'a Log,
+    script_cells: Option<Arc<ZenScriptCellsStore>>,
 
     inner_state: Arc<RwLock<FZenPackageContextMutableState>>,
     script_objects: Arc<RwLock<Option<FZenPackageContextScriptObjects>>>,
     package_lookup_locks: KeyMutex<FPackageId, ()>,
+    package_cell_verse_path_lookup_locks: KeyMutex<FPackageId, ()>,
 }
 #[derive(Default)]
 struct FZenPackageContextMutableState {
     package_headers_cache: HashMap<FPackageId, Arc<FZenPackageHeader>>,
     packages_failed_load: HashSet<FPackageId>,
     has_logged_detected_package_version: bool,
+    package_verse_paths_cache: HashMap<FPackageId, Arc<HashMap<u64, String>>>,
+    package_verse_paths_failed_resolve: HashSet<FPackageId>,
 }
 struct FZenPackageContextScriptObjects {
     script_objects: ZenScriptObjects,
     script_objects_resolved_as_classes: HashSet<FPackageObjectIndex>,
 }
 impl<'a> FZenPackageContext<'a> {
-    pub(crate) fn create(store_access: &'a dyn IoStoreTrait, fallback_package_file_version: Option<FPackageFileVersion>, log: &'a Log) -> Self {
+    pub(crate) fn create(store_access: &'a dyn IoStoreTrait, fallback_package_file_version: Option<FPackageFileVersion>, log: &'a Log, script_cells: Option<Arc<ZenScriptCellsStore>>) -> Self {
         Self {
             store_access,
             fallback_package_file_version,
             log,
-
+            script_cells,
             script_objects: Default::default(),
             inner_state: Default::default(),
             package_lookup_locks: KeyMutex::new(),
+            package_cell_verse_path_lookup_locks: KeyMutex::new(),
         }
     }
     fn get_script_objects(&self) -> anyhow::Result<RwLockReadGuard<'_, Option<FZenPackageContextScriptObjects>>> {
@@ -163,6 +168,59 @@ impl<'a> FZenPackageContext<'a> {
         write_lock.package_headers_cache.insert(package_id, shared_package_header.clone());
         Ok(shared_package_header)
     }
+    fn try_lookup_verse_cell_paths(&self, package_id: FPackageId) -> anyhow::Result<Option<Arc<HashMap<u64, String>>>> {
+        let read_lock = self.inner_state.read().unwrap();
+
+        // If we already have a package in the cache, return it
+        if let Some(existing_package) = read_lock.package_verse_paths_cache.get(&package_id) {
+            return Ok(Some(existing_package.clone()));
+        }
+        // If we have previously attempted to load a package and failed, return that
+        if read_lock.package_verse_paths_failed_resolve.contains(&package_id) {
+            return Err(anyhow!("Package has failed to resolve verse paths previously"));
+        }
+        Ok(None)
+    }
+    fn lookup_verse_cell_paths_internal_uncached(&self, package_id: FPackageId) -> anyhow::Result<Arc<HashMap<u64, String>>> {
+        let package_header = self.lookup(package_id)?;
+        let package_full_data = self.read_full_package_data(package_id)?;
+        let mut result_verse_paths: Vec<String> = Vec::new();
+
+        for cell_export_index in 0..package_header.cell_export_map.len() {
+            let cell_export = package_header.cell_export_map[cell_export_index].clone();
+            let cpp_class_info = package_header.name_map.get(cell_export.cpp_class_info).to_string();
+
+            // Packages contain verse paths for all definitions contained inside of them, and SavePackage uses these definition to assign verse paths
+            if cpp_class_info == "VPackage" {
+                let mut verse_package_buffer = Cursor::new(&package_full_data[package_header.summary.header_size as usize + cell_export.cooked_serial_offset as usize..]);
+                let verse_package: VPackage = verse_package_buffer.de()?;
+                result_verse_paths.extend(verse_package.definitions.iter().map(|x| x.name.0.clone()));
+            }
+        }
+        Ok(Arc::new(result_verse_paths.into_iter().map(|verse_path| {
+            (get_cell_export_hash(&verse_path), verse_path)
+        }).collect()))
+    }
+    fn lookup_verse_cell_paths(&self, package_id: FPackageId) -> anyhow::Result<Arc<HashMap<u64, String>>> {
+        if let Some(package) = self.try_lookup_verse_cell_paths(package_id)? {
+            return Ok(package);
+        }
+
+        // package does not exist in cache so grab a lookup lock before starting lookup process
+        let _package_lookup_lock = self.package_cell_verse_path_lookup_locks.lock(package_id).unwrap();
+        let result_paths = self.lookup_verse_cell_paths_internal_uncached(package_id);
+
+        if let Err(verse_paths_resolve_error) = result_paths {
+            let mut write_lock = self.inner_state.write().unwrap();
+            write_lock.package_verse_paths_failed_resolve.insert(package_id);
+            return Err(verse_paths_resolve_error);
+        }
+
+        let verse_paths = result_paths.unwrap();
+        let mut write_lock = self.inner_state.write().unwrap();
+        write_lock.package_verse_paths_cache.insert(package_id, verse_paths.clone());
+        Ok(verse_paths)
+    }
     fn read_full_package_data(&self, package_id: FPackageId) -> anyhow::Result<Vec<u8>> {
         // Lookup redirect package ID first before trying the provided package ID
         let redirected_package_id = self.store_access.lookup_package_redirect(package_id).unwrap_or(package_id);
@@ -247,7 +305,8 @@ fn resolve_package_import(package_cache: &FZenPackageContext, package_header: &F
         resolve_package_import_internal_legacy(package_cache, package_header, import)
     }
 }
-fn resolve_package_import_internal_new(package_cache: &FZenPackageContext, package_header: &FZenPackageHeader, import: FPackageObjectIndex) -> anyhow::Result<ResolvedZenImport> {
+
+fn resolve_package_import_internal_new_common(package_cache: &FZenPackageContext, package_header: &FZenPackageHeader, import: FPackageObjectIndex) -> anyhow::Result<(FPackageId, Arc<FZenPackageHeader>, u64)> {
     let package_import = import.package_import().ok_or_else(|| anyhow!("Failed to resolve import {} as package import", import))?;
 
     // Make sure package index points to a valid index in the imported packages
@@ -283,6 +342,11 @@ fn resolve_package_import_internal_new(package_cache: &FZenPackageContext, packa
             bail!("Imported package name mismatch: Expected to resolve imported package {}, but resolved {}", *expected_imported_package_name, actual_imported_package_name);
         }
     }
+    Ok((package_id, resolved_import_package, public_export_hash))
+}
+
+fn resolve_package_import_internal_new(package_cache: &FZenPackageContext, package_header: &FZenPackageHeader, import: FPackageObjectIndex) -> anyhow::Result<ResolvedZenImport> {
+    let (_, resolved_import_package, public_export_hash) = resolve_package_import_internal_new_common(package_cache, package_header, import)?;
 
     // Resolve the export that we are interested in. Note that the package passed to the resolve_package_export_internal must be the imported package, not this package
     let imported_export = resolved_import_package
@@ -293,6 +357,24 @@ fn resolve_package_import_internal_new(package_cache: &FZenPackageContext, packa
 
     resolve_package_export_internal(package_cache, resolved_import_package.as_ref(), imported_export)
 }
+
+fn resolve_cell_package_import(package_cache: &FZenPackageContext, package_header: &FZenPackageHeader, cell_import: FPackageObjectIndex) -> anyhow::Result<(String, String)> {
+    let (package_id, resolved_import_package, cell_export_hash) = resolve_package_import_internal_new_common(package_cache, package_header, cell_import)?;
+
+    let imported_cell_export = resolved_import_package
+        .cell_export_map
+        .iter()
+        .find(|x| x.public_export_hash != 0 && x.public_export_hash == cell_export_hash)
+        .ok_or_else(|| anyhow!("Failed to resolve public cell export with hash {} on package {} (imported by {})", cell_export_hash, resolved_import_package.package_name(), package_header.package_name()))?;
+
+    let package_verse_path_lookup = package_cache.lookup_verse_cell_paths(package_id)?;
+    if let Some(export_verse_path) = package_verse_path_lookup.get(&imported_cell_export.public_export_hash) {
+        Ok((resolved_import_package.package_name(), export_verse_path.clone()))
+    } else {
+        Err(anyhow!("Failed to resolve Verse Path for public cell export with hash {} on package {}", cell_export_hash, resolved_import_package.package_name()))
+    }
+}
+
 fn resolve_package_import_internal_legacy(package_cache: &FZenPackageContext, package_header: &FZenPackageHeader, import: FPackageObjectIndex) -> anyhow::Result<ResolvedZenImport> {
     // Since we do not know which imported package this import is coming from because imported object indices are black box, iterate all of them and find the one that has a matching export
     for imported_package_id in &package_header.imported_packages {
@@ -409,12 +491,12 @@ fn begin_build_summary(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
     let zen_versions: FZenPackageVersioningInfo = builder.zen_package.versioning_info.clone();
 
     // If the zen package is unversioned, fallback package version is not provided, we have not logged it before
-    if builder.zen_package.is_unversioned && builder.package_context.fallback_package_file_version.is_none() && builder.package_context.log.allow_stdout() {
+    if builder.zen_package.is_unversioned && builder.package_context.fallback_package_file_version.is_none() {
         // using inner state lock to flag whether we have logged something once xd
         let mut state_lock = builder.package_context.inner_state.write().unwrap();
         if !state_lock.has_logged_detected_package_version {
             state_lock.has_logged_detected_package_version = true;
-            log!(
+            info!(
                 builder.package_context.log,
                 "Detected package version: FPackageFileVersion(UE4: {}, UE5: {}), EZenPackageVersion: {}",
                 zen_versions.package_file_version.file_version_ue4,
@@ -528,6 +610,47 @@ fn find_or_add_resolved_import(builder: &mut LegacyAssetBuilder, import: &Resolv
     new_import_index
 }
 
+fn resolve_verse_cell_import(builder: &mut LegacyAssetBuilder, cell_import_index: usize) -> anyhow::Result<()> {
+    let cell_import: FPackageObjectIndex = builder.zen_package.cell_import_map[cell_import_index].clone();
+
+    let (package_name, verse_path) = if cell_import.kind() == FPackageObjectIndexType::ScriptImport {
+        // Script import refers to a verse script cell that is imported from the native import store. Resolve it
+        if let Some(script_cells) = &builder.package_context.script_cells {
+            if let Some(resolved_native_cell) = script_cells.find_script_cell(&cell_import) {
+                (resolved_native_cell.associated_package_name, resolved_native_cell.verse_path)
+            } else {
+                // This is a script import that is not in the script cell store. We cannot reverse the hash in this case
+                bail!("Cannot resolve native Verse Cell import {} in package {} due to import missing in the Script Cells Store", cell_import, builder.zen_package.package_name());
+            }
+        } else {
+            // We need verse script cells store to be available to reverse lookup script cells by their hash
+            bail!("Cannot resolve native Verse Cell import in package {} import without Script Cells Store context", builder.zen_package.package_name());
+        }
+    } else if cell_import.kind() == FPackageObjectIndexType::PackageImport {
+        // This is an import of cell export from another package
+        resolve_cell_package_import(&builder.package_context, &builder.zen_package, cell_import)?
+    } else {
+        bail!("Verse cell import is not a Script Import or Package Import. Did not expect Null or Export package index in the verse cell import table");
+    };
+
+    // Cell imports are resolved relative to their owner package, so we need to resolve the package name first
+    let package_zen_import = ResolvedZenImport {
+        class_package: CORE_OBJECT_PACKAGE_NAME.to_string(),
+        class_name: PACKAGE_CLASS_NAME.to_string(),
+        outer: None,
+        object_name: package_name
+    };
+    let package_import_index = find_or_add_resolved_import(builder, &package_zen_import);
+
+    // We can add the cell import directly now that we know the package import index. Since cell import indices do not change by addition of package imports,
+    // we do not have to deal with re-shuffling them to match the original import order later
+    builder.legacy_package.cell_imports.push(FCellImport{
+        package_index: package_import_index,
+        verse_path: Utf8String(verse_path),
+    });
+    Ok({})
+}
+
 // Builds the import map entries for the legacy package. Returns true if some imports failed to resolve
 fn build_import_map(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
     for import_index in 0..builder.zen_package.import_map.len() {
@@ -545,7 +668,7 @@ fn build_import_map(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
             // TODO: Do not log messages that refer to packages that have failed loading previously not to spam the output. There should be a better way to handle this.
             let loading_error_message = err.to_string();
             if !loading_error_message.contains("failed loading previously") {
-                log!(
+                info!(
                     builder.package_context.log,
                     "Failed to resolve import map object {} (index {}) for package {}: {}",
                     import_object_index,
@@ -574,6 +697,23 @@ fn build_import_map(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
         }
         // Track the original position of this import in the import map. We will need to re-sort the imports and exports later to stick to it
         builder.original_import_order.insert(import_index, import_map_index.to_import_index() as usize);
+    }
+
+    // Resolve verse cell imports. Logic here is considerably simpler since cell import map will never have holes, and does not need to be reordered later
+    for cell_import_index in 0..builder.zen_package.cell_import_map.len() {
+        let cell_import_object_index = builder.zen_package.cell_import_map[cell_import_index];
+
+        if cell_import_object_index.is_null() {
+            // Hole in the cell import map is unexpected, but could be produced by retoc if conversion to legacy asset was not successful for the import
+            warning!(builder.package_context.log, "Unexpected null object index in cell import map at index {} for package {}", cell_import_index, builder.zen_package.package_name());
+            builder.legacy_package.cell_imports.push(FCellImport{package_index: FPackageIndex::create_import(0), verse_path: Utf8String::default()});
+        } else if let Err(cell_import_resolve_error) = resolve_verse_cell_import(builder, cell_import_index) {
+            if !cell_import_resolve_error.to_string().contains("failed to resolve verse paths previously") {
+                warning!(builder.package_context.log, "Failed to resolve cell import map object {} (index {}) for package {}: {}",
+                    cell_import_object_index, cell_import_index, builder.zen_package.package_name(), cell_import_resolve_error);
+            }
+            builder.legacy_package.cell_imports.push(FCellImport{package_index: FPackageIndex::create_import(0), verse_path: Utf8String::default()});
+        }
     }
     Ok(())
 }
@@ -663,6 +803,34 @@ fn build_export_map(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
             current_export_serial_offset += export_serial_size;
         }
     }
+
+    // Remap cell exports if the package has them
+    if !builder.zen_package.cell_export_map.is_empty() {
+        // We need verse paths to resolve cell exports
+        let verse_path_lookup = builder.package_context.lookup_verse_cell_paths(builder.package_id)?;
+
+        for cell_export_index in 0..builder.zen_package.cell_export_map.len() {
+            let zen_cell_export: FCellExportMapEntry = builder.zen_package.as_ref().cell_export_map[cell_export_index].clone();
+
+            let cpp_class_info_string = builder.zen_package.name_map.get(zen_cell_export.cpp_class_info).to_string();
+            let cpp_class_info = builder.legacy_package.name_map.store(&cpp_class_info_string);
+
+            let verse_path = if zen_cell_export.public_export_hash != 0 {
+                Utf8String(verse_path_lookup.get(&zen_cell_export.public_export_hash)
+                    .ok_or_else(|| anyhow!("Failed to resolve verse path for export {} of package {}", cell_export_index, builder.zen_package.package_name()))?.clone())
+            } else { Utf8String::default() };
+
+            let serial_offset = zen_cell_export.cooked_serial_offset as i64;
+            let serial_layout_size = zen_cell_export.cooked_serial_layout_size as i64;
+            let serial_size = zen_cell_export.cooked_serial_size as i64;
+
+            builder.legacy_package.cell_exports.push(FCellExport{
+                cpp_class_info, verse_path, serial_offset, serial_layout_size, serial_size,
+                first_export_dependency_index: -1, ..FCellExport::default()
+            });
+        }
+    }
+
     Ok(())
 }
 
@@ -675,8 +843,8 @@ struct FStandaloneExportDependencies {
     create_before_create: Vec<FPackageIndex>,
 }
 fn resolve_export_dependencies_internal_dependency_bundles(builder: &mut LegacyAssetBuilder, export_dependencies: &mut [FStandaloneExportDependencies]) {
-    for (export_index, bundle_header) in builder.zen_package.dependency_bundle_headers.iter().enumerate() {
-        let dependencies = &mut export_dependencies[export_index];
+    for (extended_export_index, bundle_header) in builder.zen_package.dependency_bundle_headers.iter().enumerate() {
+        let dependencies = &mut export_dependencies[extended_export_index];
 
         // Extract dependencies from zen first
         let first_dependency_index = bundle_header.first_entry_index as usize;
@@ -720,19 +888,6 @@ fn resolve_export_dependencies_internal_dependency_bundles(builder: &mut LegacyA
     }
 }
 
-#[derive(Copy, Clone, Default)]
-struct ExternalDependencyBundleExportState {
-    import_index: FPackageObjectIndex,
-    has_been_created: bool,
-    has_been_serialized: bool,
-    load_order_index: i64,
-}
-
-#[derive(Clone)]
-struct ExportBundleGroup {
-    export_indices: Vec<usize>,
-    command_type: EExportCommandType,
-}
 fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAssetBuilder, export_dependencies: &mut [FStandaloneExportDependencies]) -> anyhow::Result<()> {
     // "to export" is the one that depends on the given state of the "from export/import", e.g. "to export" is the export that has "from export/import" as a dependency
     let mut add_export_dependency = |from_index: FPackageIndex, to_export_index: usize, from_type: EExportCommandType, to_type: EExportCommandType| -> anyhow::Result<()> {
@@ -854,7 +1009,7 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
             if let Err(err) = import_package_result {
                 let loading_error_message = err.to_string();
                 if !loading_error_message.contains("failed loading previously") {
-                    log!(
+                    info!(
                         builder.package_context.log,
                         "Failed to resolve a preload dependency on package {} for package {} ({}): {}",
                         imported_package_id,
@@ -887,7 +1042,7 @@ fn resolve_export_dependencies_internal_dependency_arcs(builder: &mut LegacyAsse
 
                 // Failure to create a full zen import is pretty bad here as well, but could still potentially be recovered from
                 if let Err(resolution_error_message) = resolved_from_import_result {
-                    log!(
+                    info!(
                         builder.package_context.log,
                         "Failed to resolve a preload dependency on package {} ({}) export {} for package {} ({}): {}",
                         imported_package_id,
@@ -956,12 +1111,32 @@ fn apply_standalone_dependencies_to_package(builder: &mut LegacyAssetBuilder, ex
         builder.legacy_package.preload_dependencies.append(&mut dependencies.serialize_before_create);
         builder.legacy_package.preload_dependencies.append(&mut dependencies.create_before_create);
     }
+
+    // Apply dependencies for cell exports as well
+    for (cell_export_index, cell_export) in builder.legacy_package.cell_exports.iter_mut().enumerate() {
+        let dependencies = &mut export_dependencies[builder.legacy_package.exports.len() + cell_export_index];
+
+        // If we have no dependencies altogether, do not write first dependency import on the export
+        if dependencies.create_before_serialize.is_empty() && dependencies.serialize_before_serialize.is_empty() {
+            continue;
+        }
+
+        // Set the index of the preload dependencies start, and the numbers of each dependency
+        cell_export.first_export_dependency_index = builder.legacy_package.preload_dependencies.len() as i32;
+        cell_export.serialize_before_serialize_dependencies = dependencies.serialize_before_serialize.len() as i32;
+        cell_export.create_before_serialize_dependencies = dependencies.create_before_serialize.len() as i32;
+
+        // Append preload dependencies for this cell export now to the legacy package
+        builder.legacy_package.preload_dependencies.append(&mut dependencies.serialize_before_serialize);
+        builder.legacy_package.preload_dependencies.append(&mut dependencies.create_before_serialize);
+    }
 }
 
 fn resolve_export_dependencies(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
     // Create standalone dependency objects first
-    let mut export_dependencies: Vec<FStandaloneExportDependencies> = Vec::with_capacity(builder.legacy_package.exports.len());
-    for _ in 0..builder.legacy_package.exports.len() {
+    let total_export_count = builder.legacy_package.exports.len() + builder.legacy_package.cell_exports.len();
+    let mut export_dependencies: Vec<FStandaloneExportDependencies> = Vec::with_capacity(total_export_count);
+    for _ in 0..total_export_count {
         export_dependencies.push(FStandaloneExportDependencies::default());
     }
 
@@ -1004,7 +1179,7 @@ fn resolve_prestream_package_imports(builder: &mut LegacyAssetBuilder) -> anyhow
         // Failure to resolve a prestream package reference is not critical to the package generation
         let resolved_prestream_package = builder.package_context.lookup(*prestream_package_id);
         if resolved_prestream_package.is_err() {
-            log!(builder.package_context.log, "Failed to resolve a pre-stream request to the package {} from package {}", prestream_package_id.clone(), builder.zen_package.package_name());
+            info!(builder.package_context.log, "Failed to resolve a pre-stream request to the package {} from package {}", prestream_package_id.clone(), builder.zen_package.package_name());
             continue;
         }
 
@@ -1015,9 +1190,7 @@ fn resolve_prestream_package_imports(builder: &mut LegacyAssetBuilder) -> anyhow
         let object_name = builder.legacy_package.name_map.store(&resolved_package_name);
 
         // Log that we have resolved the pre-stream request successfully
-        if builder.package_context.log.verbose_enabled() {
-            log!(builder.package_context.log, "Resolved pre-stream package request {} from package {}", resolved_package_name.clone(), builder.legacy_package.summary.package_name.clone());
-        }
+        verbose!(builder.package_context.log, "Resolved pre-stream package request {} from package {}", resolved_package_name.clone(), builder.legacy_package.summary.package_name.clone());
 
         builder.legacy_package.imports.push(FObjectImport {
             class_package,
@@ -1091,7 +1264,7 @@ fn finalize_asset(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
             // Attempt to handle this case gracefully by emitting a null import map entry. This allows us not to fail on extracting packages that might load fine otherwise (albeit with information loss)
             // Log the warning regardless though because the information is lost
             if !builder.has_failed_import_map_entries {
-                log!(
+                info!(
                     builder.package_context.log,
                     "Failed to find import map entry to fill the hole at {} while filling import map up to size {} for package {}. Null import map entry will be used instead",
                     final_import_index,
@@ -1130,13 +1303,16 @@ fn finalize_asset(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
         x.outer_index = remap_package_index(x.outer_index);
     }
     for x in builder.legacy_package.imports.iter_mut() {
-        x.outer_index = remap_package_index(x.outer_index)
+        x.outer_index = remap_package_index(x.outer_index);
     }
     for x in builder.legacy_package.data_resources.iter_mut() {
-        x.outer_index = remap_package_index(x.outer_index)
+        x.outer_index = remap_package_index(x.outer_index);
     }
     for x in builder.legacy_package.preload_dependencies.iter_mut() {
         *x = remap_package_index(*x);
+    }
+    for x in builder.legacy_package.cell_imports.iter_mut() {
+        x.package_index = remap_package_index(x.package_index);
     }
     Ok(())
 }

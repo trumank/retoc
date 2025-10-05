@@ -221,6 +221,7 @@ fn compress_shader(shader_data: &[u8], compression_method: CompressionMethod) ->
 }
 
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub(crate) struct IoStoreShaderCodeArchive {
     version: EIoStoreShaderLibraryVersion,
     header: FIoStoreShaderCodeArchiveHeader,
@@ -433,6 +434,7 @@ impl FShaderLibraryHeader {
 
 #[derive(Debug, Copy, Clone, Display, FromRepr)]
 #[repr(u8)]
+#[allow(unused)]
 enum EShaderFrequency {
     Vertex = 0,
     Mesh = 1,
@@ -639,7 +641,7 @@ fn build_shader_asset_metadata_from_io_store_packages(store_access: &dyn IoStore
 
     // Make sure container header version is actually available first
     if container_header_version.is_empty() {
-        log!(log, "WARNING: Skipping shader asset metadata build for shader library because container header version is not present");
+        warning!(log, "Skipping shader asset metadata build for shader library because container header version is not present");
         return (0, ShaderAssetInfoFileRoot::default());
     }
     let mut shader_map_hash_to_package_names: HashMap<FSHAHash, Vec<String>> = HashMap::new();
@@ -660,14 +662,14 @@ fn build_shader_asset_metadata_from_io_store_packages(store_access: &dyn IoStore
             // Skip this package if we could not actually read its data from the container
             let package_data_buffer = store_access.read(FIoChunkId::from_package_id(package_id, 0, EIoChunkType::ExportBundleData));
             if let Err(error_message) = package_data_buffer {
-                log!(log, "WARNING: Skipping reference to shader maps {referenced_shader_map_hashes:?} from package {package_id:?} because it's data could not be read: {error_message}");
+                warning!(log, "Skipping reference to shader maps {referenced_shader_map_hashes:?} from package {package_id:?} because it's data could not be read: {error_message}");
                 continue;
             }
 
             // Skip this package if we could not resolve package name from it's serialized data
             let package_header = FZenPackageHeader::get_package_name(&mut Cursor::new(&package_data_buffer.unwrap()), container_header_version.unwrap());
             if let Err(error_message) = package_header {
-                log!(log, "WARNING: Skipping reference to shader maps {referenced_shader_map_hashes:?} from package {package_id:?} because it failed to parse as a valid asset: {error_message}");
+                warning!(log, "Skipping reference to shader maps {referenced_shader_map_hashes:?} from package {package_id:?} because it failed to parse as a valid asset: {error_message}");
                 continue;
             }
             let package_name = package_header.unwrap();
@@ -796,22 +798,20 @@ pub(crate) fn rebuild_shader_library_from_io_store(store_access: &dyn IoStoreTra
     let result_shader_asset_metadata_buffer = serde_json::to_vec_pretty(&shader_asset_info)?;
 
     // Print shader library statistics to stdout if allowed
-    if log.allow_stdout() {
-        let compression_ratio = f64::round((io_store_shader_library.total_shader_code_size as f64 / shader_code.shader_code_buffer.len() as f64) * 100.0f64) as i64;
-        log!(
-            log,
-            "Shader Library {} statistics: Shared Shaders: {}; Unique Shaders: {}; Detached Shaders: {}; Shader Maps: {} (referenced by {} packages), Uncompressed Size: {}MB, Compressed Size: {}MB, Compression Ratio: {}%",
-            library_name.clone(),
-            shader_code.total_shared_shaders,
-            shader_code.total_unique_shaders,
-            shader_code.total_detached_shaders,
-            shader_library.shader_map_entries.len(),
-            total_package_references,
-            io_store_shader_library.total_shader_code_size / 1024 / 1024,
-            shader_code.shader_code_buffer.len() / 1024 / 1024,
-            compression_ratio,
-        );
-    }
+    let compression_ratio = f64::round((io_store_shader_library.total_shader_code_size as f64 / shader_code.shader_code_buffer.len() as f64) * 100.0f64) as i64;
+    info!(
+        log,
+        "Shader Library {} statistics: Shared Shaders: {}; Unique Shaders: {}; Detached Shaders: {}; Shader Maps: {} (referenced by {} packages), Uncompressed Size: {}MB, Compressed Size: {}MB, Compression Ratio: {}%",
+        library_name.clone(),
+        shader_code.total_shared_shaders,
+        shader_code.total_unique_shaders,
+        shader_code.total_detached_shaders,
+        shader_library.shader_map_entries.len(),
+        total_package_references,
+        io_store_shader_library.total_shader_code_size / 1024 / 1024,
+        shader_code.shader_code_buffer.len() / 1024 / 1024,
+        compression_ratio,
+    );
     Ok((result_shader_library_buffer, result_shader_asset_metadata_buffer))
 }
 
@@ -1188,22 +1188,20 @@ pub(crate) fn write_io_store_library(store_writer: &mut IoStoreWriter, raw_shade
     store_writer.write_chunk(shader_library_chunk_id, Some(shader_library_path), &io_store_shader_library_buffer)?;
 
     // Write statistics
-    if log.allow_stdout() {
-        let recompression_ratio = f64::round((total_library_compressed_size as f64 / total_compressed_groups_size as f64) * 100.0f64) as i64;
-        let compression_ratio = f64::round((total_library_uncompressed_size as f64 / total_compressed_groups_size as f64) * 100.0f64) as i64;
-        log!(
-            log,
-            "Shader Library {} statistics: Shader Groups: {}, Shader Maps: {}, Uncompressed Size: {}MB, Original Compressed Size: {}MB, Total Group Compressed Size: {}MB, Recompression Ratio: {}%, Total Compression Ratio: {}%",
-            UEPath::new(shader_library_path).file_stem().unwrap().to_string(),
-            io_store_library_header.shader_group_entries.len(),
-            io_store_library_header.shader_map_entries.len(),
-            total_library_uncompressed_size / 1024 / 1024,
-            total_library_compressed_size / 1024 / 1024,
-            total_compressed_groups_size / 1024 / 1024,
-            recompression_ratio,
-            compression_ratio
-        );
-    }
+    let recompression_ratio = f64::round((total_library_compressed_size as f64 / total_compressed_groups_size as f64) * 100.0f64) as i64;
+    let compression_ratio = f64::round((total_library_uncompressed_size as f64 / total_compressed_groups_size as f64) * 100.0f64) as i64;
+    info!(
+        log,
+        "Shader Library {} statistics: Shader Groups: {}, Shader Maps: {}, Uncompressed Size: {}MB, Original Compressed Size: {}MB, Total Group Compressed Size: {}MB, Recompression Ratio: {}%, Total Compression Ratio: {}%",
+        UEPath::new(shader_library_path).file_stem().unwrap().to_string(),
+        io_store_library_header.shader_group_entries.len(),
+        io_store_library_header.shader_map_entries.len(),
+        total_library_uncompressed_size / 1024 / 1024,
+        total_library_compressed_size / 1024 / 1024,
+        total_compressed_groups_size / 1024 / 1024,
+        recompression_ratio,
+        compression_ratio
+    );
     Ok(())
 }
 
@@ -1222,7 +1220,6 @@ mod test {
             assert_eq!(library_version, 1, "expected shader library header version to be initial");
             FIoStoreShaderCodeArchiveHeader::deserialize(x, EIoStoreShaderLibraryVersion::Initial)
         })?;
-        //dbg!(shader_library_header.shader_group_entries);
 
         assert_eq!(shader_library_header.shader_group_entries.len(), 535);
         shader_library_header.shader_entries.iter().for_each(|x| {

@@ -2,7 +2,7 @@ use std::{
     io::{BufWriter, Seek, Write},
     path::{Path, PathBuf},
 };
-
+use std::io::Cursor;
 use crate::{
     EIoChunkType, FPackageId, UEPath, UEPathBuf, align_usize,
     chunk_id::FIoChunkIdRaw,
@@ -13,6 +13,7 @@ use anyhow::{Context, Result};
 use fs_err as fs;
 
 pub(crate) struct IoStoreWriter {
+    #[allow(unused)]
     toc_path: PathBuf,
     toc_stream: BufWriter<fs::File>,
     cas_stream: BufWriter<fs::File>,
@@ -105,7 +106,7 @@ impl IoStoreWriter {
     pub(crate) fn finalize(mut self) -> Result<()> {
         if let Some(container_header) = &self.container_header {
             let mut chunk_buffer = vec![];
-            container_header.ser(&mut chunk_buffer)?;
+            container_header.serialize(&mut Cursor::new(&mut chunk_buffer))?;
             // container header is always aligned for AES for some reason
             chunk_buffer.resize(align_usize(chunk_buffer.len(), 16), 0);
 

@@ -103,6 +103,7 @@ impl Writeable for FEngineVersion {
 }
 
 #[derive(Debug, Clone, Default)]
+#[allow(unused)]
 pub(crate) struct FLegacyPackageVersioningInfo {
     pub(crate) legacy_file_version: i32,
     pub(crate) package_file_version: FPackageFileVersion,
@@ -114,6 +115,7 @@ impl FLegacyPackageVersioningInfo {
     pub(crate) const LEGACY_FILE_VERSION_UE5: i32 = -8;
     pub(crate) const LEGACY_FILE_VERSION_UE4: i32 = -7;
     pub(crate) const VER_UE3_LATEST: i32 = 864;
+    #[allow(unused)]
     pub(crate) const VER_UE4_LATEST: i32 = 522;
 }
 impl Readable for FLegacyPackageVersioningInfo {
@@ -212,6 +214,8 @@ pub(crate) struct FLegacyPackageFileSummary {
     pub(crate) soft_object_paths: FCountOffsetPair,
     pub(crate) exports: FCountOffsetPair,
     pub(crate) imports: FCountOffsetPair,
+    pub(crate) cell_exports: FCountOffsetPair,
+    pub(crate) cell_imports: FCountOffsetPair,
     // empty placeholder for cooked packages
     pub(crate) depends_offset: i32,
     pub(crate) package_guid: FGuid,
@@ -284,6 +288,15 @@ impl FLegacyPackageFileSummary {
 
         let exports: FCountOffsetPair = s.de()?;
         let imports: FCountOffsetPair = s.de()?;
+
+        // Read cell export map and cell import map location information on UE 5.6+
+        let (cell_exports, cell_imports) = if versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::VerseCells as i32 {
+            (s.de()?, s.de()?)
+        } else { (FCountOffsetPair::default(), FCountOffsetPair::default()) };
+
+        // Metadata will never be serialized for cooked packages, so this value is not used but is always written regardless
+        let _metadata_offset: i32 = if versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::VerseCells as i32 { s.de()? } else { -1 };
+
         // Serialized for cooked packages, but is always an empty array for each export. We need it to calculate the size of the exports though
         let depends_offset: i32 = s.de()?;
 
@@ -353,6 +366,8 @@ impl FLegacyPackageFileSummary {
             soft_object_paths,
             exports,
             imports,
+            cell_exports,
+            cell_imports,
             depends_offset,
             package_guid,
             package_source,
@@ -419,6 +434,19 @@ impl FLegacyPackageFileSummary {
 
         s.ser(&self.exports)?;
         s.ser(&self.imports)?;
+
+        // Write cell export map and cell import map location information on UE 5.6+
+        if self.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::VerseCells as i32 {
+            s.ser(&self.cell_exports)?;
+            s.ser(&self.cell_imports)?;
+        }
+
+        // Metadata will never be serialized for cooked packages, so this value is always 0. Metadata is only written for UE 5.6+
+        let metadata_offset: i32 = 0;
+        if self.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::VerseCells as i32 {
+            s.ser(&metadata_offset)?;
+        }
+
         // Serialized for cooked packages, but is always an empty array for each export
         s.ser(&self.depends_offset)?;
 
@@ -513,6 +541,7 @@ pub(crate) struct FPackageNameMap {
     name_lookup: HashMap<String, usize>,
 }
 impl FPackageNameMap {
+    #[allow(unused)]
     pub(crate) fn create() -> Self {
         FPackageNameMap { names: Vec::new(), name_lookup: HashMap::new() }
     }
@@ -797,6 +826,73 @@ impl FObjectExport {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct FCellExport {
+    pub(crate) cpp_class_info: FMinimalName,
+    pub(crate) verse_path: Utf8String,
+    pub(crate) serial_offset: i64,
+    pub(crate) serial_layout_size: i64,
+    pub(crate) serial_size: i64,
+    pub(crate) first_export_dependency_index: i32,
+    pub(crate) serialize_before_serialize_dependencies: i32,
+    pub(crate) create_before_serialize_dependencies: i32,
+}
+impl FCellExport {
+    #[instrument(skip_all, name = "FCellExport")]
+    pub(crate) fn deserialize<S: Read>(s: &mut S, _summary: &FLegacyPackageFileSummary) -> Result<Self> {
+        let cpp_class_info: FMinimalName = s.de()?;
+        let verse_path: Utf8String = s.de()?;
+        let serial_offset: i64 = s.de()?;
+        let serial_layout_size: i64 = s.de()?;
+        let serial_size: i64 = s.de()?;
+        let first_export_dependency: i32 = s.de()?;
+        let serialization_before_serialization_dependencies: i32 = s.de()?;
+        let create_before_serialization_dependencies: i32 = s.de()?;
+        Ok(FCellExport {
+            cpp_class_info,
+            verse_path,
+            serial_offset,
+            serial_layout_size,
+            serial_size,
+            first_export_dependency_index: first_export_dependency,
+            serialize_before_serialize_dependencies: serialization_before_serialization_dependencies,
+            create_before_serialize_dependencies: create_before_serialization_dependencies,
+        })
+    }
+    #[instrument(skip_all, name = "FCellExport")]
+    fn serialize<S: Write>(&self, s: &mut S, _summary: &FLegacyPackageFileSummary) -> Result<()> {
+        s.ser(&self.cpp_class_info)?;
+        s.ser(&self.verse_path)?;
+        s.ser(&self.serial_offset)?;
+        s.ser(&self.serial_layout_size)?;
+        s.ser(&self.serial_size)?;
+        s.ser(&self.first_export_dependency_index)?;
+        s.ser(&self.serialize_before_serialize_dependencies)?;
+        s.ser(&self.create_before_serialize_dependencies)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct FCellImport {
+    pub(crate) package_index: FPackageIndex,
+    pub(crate) verse_path: Utf8String,
+}
+impl FCellImport {
+    #[instrument(skip_all, name = "FCellImport")]
+    pub(crate) fn deserialize<S: Read>(s: &mut S, _summary: &FLegacyPackageFileSummary) -> Result<Self> {
+        let package_index: FPackageIndex = s.de()?;
+        let verse_path: Utf8String = s.de()?;
+        Ok(FCellImport { package_index, verse_path })
+    }
+    #[instrument(skip_all, name = "FCellImport")]
+    fn serialize<S: Write>(&self, s: &mut S, _summary: &FLegacyPackageFileSummary) -> Result<()> {
+        s.ser(&self.package_index)?;
+        s.ser(&self.verse_path)?;
+        Ok(())
+    }
+}
+
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
 #[repr(u32)]
 pub(crate) enum EObjectDataResourceVersion {
@@ -873,6 +969,8 @@ pub(crate) struct FLegacyPackageHeader {
     pub(crate) name_map: FPackageNameMap,
     pub(crate) imports: Vec<FObjectImport>,
     pub(crate) exports: Vec<FObjectExport>,
+    pub(crate) cell_imports: Vec<FCellImport>,
+    pub(crate) cell_exports: Vec<FCellExport>,
     pub(crate) preload_dependencies: Vec<FPackageIndex>,
     pub(crate) data_resources: Vec<FObjectDataResource>,
     pub(crate) data_resource_version: Option<EObjectDataResourceVersion>,
@@ -909,6 +1007,28 @@ impl FLegacyPackageHeader {
             exports.push(object_export);
         }
 
+        // Deserialize cell import map
+        let mut cell_imports: Vec<FCellImport> = Vec::with_capacity(package_summary.cell_imports.count as usize);
+        if package_summary.cell_imports.count > 0 {
+            let cell_imports_start_offset = package_summary_offset + package_summary.cell_imports.offset as u64;
+            s.seek(SeekFrom::Start(cell_imports_start_offset))?;
+            for _ in 0..package_summary.cell_imports.count {
+                let cell_import: FCellImport = FCellImport::deserialize(s, &package_summary)?;
+                cell_imports.push(cell_import);
+            }
+        }
+
+        // Deserialize cell export map
+        let mut cell_exports: Vec<FCellExport> = Vec::with_capacity(package_summary.cell_exports.count as usize);
+        if package_summary.cell_exports.count > 0 {
+            let cell_exports_start_offset = package_summary_offset + package_summary.cell_exports.offset as u64;
+            s.seek(SeekFrom::Start(cell_exports_start_offset))?;
+            for _ in 0..package_summary.cell_exports.count {
+                let cell_export: FCellExport = FCellExport::deserialize(s, &package_summary)?;
+                cell_exports.push(cell_export);
+            }
+        }
+
         // Deserialize preload dependencies
         let preload_dependencies_start_offset = package_summary_offset + package_summary.preload_dependencies.offset as u64;
         s.seek(SeekFrom::Start(preload_dependencies_start_offset))?;
@@ -934,6 +1054,8 @@ impl FLegacyPackageHeader {
             name_map,
             imports,
             exports,
+            cell_imports,
+            cell_exports,
             preload_dependencies,
             data_resources,
             data_resource_version,
@@ -973,6 +1095,27 @@ impl FLegacyPackageHeader {
         };
         for object_export in &self.exports {
             FObjectExport::serialize(object_export, s, &package_summary)?;
+        }
+
+        // Serialize cell import map
+        let cell_imports_start_offset = (s.stream_position()? - package_summary_offset) as i32;
+        package_summary.cell_imports = FCountOffsetPair {
+            count: self.cell_imports.len() as i32,
+            offset: cell_imports_start_offset,
+        };
+        for cell_import in &self.cell_imports {
+            FCellImport::serialize(cell_import, s, &package_summary)?;
+        }
+
+        // Serialize cell export map
+        let cell_exports_start_offset_from_stream_start = s.stream_position()?;
+        let cell_exports_start_offset = (s.stream_position()? - package_summary_offset) as i32;
+        package_summary.cell_exports = FCountOffsetPair {
+            count: self.cell_exports.len() as i32,
+            offset: cell_exports_start_offset,
+        };
+        for cell_export in &self.cell_exports {
+            FCellExport::serialize(cell_export, s, &package_summary)?;
         }
 
         // Serialize depends map. This is just an empty placeholder for cooked assets
@@ -1041,6 +1184,16 @@ impl FLegacyPackageHeader {
 
             end_of_last_export_offset = max(end_of_last_export_offset, modified_object_export.serial_offset + modified_object_export.serial_size);
             FObjectExport::serialize(&modified_object_export, s, &package_summary)?;
+        }
+
+        // Same applies to cell exports, their serial offsets include total header size, even though they are split into a separate file
+        s.seek(SeekFrom::Start(cell_exports_start_offset_from_stream_start))?;
+        for cell_export in &self.cell_exports {
+            let mut modified_cell_export = cell_export.clone();
+            modified_cell_export.serial_offset += total_header_size as i64;
+
+            end_of_last_export_offset = max(end_of_last_export_offset, modified_cell_export.serial_offset + modified_cell_export.serial_size);
+            FCellExport::serialize(&modified_cell_export, s, &package_summary)?;
         }
 
         // This would be written directly after the exports blobs. Even though this value is never used in cooked games, we can infer it by looking at the furthest written export blob and setting to be directly after it
@@ -1153,6 +1306,7 @@ pub(crate) struct FSerializedAssetBundle {
 
 // Constants for use by asset conversion
 pub(crate) const CORE_OBJECT_PACKAGE_NAME: &str = "/Script/CoreUObject";
+#[allow(unused)]
 pub(crate) const ENGINE_PACKAGE_NAME: &str = "/Script/Engine";
 pub(crate) const OBJECT_CLASS_NAME: &str = "Object";
 pub(crate) const CLASS_CLASS_NAME: &str = "Class";

@@ -1,5 +1,6 @@
 use std::{io::Read, io::Write};
-
+use std::fmt::{Display, Formatter};
+use std::ops::{Deref, DerefMut};
 use anyhow::Result;
 use byteorder::{LE, ReadBytesExt, WriteBytesExt};
 use tracing::instrument;
@@ -236,6 +237,26 @@ impl Writeable for i64 {
         Ok(stream.write_i64::<LE>(*self)?)
     }
 }
+impl Readable for f32 {
+    fn de<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(stream.read_f32::<LE>()?)
+    }
+}
+impl Writeable for f32 {
+    fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
+        Ok(stream.write_f32::<LE>(*self)?)
+    }
+}
+impl Readable for f64 {
+    fn de<S: Read>(stream: &mut S) -> Result<Self> {
+        Ok(stream.read_f64::<LE>()?)
+    }
+}
+impl Writeable for f64 {
+    fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
+        Ok(stream.write_f64::<LE>(*self)?)
+    }
+}
 
 #[instrument(skip_all)]
 pub(crate) fn read_array<S: Read, T, F>(len: usize, stream: &mut S, mut f: F) -> Result<Vec<T>>
@@ -279,4 +300,53 @@ pub(crate) fn write_string<S: Write>(stream: &mut S, value: &str) -> Result<()> 
         stream.write_u16::<LE>(0)?;
     }
     Ok(())
+}
+
+#[instrument(skip_all)]
+pub(crate) fn read_utf8_string<S : Read>(stream: &mut S) -> Result<String> {
+    let len: i32 = stream.de()?;
+    let mut chars = vec![0; len as usize];
+    stream.read_exact(&mut chars)?;
+    Ok(String::from_utf8(chars).unwrap())
+}
+
+pub(crate) fn write_utf8_string<S : Write>(stream: &mut S, value: &str) -> Result<()> {
+    let len: i32 = value.len() as i32;
+    stream.ser(&len)?;
+    stream.write_all(value.as_bytes())?;
+    Ok({})
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct Utf8String(pub(crate) String);
+impl Display for Utf8String {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl AsRef<str> for Utf8String {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+impl Deref for Utf8String {
+    type Target = String;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl DerefMut for Utf8String {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl Readable for Utf8String {
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        Ok(Self(read_utf8_string(s)?))
+    }
+}
+impl Writeable for Utf8String {
+    fn ser<S: Write>(&self, stream: &mut S) -> Result<()> {
+        write_utf8_string(stream, &self.0)
+    }
 }

@@ -117,6 +117,7 @@ enum FieldValue {
 macro_rules! unwrap_field {
     ($func_name:ident, $variant:ident, $type:ty) => {
         impl FieldValue {
+            #[allow(unused)]
             fn $func_name(&self) -> &$type {
                 match self {
                     FieldValue::$variant(value) => &value,
@@ -129,6 +130,7 @@ macro_rules! unwrap_field {
 macro_rules! unwrap_field_mut {
     ($func_name:ident, $variant:ident, $type:ty) => {
         impl FieldValue {
+            #[allow(unused)]
             fn $func_name(&mut self) -> &mut $type {
                 match self {
                     FieldValue::$variant(value) => value,
@@ -202,7 +204,7 @@ fn read_field<S: Read>(stream: &mut Ctx<S>, mut tag: ECbFieldTypeFlags) -> Resul
                 FieldValue::UniformObject(fields)
             }
             ECbFieldType::Array => {
-                let size = varint::read_var_uint(stream)?;
+                let _size = varint::read_var_uint(stream)?;
                 let count = varint::read_var_uint(stream)?;
                 let mut fields = vec![];
                 for _ in 0..count {
@@ -211,7 +213,7 @@ fn read_field<S: Read>(stream: &mut Ctx<S>, mut tag: ECbFieldTypeFlags) -> Resul
                 FieldValue::Array(fields)
             }
             ECbFieldType::UniformArray => {
-                let size = varint::read_var_uint(stream)?;
+                let _size = varint::read_var_uint(stream)?;
                 let count = varint::read_var_uint(stream)?;
                 let tag: ECbFieldTypeFlags = stream.de()?;
                 let mut fields = vec![];

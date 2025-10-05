@@ -1,18 +1,21 @@
-use anyhow::{Result, anyhow, bail};
+use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use std::str::FromStr;
 use strum::FromRepr;
 use tracing::instrument;
 
 use crate::align_usize;
 use crate::container_header::{EIoContainerHeaderVersion, StoreEntry};
-use crate::name_map::{EMappedNameType, read_name_batch, read_name_batch_parts, write_name_batch, write_name_batch_parts};
+use crate::name_map::{read_name_batch, read_name_batch_parts, write_name_batch, write_name_batch_parts, EMappedNameType};
 use crate::script_objects::FPackageObjectIndex;
 use crate::ser::{WriteExt, Writeable};
 use crate::version_heuristics::{heuristic_zen_has_bulk_data, heuristic_zen_package_version};
 use crate::{
-    EIoStoreTocVersion, FGuid, FPackageId, FSHAHash, ReadExt, Readable, align_u64, break_down_name_string,
-    name_map::{FMappedName, FNameMap},
+    align_u64, break_down_name_string, name_map::{FMappedName, FNameMap}, EIoStoreTocVersion, FGuid, FPackageId, FSHAHash, ReadExt,
+    Readable,
 };
 
 pub(crate) fn get_package_name(data: &[u8], container_header_version: EIoContainerHeaderVersion) -> Result<String> {
@@ -311,6 +314,7 @@ pub(crate) enum EExportFilterFlags {
 // This is only a small set of object flags that we want to interpret
 #[derive(Debug, Clone, Copy, PartialEq, FromRepr)]
 #[repr(u32)]
+#[allow(unused)]
 pub(crate) enum EObjectFlags {
     Public = 0x00000001,
     Standalone = 0x00000002,
@@ -385,6 +389,39 @@ impl FExportMapEntry {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[repr(C)] // Needed to determine the number of cell export entries
+pub(crate) struct FCellExportMapEntry {
+    pub(crate) cooked_serial_offset: u64,
+    pub(crate) cooked_serial_layout_size: u64,
+    pub(crate) cooked_serial_size: u64,
+    pub(crate) cpp_class_info: FMappedName,
+    pub(crate) public_export_hash: u64,
+}
+impl Readable for FCellExportMapEntry {
+    #[instrument(skip_all, name = "FCellExportMapEntry")]
+    fn de<S: Read>(s: &mut S) -> Result<Self> {
+        Ok(Self {
+            cooked_serial_offset: s.de()?,
+            cooked_serial_layout_size: s.de()?,
+            cooked_serial_size: s.de()?,
+            cpp_class_info: s.de()?,
+            public_export_hash: s.de()?,
+        })
+    }
+}
+impl Writeable for FCellExportMapEntry {
+    #[instrument(skip_all, name = "FCellExportMapEntry")]
+    fn ser<S: Write>(&self, s: &mut S) -> Result<()> {
+        s.ser(&self.cooked_serial_offset)?;
+        s.ser(&self.cooked_serial_layout_size)?;
+        s.ser(&self.cooked_serial_size)?;
+        s.ser(&self.cpp_class_info)?;
+        s.ser(&self.public_export_hash)?;
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, FromRepr)]
 #[repr(u32)]
 pub(crate) enum EExportCommandType {
@@ -450,6 +487,58 @@ impl Writeable for FDependencyBundleHeader {
         s.ser(&self.create_before_serialize_dependencies)?;
         s.ser(&self.serialize_before_serialize_dependencies)?;
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct VerseScriptCell {
+    /// Name of the UPackage associated with this script cell. For intrinsics this is /Script/CoreUObject
+    pub(crate) associated_package_name: String,
+    /// Verse path to the script cell. This is a verse format path and not an object path
+    pub(crate) verse_path: String,
+}
+impl Display for VerseScriptCell {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}!{}", &self.associated_package_name, &self.verse_path)
+    }
+}
+impl FromStr for VerseScriptCell {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (package_name, verse_path) = s.split_once('!')
+            .ok_or_else(|| anyhow!("Verse cell format must be '<package_name>!<verse_path>'"))?;
+        Ok(VerseScriptCell { associated_package_name: package_name.to_string(), verse_path: verse_path.to_string() })
+    }
+}
+
+/// This is similar to FGlobalImportStore in UE, except that it only handles Verse ScriptCells.
+/// ScriptObjects are handled by scriptobjects.bin which is more accurate and contains game specific extensions
+/// Verse script cells are only used for VM Intrinsics currently, and as such, there are very few definitions and no game-specific ones
+/// So we can just store them here, and allow adding additional intrinsics on demand if necessary
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ZenScriptCellsStore {
+    script_cells: HashMap<FPackageObjectIndex, VerseScriptCell>,
+}
+impl ZenScriptCellsStore {
+    /// Creates an empty verse script cells store
+    pub(crate) fn create_empty() -> Self {
+        Self::default()
+    }
+    /// Adds Verse VM Intrinsics to the script cells store
+    pub(crate) fn add_vm_intrinsics(&mut self) {
+        self.add_script_cell(VerseScriptCell{associated_package_name: "/Script/CoreUObject".into(), verse_path: "(/Verse.org/Verse/(/Verse.org/Verse:)Abs:)Native".into()});
+        self.add_script_cell(VerseScriptCell{associated_package_name: "/Script/CoreUObject".into(), verse_path: "(/Verse.org/Verse/(/Verse.org/Verse:)Ceil:)Native".into()});
+        self.add_script_cell(VerseScriptCell{associated_package_name: "/Script/CoreUObject".into(), verse_path: "(/Verse.org/Verse/(/Verse.org/Verse:)Floor:)Native".into()});
+        self.add_script_cell(VerseScriptCell{associated_package_name: "/Script/CoreUObject".into(), verse_path: "(/Verse.org/Verse/(/Verse.org/Verse:)ConcatenateMaps:)Native".into()});
+    }
+    /// Adds a script cell to the store. Package object index will be automatically derived from the verse path
+    pub(crate) fn add_script_cell(&mut self, script_cell: VerseScriptCell) {
+        let script_object_index = FPackageObjectIndex::create_script_import_from_verse_path(&script_cell.verse_path);
+        self.script_cells.insert(script_object_index, script_cell);
+    }
+    /// Retrieves script cell by the package object index
+    pub(crate) fn find_script_cell(&self, script_object_index: &FPackageObjectIndex) -> Option<VerseScriptCell> {
+        self.script_cells.get(&script_object_index).cloned()
     }
 }
 
@@ -634,6 +723,7 @@ impl Writeable for FExportBundleHeader {
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, FromRepr)]
 #[repr(i32)]
+#[allow(unused)]
 pub(crate) enum EUnrealEngineObjectUE5Version {
     InitialVersion = 1000,
     NamesReferencedFromExportData = 1001,
@@ -649,9 +739,14 @@ pub(crate) enum EUnrealEngineObjectUE5Version {
     PropertyTagExtensionAndOverridableSerialization = 1011,
     PropertyTagCompleteTypeName = 1012,
     AssetRegistryPackageBuildDependencies = 1013,
+    MetadataSerializationOffset = 1014,
+    VerseCells = 1015,
+    PackageSavedHash = 1016,
+    OsSubObjectShadowSerialization = 1017,
 }
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, FromRepr)]
 #[repr(i32)]
+#[allow(unused)]
 pub(crate) enum EUnrealEngineObjectUE4Version {
     AddedPackageOwner = 518,
     SkinweightProfileDataLayoutChanges = 519,
@@ -720,6 +815,8 @@ pub(crate) struct FZenPackageHeader {
     pub(crate) internal_dependency_arcs: Vec<FInternalDependencyArc>,
     pub(crate) external_package_dependencies: Vec<ExternalPackageDependency>,
     pub(crate) container_header_version: EIoContainerHeaderVersion,
+    pub(crate) cell_import_map: Vec<FPackageObjectIndex>,
+    pub(crate) cell_export_map: Vec<FCellExportMapEntry>,
 }
 impl FZenPackageHeader {
     pub(crate) fn package_name(&self) -> String {
@@ -756,6 +853,19 @@ impl FZenPackageHeader {
         let package_start_offset = s.stream_position()?;
         let summary: FZenPackageSummary = FZenPackageSummary::deserialize(s, header_version)?;
         let optional_versioning_info: Option<FZenPackageVersioningInfo> = if summary.has_versioning_info != 0 { Some(s.de()?) } else { None };
+
+        // For UE PackageVersion >= EUnrealEngineObjectUE5Version::VERSE_CELLS is checked here, however at this point we do not know the package file version for the package
+        // We do know the container header version though, and VERSE_CELLS is introduced as a part of UE 5.6, which ships with header_version == EIoContainerHeaderVersion::SoftPackageReferencesOffset
+        // so we can check for that instead and get the correct result without having to know the engine version at this point
+        let cell_import_map_offset: i32;
+        let cell_export_map_offset: i32;
+        if header_version >= EIoContainerHeaderVersion::SoftPackageReferencesOffset {
+            cell_import_map_offset = s.de()?;
+            cell_export_map_offset = s.de()?;
+        } else {
+            cell_import_map_offset = summary.export_bundle_entries_offset;
+            cell_export_map_offset = summary.export_bundle_entries_offset;
+        }
 
         let name_map = if header_version > EIoContainerHeaderVersion::Initial {
             FNameMap::deserialize(s, EMappedNameType::Package)?
@@ -813,14 +923,23 @@ impl FZenPackageHeader {
 
         let import_map_count = (summary.export_map_offset - summary.import_map_offset) as usize / size_of::<FPackageObjectIndex>();
         let import_map_start_offset = package_start_offset + summary.import_map_offset as u64;
-
         s.seek(SeekFrom::Start(import_map_start_offset))?;
         let import_map: Vec<FPackageObjectIndex> = s.de_ctx(import_map_count)?;
-        let export_map_count = (summary.export_bundle_entries_offset - summary.export_map_offset) as usize / size_of::<FExportMapEntry>();
-        let export_map_start_offset = package_start_offset + summary.export_map_offset as u64;
 
+        let export_map_count = (cell_import_map_offset - summary.export_map_offset) as usize / size_of::<FExportMapEntry>();
+        let export_map_start_offset = package_start_offset + summary.export_map_offset as u64;
         s.seek(SeekFrom::Start(export_map_start_offset))?;
         let export_map: Vec<FExportMapEntry> = s.de_ctx(export_map_count)?;
+
+        let cell_import_map_count = (cell_export_map_offset - cell_import_map_offset) as usize / size_of::<FPackageObjectIndex>();
+        let cell_import_map_start_offset = package_start_offset + cell_import_map_offset as u64;
+        s.seek(SeekFrom::Start(cell_import_map_start_offset))?;
+        let cell_import_map: Vec<FPackageObjectIndex> = s.de_ctx(cell_import_map_count)?;
+
+        let cell_export_map_count = (summary.export_bundle_entries_offset - cell_export_map_offset) as usize / size_of::<FCellExportMapEntry>();
+        let cell_export_map_start_offset = package_start_offset + cell_export_map_offset as u64;
+        s.seek(SeekFrom::Start(cell_export_map_start_offset))?;
+        let cell_export_map: Vec<FCellExportMapEntry> = s.de_ctx(cell_export_map_count)?;
 
         let mut export_bundle_headers: Vec<FExportBundleHeader> = Vec::new();
 
@@ -958,6 +1077,8 @@ impl FZenPackageHeader {
             internal_dependency_arcs,
             external_package_dependencies,
             container_header_version: header_version,
+            cell_import_map,
+            cell_export_map,
         })
     }
 
@@ -970,10 +1091,22 @@ impl FZenPackageHeader {
         let package_summary_offset = s.stream_position()?;
         FZenPackageSummary::serialize(&package_summary, s, container_header_version)?;
 
+        // Position of the cell import and export map offsets to seek to write the correct values later
+        let mut cell_import_export_map_data_offset: u64 = 0;
+        let mut cell_import_map_offset: i32 = 0;
+        let mut cell_export_map_offset: i32 = 0;
+
         if container_header_version > EIoContainerHeaderVersion::Initial {
             // Write versioning info if this package is not unversioned
             if package_summary.has_versioning_info != 0 {
                 s.ser(&self.versioning_info)?;
+            }
+
+            // Write placeholder cell import and export map offsets for UE5.6+
+            if self.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::VerseCells as i32 {
+                cell_import_export_map_data_offset = s.stream_position()?;
+                s.ser(&cell_import_map_offset)?;
+                s.ser(&cell_export_map_offset)?;
             }
 
             // Serialize name map directly after the package
@@ -1049,6 +1182,25 @@ impl FZenPackageHeader {
         package_summary.export_map_offset = (s.stream_position()? - package_summary_offset) as i32;
         for export_map_entry in &self.export_map {
             s.ser(export_map_entry)?;
+        }
+
+        // Write cell import map and then cell export map after export map for UE 5.6+
+        if self.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::VerseCells as i32 {
+            cell_import_map_offset = (s.stream_position()? - package_summary_offset) as i32;
+            for cell_import_map_package_index in &self.cell_import_map {
+                s.ser(cell_import_map_package_index)?;
+            }
+            cell_export_map_offset = (s.stream_position()? - package_summary_offset) as i32;
+            for cell_export_map_entry in &self.cell_export_map {
+                s.ser(cell_export_map_entry)?;
+            }
+
+            // We also have to go back and patch up the placeholder offsets now that we know their actual values
+            let cell_import_export_map_end_offset = s.stream_position()?;
+            s.seek(SeekFrom::Start(cell_import_export_map_data_offset))?;
+            s.ser(&cell_import_map_offset)?;
+            s.ser(&cell_export_map_offset)?;
+            s.seek(SeekFrom::Start(cell_import_export_map_end_offset))?;
         }
 
         // Export bundle entries start directly after export map
@@ -1163,7 +1315,6 @@ mod test {
     use crate::PackageTestMetadata;
 
     use super::*;
-    use crate::legacy_asset::convert_localized_package_name_to_source;
     use anyhow::Context as _;
     use fs_err as fs;
     use std::{io::BufReader, path::Path};
@@ -1190,14 +1341,14 @@ mod test {
         let metadata = serde_json::from_slice::<PackageTestMetadata>(&fs::read(path.with_extension("metadata.json"))?)?;
 
         let header = FZenPackageHeader::deserialize(&mut stream, metadata.store_entry, metadata.toc_version, metadata.container_header_version, metadata.package_file_version)?;
-        let package_name = header.package_name();
+        let _package_name = header.package_name();
 
         //assert_eq!(package_name, "/Game/Billiards/Blueprints/BP_Russian_pool_table");
         //assert_eq!(header.name_map.get(header.export_map[5].object_name), "SCS_Node_10");
 
-        dbg!(package_name.clone());
-        dbg!(convert_localized_package_name_to_source(&package_name));
-        dbg!(header.source_package_name());
+        // dbg!(package_name.clone());
+        // dbg!(convert_localized_package_name_to_source(&package_name));
+        // dbg!(header.source_package_name());
         //dbg!(header);
         Ok(())
     }

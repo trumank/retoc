@@ -182,6 +182,7 @@ struct IoStoreBackend {
     containers: Vec<Box<dyn IoStoreTrait>>,
 }
 impl IoStoreBackend {
+    #[allow(unused)]
     pub fn new() -> Result<Self> {
         Ok(Self { containers: vec![] })
     }
@@ -306,6 +307,7 @@ impl IoStoreTrait for IoStoreBackend {
 
 pub struct IoStoreContainer {
     name: String,
+    #[allow(unused)]
     path: PathBuf,
     toc: Toc,
     cas: FilePool,
@@ -345,6 +347,7 @@ impl IoStoreContainer {
 
         Ok(container)
     }
+    #[allow(unused)]
     pub fn container_path(&self) -> &Path {
         self.path.as_ref()
     }
@@ -455,9 +458,9 @@ mod test {
             "pakchunk7-Windows",
         ];
         containers.sort_by(|a, b| sort_container_name(b).cmp(&sort_container_name(a)));
-        for container in containers {
-            eprintln!("{:?}", sort_container_name(container));
-        }
+        //for container in containers {
+            //eprintln!("{:?}", sort_container_name(container));
+        //}
         assert_eq!(
             containers,
             [

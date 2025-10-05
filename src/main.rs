@@ -16,11 +16,12 @@ mod version;
 mod version_heuristics;
 mod zen;
 mod zen_asset_conversion;
+mod verse_vm_types;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use bitflags::bitflags;
 use clap::Parser;
-use compression::{CompressionMethod, decompress};
+use compression::{decompress, CompressionMethod};
 use container_header::StoreEntry;
 use file_pool::FilePool;
 use fs_err as fs;
@@ -39,8 +40,8 @@ use std::ffi::OsStr;
 use std::fmt::{Debug, Display, Formatter};
 use std::io::BufWriter;
 use std::path::Path;
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::RwLock;
 use std::{
     collections::HashMap,
     io::{BufReader, Cursor, Read, Seek, SeekFrom, Write},
@@ -53,7 +54,7 @@ use tracing::instrument;
 use version::EngineVersion;
 use zen_asset_conversion::ConvertedZenAssetBundle;
 
-use name_map::{EMappedNameType, FNameMap, write_name_batch_parts};
+use name_map::{write_name_batch_parts, EMappedNameType, FNameMap};
 use script_objects::{FPackageObjectIndex, FScriptObjectEntry};
 
 #[derive(Parser, Debug)]
@@ -144,6 +145,9 @@ struct ActionToLegacy {
     /// Skip conversion of shader libraries
     #[arg(long)]
     no_shaders: bool,
+    /// Skip extraction of script objects
+    #[arg(long)]
+    no_script_objects: bool,
     /// Skip compression of shader libraries
     #[arg(long)]
     no_compres_shaders: bool,
@@ -154,6 +158,10 @@ struct ActionToLegacy {
     /// Engine version override
     #[arg(long)]
     version: Option<EngineVersion>,
+
+    /// Allows specifying additional Verse script cells to be considered for verse native cell import resolution
+    #[arg(long)]
+    script_cell: Vec<VerseScriptCell>,
 
     /// Verbose logging
     #[arg(short, long)]
@@ -182,6 +190,10 @@ struct ActionToZen {
     /// Engine version
     #[arg(long)]
     version: EngineVersion,
+
+    /// Allows specifying additional Verse script cells to be considered for verse native cell import resolution
+    #[arg(long)]
+    script_cell: Vec<VerseScriptCell>,
 
     /// Verbose logging
     #[arg(short, long)]
@@ -735,7 +747,7 @@ impl FileReaderTrait for PakFileReader {
 }
 
 fn action_to_legacy(args: ActionToLegacy, config: Arc<Config>) -> Result<()> {
-    let log = Log::new(args.verbose, args.debug);
+    let log = Log::new_stdout(args.verbose, args.debug);
     if args.dry_run {
         action_to_legacy_inner(args, config, &NullFileWriter, &log)?;
     } else if args.output.extension() == Some(std::ffi::OsStr::new("pak")) {
@@ -783,11 +795,26 @@ fn action_to_legacy_inner(args: ActionToLegacy, config: Arc<Config>, file_writer
     if !args.no_shaders {
         action_to_legacy_shaders(&args, file_writer, &*iostore, log)?;
     }
+    if !args.no_script_objects && iostore.container_file_version().is_some() && iostore.container_file_version().unwrap() > EIoStoreTocVersion::PerfectHash {
+        let script_objects = iostore.load_script_objects()?;
+        let mut script_objects_buffer: Vec<u8> = Vec::new();
+        script_objects.serialize_new(&mut Cursor::new(&mut script_objects_buffer))?;
+        file_writer.write_file(String::from("scriptobjects.bin"), false, script_objects_buffer)?;
+    }
     Ok(())
 }
 
 fn progress_style() -> indicatif::ProgressStyle {
     indicatif::ProgressStyle::with_template("[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {wide_msg}").unwrap().progress_chars("##-")
+}
+
+fn build_verse_cell_store(script_cells: &Vec<VerseScriptCell>) -> Arc<ZenScriptCellsStore> {
+    let mut mutable_cell_store = ZenScriptCellsStore::create_empty();
+    mutable_cell_store.add_vm_intrinsics();
+    for additional_script_cell in script_cells {
+        mutable_cell_store.add_script_cell(additional_script_cell.clone());
+    }
+    Arc::new(mutable_cell_store)
 }
 
 fn action_to_legacy_assets(args: &ActionToLegacy, file_writer: &dyn FileWriterTrait, iostore: &dyn IoStoreTrait, log: &Log) -> Result<()> {
@@ -803,8 +830,11 @@ fn action_to_legacy_assets(args: &ActionToLegacy, file_writer: &dyn FileWriterTr
         packages_to_extract.push((package_info, package_path));
     }
 
+    // Construct Verse Cell Store and populate it with intrinsics, as well as command line overrides
+    let script_cell_store = build_verse_cell_store(&args.script_cell);
+
     let package_file_version: Option<FPackageFileVersion> = args.version.map(|v| v.package_file_version());
-    let package_context = FZenPackageContext::create(iostore, package_file_version, log);
+    let package_context = FZenPackageContext::create(iostore, package_file_version, log, Some(script_cell_store.clone()));
 
     let count = packages_to_extract.len();
     let failed_count = AtomicUsize::new(0);
@@ -822,7 +852,7 @@ fn action_to_legacy_assets(args: &ActionToLegacy, file_writer: &dyn FileWriterTr
 
         let res = asset_conversion::build_legacy(&package_context, package_info.id(), UEPath::new(&path), file_writer).with_context(|| format!("Failed to convert {}", package_path.clone()));
         if let Err(err) = res {
-            log!(log, "{err:#}");
+            info!(log, "{err:#}");
             failed_count.fetch_add(1, Ordering::SeqCst);
         }
         prog_ref.inspect(|p| p.inc(1));
@@ -839,7 +869,7 @@ fn action_to_legacy_assets(args: &ActionToLegacy, file_writer: &dyn FileWriterTr
     log.set_progress(None);
 
     let failed_count = failed_count.load(Ordering::SeqCst);
-    log!(log, "Extracted {} ({failed_count} failed) legacy assets to {:?}", count - failed_count, args.output);
+    info!(log, "Extracted {} ({failed_count} failed) legacy assets to {:?}", count - failed_count, args.output);
 
     Ok(())
 }
@@ -864,7 +894,7 @@ fn action_to_legacy_shaders(args: &ActionToLegacy, file_writer: &dyn FileWriterT
         libraries_extracted += 1;
     }
 
-    log!(log, "Extracted {} shader code libraries to {:?}", libraries_extracted, args.output);
+    info!(log, "Extracted {} shader code libraries to {:?}", libraries_extracted, args.output);
 
     Ok(())
 }
@@ -880,9 +910,10 @@ fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
 
     let mut writer = IoStoreWriter::new(&args.output, toc_version, Some(container_header_version), mount_point.into())?;
 
-    let log = Log::new(args.verbose, args.debug);
+    let log = Log::new_stdout(args.verbose, args.debug);
     let mut asset_paths = vec![];
     let mut shader_lib_paths = vec![];
+    let mut script_objects: Option<Arc<ZenScriptObjects>> = None;
 
     let check_path = |path: &UEPath| {
         if args.filter.is_empty() { true } else { args.filter.iter().any(|f| path.as_str().contains(f)) }
@@ -900,19 +931,24 @@ fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
             if files_set.contains(&uexp) {
                 asset_paths.push(path);
             } else {
-                log!(&log, "Skipping {path} because it does not have a split exports file. Are you sure the package is cooked?");
+                info!(&log, "Skipping {path} because it does not have a split exports file. Are you sure the package is cooked?");
             }
         }
         let is_shader_lib = Some("ushaderbytecode") == ext;
         if is_shader_lib && check_path(path) {
             shader_lib_paths.push(path);
         }
+        // If folder we are given contains copy of script objects, parse them and use them for VNI support and import checking
+        if toc_version > EIoStoreTocVersion::PerfectHash && path.file_name() == Some("scriptobjects.bin") {
+            let script_object_buffer = input.read(path).with_context(|| format!("Failed to read script objects file: {}", path))?;
+            script_objects = Some(Arc::new(ZenScriptObjects::deserialize_new(&mut Cursor::new(script_object_buffer))?));
+        }
     }
 
     // Convert shader libraries first, since the data contained in their asset metadata is needed to build the package store entries
     let mut package_name_to_referenced_shader_maps: HashMap<String, Vec<FSHAHash>> = HashMap::new();
     for path in shader_lib_paths {
-        log!(&log, "converting shader library {path}");
+        info!(&log, "converting shader library {path}");
         let shader_library_buffer = input.read(path)?;
         let path = UEPath::new(&path);
         let asset_metadata_filename = UEPathBuf::from(get_shader_asset_info_filename_from_library_filename(path.file_name().unwrap())?);
@@ -926,6 +962,9 @@ fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
         // Convert shader library to the container shader chunks
         shader_library::write_io_store_library(&mut writer, &shader_library_buffer, &mount_point.join(path), &log)?;
     }
+
+    // Construct Verse Cell Store and populate it with intrinsics, as well as command line overrides
+    let script_cell_store = build_verse_cell_store(&args.script_cell);
 
     let progress = Some(indicatif::ProgressBar::new(asset_paths.len() as u64).with_style(progress_style()));
     log.set_progress(progress.as_ref());
@@ -952,7 +991,8 @@ fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
                 memory_mapped_bulk_data_buffer: input.read_opt(&path.with_extension("m.ubulk"))?,
             };
 
-            let converted = zen_asset_conversion::build_zen_asset(bundle, &package_name_to_referenced_shader_maps, &mount_point.join(path), Some(args.version.package_file_version()), container_header_version, needs_asset_import_fixup)?;
+            let converted = zen_asset_conversion::build_zen_asset(bundle, &package_name_to_referenced_shader_maps, &mount_point.join(path),
+                Some(args.version.package_file_version()), container_header_version, needs_asset_import_fixup, script_objects.clone(), Some(script_cell_store.clone()), &log)?;
 
             tx.send(converted)?;
 
@@ -988,7 +1028,7 @@ fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
                 all_converted.push(converted_arc);
             }
 
-            log!(log, "Applying import fix-ups to the converted assets. Package data in memory: {}MB", total_package_data_size / 1024 / 1024);
+            info!(log, "Applying import fix-ups to the converted assets. Package data in memory: {}MB", total_package_data_size / 1024 / 1024);
             prog_ref.inspect(|x| x.set_position(0));
 
             // Process fixups on all the assets in their original processing order
@@ -996,7 +1036,7 @@ fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
                 converted.write().unwrap().fixup_legacy_external_arcs(&converted_lookup, &log)?;
                 prog_ref.inspect(|x| x.inc(1));
             }
-            log!(log, "Writing converted assets");
+            info!(log, "Writing converted assets");
             prog_ref.inspect(|x| x.set_position(0));
 
             // Write all the package data for each asset once fixups are complete
@@ -1207,7 +1247,7 @@ impl std::str::FromStr for AesKey {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         use aes::cipher::KeyInit;
-        use base64::{Engine as _, engine::general_purpose};
+        use base64::{engine::general_purpose, Engine as _};
         let try_parse = |bytes: Vec<_>| aes::Aes256::new_from_slice(&bytes).ok().map(AesKey);
         hex::decode(s.strip_prefix("0x").unwrap_or(s))
             .ok()
@@ -1433,6 +1473,7 @@ fn pak_path_to_game_path(pak_path: &UEPath) -> Option<String> {
 }
 
 #[derive(Default)]
+#[allow(unused)]
 struct Toc {
     config: Arc<Config>,
 
@@ -1462,6 +1503,7 @@ struct Toc {
     file_map_rev: HashMap<u32, String>,
     chunk_id_map: HashMap<FIoChunkId, u32>,
 }
+#[allow(unused)]
 struct TocSignatures {
     toc_signature: Vec<u8>,
     block_signature: Vec<u8>,
@@ -1616,7 +1658,7 @@ impl Toc {
             .and_then(|index| self.file_map_rev.get(index))
             .map(|path| UEPath::new(&self.directory_index.mount_point).join(path).to_string())
     }
-    //fn get_chunk_info(&self, toc_entry_index: u32) {
+    #[allow(unused)]
     fn get_chunk_info(&self, file_name: &str) -> FIoStoreTocChunkInfo {
         let toc_entry_index = self.file_map[file_name] as usize;
         let meta = &self.chunk_metas[toc_entry_index];
@@ -1665,6 +1707,7 @@ impl Toc {
             is_compressed: meta.flags.contains(FIoStoreTocEntryMetaFlags::Compressed),
         }
     }
+    #[allow(unused)]
     fn get_chunk_id_entry_index(&self, chunk_id: FIoChunkId) -> Result<u32> {
         self.chunk_id_map.get(&chunk_id).copied().with_context(|| "container does not contain entry for {chunk_id}")
     }
@@ -1783,8 +1826,8 @@ mod test {
     #[test]
     fn test_package_id() {
         let package_id = FPackageId::from_name("/ACLPlugin/ACLAnimBoneCompressionSettings");
-        let chunk_id = FIoChunkId::from_package_id(package_id, 0, EIoChunkType::ExportBundleData);
-        dbg!(chunk_id);
+        let _chunk_id = FIoChunkId::from_package_id(package_id, 0, EIoChunkType::ExportBundleData);
+        // dbg!(chunk_id);
     }
 }
 
@@ -2247,6 +2290,7 @@ impl FIoStoreTocHeader {
 }
 
 #[derive(Debug)]
+#[allow(unused)]
 struct FIoStoreTocChunkInfo {
     id: FIoChunkId,
     file_name: String,
@@ -2372,8 +2416,9 @@ impl EIoChunkType {
 
 use crate::asset_conversion::FZenPackageContext;
 use crate::container_header::EIoContainerHeaderVersion;
+use crate::script_objects::ZenScriptObjects;
 use crate::shader_library::{get_shader_asset_info_filename_from_library_filename, rebuild_shader_library_from_io_store};
-use crate::zen::FPackageFileVersion;
+use crate::zen::{FPackageFileVersion, VerseScriptCell, ZenScriptCellsStore};
 use directory_index::*;
 use zen::get_package_name;
 
@@ -2644,7 +2689,7 @@ mod directory_index {
                 index.add_file(UEPath::new(path), *data);
             }
 
-            dbg!(&index);
+            // dbg!(&index);
 
             //for d in &dir.directory_entries {
             //    println!("");
@@ -2653,7 +2698,7 @@ mod directory_index {
             let mut new_map = HashMap::new();
             index.iter_root(|user_data, path| {
                 new_map.insert(path.join("/"), user_data);
-                println!("{} = {}", path.join("/"), user_data);
+                // println!("{} = {}", path.join("/"), user_data);
             });
             assert_eq!(entries, new_map);
         }
