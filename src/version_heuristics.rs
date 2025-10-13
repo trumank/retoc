@@ -1,6 +1,6 @@
 use crate::EIoStoreTocVersion;
 use crate::container_header::EIoContainerHeaderVersion;
-use crate::legacy_asset::{EPackageFlags, FLegacyPackageFileSummary, FObjectExport, FObjectImport};
+use crate::legacy_asset::{EPackageFlags, FLegacyPackageFileSummary, FLegacyPackageVersioningInfo, FObjectExport, FObjectImport};
 use crate::zen::{EUnrealEngineObjectUE4Version, EUnrealEngineObjectUE5Version, EZenPackageVersion, FPackageFileVersion, FZenPackageSummary, FZenPackageVersioningInfo};
 use anyhow::{anyhow, bail};
 use std::io::{Cursor, Read, Seek, SeekFrom};
@@ -99,7 +99,7 @@ pub(crate) fn heuristic_package_version_from_legacy_package<S: Read + Seek>(s: &
     let stream_start_position = s.stream_position()?;
 
     // Read the members that are independent on the package version
-    let (versioning_info, names, _, _, package_flags) = FLegacyPackageFileSummary::deserialize_summary_minimal_version_independent(s)?;
+    let (versioning_info, names, _, package_flags) = FLegacyPackageFileSummary::deserialize_summary_minimal_version_independent(s)?;
     s.seek(SeekFrom::Start(stream_start_position))?;
 
     // If package is versioned, deserialize the header directly using the package version
@@ -124,16 +124,27 @@ pub(crate) fn heuristic_package_version_from_legacy_package<S: Read + Seek>(s: &
     s.read_exact(&mut header_read_payload)?;
 
     // Try these package versions for the supported engine versions. First version to read the full header size and not overflow is the presumed package version
-    let package_versions_to_try: Vec<FPackageFileVersion> = vec![
-        // Note that AssetRegistryPackageBuildDependencies and PropertyTagCompleteTypeName cannot be told apart, so package will always assume 5.5 instead of 5.4
-        FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::OsSubObjectShadowSerialization),        // UE 5.6
-        FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::AssetRegistryPackageBuildDependencies), // UE 5.5
-        FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::PropertyTagCompleteTypeName),           // UE 5.4
-        FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::DataResources),                         // UE 5.3 and 5.2
-        FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::AddSoftObjectPathList),                 // UE 5.1
-        FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::LargeWorldCoordinates),                 // UE 5.0
-        FPackageFileVersion::create_ue4(EUnrealEngineObjectUE4Version::CorrectLicenseeFlag),                   // UE 4.27 and 4.26
-    ];
+    let package_versions_to_try: Vec<FPackageFileVersion>;
+
+    // Determine set of possible package file versions for the given legacy file version
+    if versioning_info.legacy_file_version <= FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE5_6 {
+        package_versions_to_try = vec![
+            FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::OsSubObjectShadowSerialization),        // UE 5.6
+        ];
+    } else if versioning_info.legacy_file_version <= FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE5 {
+        package_versions_to_try = vec![
+            // Note that AssetRegistryPackageBuildDependencies and PropertyTagCompleteTypeName cannot be told apart, so package will always assume 5.5 instead of 5.4
+            FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::AssetRegistryPackageBuildDependencies), // UE 5.5
+            FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::PropertyTagCompleteTypeName),           // UE 5.4
+            FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::DataResources),                         // UE 5.3 and 5.2
+            FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::AddSoftObjectPathList),                 // UE 5.1
+            FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::LargeWorldCoordinates),                 // UE 5.0
+        ];
+    } else {
+        package_versions_to_try = vec![
+            FPackageFileVersion::create_ue4(EUnrealEngineObjectUE4Version::CorrectLicenseeFlag),                   // UE 4.27 and 4.26
+        ];
+    }
 
     // Try to read the package summary for each version, and read at least one import and one export
     // That should be enough to tell the relevant versions apart

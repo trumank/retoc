@@ -136,7 +136,7 @@ fn setup_zen_package_summary(builder: &mut ZenPackageBuilder) -> anyhow::Result<
     // (deferred to match name map order of editor)
     // builder.zen_package.summary.name = builder.zen_package.name_map.store(&builder.legacy_package.summary.package_name);
     // Copy size of the cooked header from the legacy package
-    builder.zen_package.summary.cooked_header_size = builder.legacy_package.summary.total_header_size as u32;
+    builder.zen_package.summary.cooked_header_size = builder.legacy_package.summary.versioning_info.total_header_size as u32;
 
     // Check if this is a localized package, and track the culture and source package name if it is
     if let Some((source_package_name, culture_name)) = convert_localized_package_name_to_source(&builder.legacy_package.summary.package_name) {
@@ -381,7 +381,7 @@ fn build_zen_export_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
 
     for export_index in 0..builder.legacy_package.exports.len() {
         let object_export = builder.legacy_package.exports[export_index].clone();
-        let total_header_size = builder.legacy_package.summary.total_header_size as u64;
+        let total_header_size = builder.legacy_package.summary.versioning_info.total_header_size as u64;
         let object_name = builder.legacy_package.name_map.get(object_export.object_name).to_string();
 
         let mut cooked_serial_offset = object_export.serial_offset as u64;
@@ -435,7 +435,7 @@ fn build_zen_export_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
 
     for cell_export_index in 0..builder.legacy_package.cell_exports.len() {
         let cell_export = builder.legacy_package.cell_exports[cell_export_index].clone();
-        let total_header_size = builder.legacy_package.summary.total_header_size as u64;
+        let total_header_size = builder.legacy_package.summary.versioning_info.total_header_size as u64;
 
         let serial_offset = cell_export.serial_offset as u64 - total_header_size;
         let serial_layout_size: u64 = cell_export.serial_layout_size as u64;
@@ -1029,7 +1029,7 @@ fn build_zen_preload_dependencies(builder: &mut ZenPackageBuilder) -> anyhow::Re
 }
 
 fn write_exports_in_bundle_order<S: Write>(writer: &mut S, builder: &ZenPackageBuilder, exports_buffer: &[u8]) -> anyhow::Result<()> {
-    let total_header_size = builder.legacy_package.summary.total_header_size as u64;
+    let total_header_size = builder.legacy_package.summary.versioning_info.total_header_size as u64;
     let mut current_export_offset: u64 = 0;
     let mut largest_exports_buffer_export_end_offset: usize = 0;
 
@@ -1337,19 +1337,33 @@ mod test {
 
     #[test]
     fn test_zen_asset_identity_conversion() -> anyhow::Result<()> {
-        // UE5.4, NoExportInfo zen header, OnDemandMetaData TOC version, and PropertyTagCompleteTypeName package file version
-        let eng = EngineVersion::UE5_4;
-        let ue5_4 = (eng.toc_version(), eng.container_header_version(), eng.package_file_version());
         // let eng = EngineVersion::UE4_27;
         // let ue4_27 = (eng.toc_version(), eng.container_header_version(), eng.package_file_version());
 
         // Disabled because export bundles and external dependencies don't match exactly
         // run_test("tests/UE4.27/TestModUI", ue4_27, Some("/Game/_AssemblyStorm/TestMod/TestModUI".to_string()))?;
+
+        let eng5_4 = EngineVersion::UE5_4;
+        let ue5_4 = (eng5_4.toc_version(), eng5_4.container_header_version(), eng5_4.package_file_version());
+
         run_test("tests/UE5.4/BP_Table_Lamp", ue5_4, None)?;
         run_test("tests/UE5.4/Randy", ue5_4, None)?;
-        run_test("tests/UE5.5/T_Test", ue5_4, None)?;
-        run_test("tests/UE5.5/SM_Cube", ue5_4, None)?;
-        run_test("tests/UE5.5/BP_ThirdPersonCharacter", ue5_4, None)?;
+
+        let eng_5_5 = EngineVersion::UE5_5;
+        let ue5_5 = (eng_5_5.toc_version(), eng_5_5.container_header_version(), eng_5_5.package_file_version());
+
+        run_test("tests/UE5.5/T_Test", ue5_5, None)?;
+        run_test("tests/UE5.5/SM_Cube", ue5_5, None)?;
+        run_test("tests/UE5.5/BP_ThirdPersonCharacter", ue5_5, None)?;
+
+        let eng5_6 = EngineVersion::UE5_6;
+        let ue5_6 = (eng5_6.toc_version(), eng5_6.container_header_version(), eng5_6.package_file_version());
+
+        run_test("tests/UE5.6/T_Quinn_01_D", ue5_6, None)?;
+        run_test("tests/UE5.6/SM_Cube", ue5_6, None)?;
+        run_test("tests/UE5.6/BP_ThirdPersonCharacter", ue5_6, None)?;
+        run_test("tests/UE5.6/M_Mannequin", ue5_6, None)?;
+        run_test("tests/UE5.6/SK_Mannequin", ue5_6, None)?;
 
         Ok(())
     }
