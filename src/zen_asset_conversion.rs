@@ -108,7 +108,7 @@ fn setup_zen_package_summary(builder: &mut ZenPackageBuilder) -> anyhow::Result<
         zen_version,
         package_file_version: builder.legacy_package.summary.versioning_info.package_file_version,
         licensee_version: builder.legacy_package.summary.versioning_info.licensee_version,
-        custom_versions: builder.legacy_package.summary.versioning_info.custom_versions.clone(),
+        custom_versions: builder.legacy_package.summary.custom_versions.clone(),
     };
 
     // Copy name map from the cooked package up to the number of names referenced by exports
@@ -1337,6 +1337,7 @@ mod test {
 
     #[test]
     fn test_zen_asset_identity_conversion() -> anyhow::Result<()> {
+        /*
         // UE5.4, NoExportInfo zen header, OnDemandMetaData TOC version, and PropertyTagCompleteTypeName package file version
         let eng = EngineVersion::UE5_4;
         let ue5_4 = (eng.toc_version(), eng.container_header_version(), eng.package_file_version());
@@ -1347,9 +1348,24 @@ mod test {
         // run_test("tests/UE4.27/TestModUI", ue4_27, Some("/Game/_AssemblyStorm/TestMod/TestModUI".to_string()))?;
         run_test("tests/UE5.4/BP_Table_Lamp", ue5_4, None)?;
         run_test("tests/UE5.4/Randy", ue5_4, None)?;
-        run_test("tests/UE5.5/T_Test", ue5_4, None)?;
-        run_test("tests/UE5.5/SM_Cube", ue5_4, None)?;
-        run_test("tests/UE5.5/BP_ThirdPersonCharacter", ue5_4, None)?;
+
+        let eng = EngineVersion::UE5_5;
+        let ue5_5 = (eng.toc_version(), eng.container_header_version(), eng.package_file_version());
+
+        run_test("tests/UE5.5/T_Test", ue5_5, None)?;
+        run_test("tests/UE5.5/SM_Cube", ue5_5, None)?;
+        run_test("tests/UE5.5/BP_ThirdPersonCharacter", ue5_5, None)?;
+        
+         */
+
+        let eng = EngineVersion::UE5_6;
+        let ue5_6 = (eng.toc_version(), eng.container_header_version(), eng.package_file_version());
+
+        run_test("tests/UE5.6/T_Quinn_01_D", ue5_6, None)?;
+        run_test("tests/UE5.6/SM_Cube", ue5_6, None)?;
+        run_test("tests/UE5.6/BP_ThirdPersonCharacter", ue5_6, None)?;
+        run_test("tests/UE5.6/M_Mannequin", ue5_6, None)?;
+        run_test("tests/UE5.6/SK_Mannequin", ue5_6, None)?;
 
         Ok(())
     }

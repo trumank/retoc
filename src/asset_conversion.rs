@@ -506,10 +506,11 @@ fn begin_build_summary(builder: &mut LegacyAssetBuilder) -> anyhow::Result<()> {
         }
     }
 
+    legacy_package_summary.custom_versions = zen_versions.custom_versions.clone();
+
     legacy_package_summary.versioning_info = FLegacyPackageVersioningInfo {
         package_file_version: zen_versions.package_file_version,
         licensee_version: zen_versions.licensee_version,
-        custom_versions: zen_versions.custom_versions.clone(),
         is_unversioned: builder.zen_package.is_unversioned,
         ..FLegacyPackageVersioningInfo::default()
     };

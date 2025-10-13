@@ -108,10 +108,10 @@ pub(crate) struct FLegacyPackageVersioningInfo {
     pub(crate) legacy_file_version: i32,
     pub(crate) package_file_version: FPackageFileVersion,
     pub(crate) licensee_version: i32,
-    pub(crate) custom_versions: Vec<FCustomVersion>,
     pub(crate) is_unversioned: bool,
 }
 impl FLegacyPackageVersioningInfo {
+    pub(crate) const LEGACY_FILE_VERSION_UE5_CONTRACT_CHANGE: i32 = -9;
     pub(crate) const LEGACY_FILE_VERSION_UE5: i32 = -8;
     pub(crate) const LEGACY_FILE_VERSION_UE4: i32 = -7;
     pub(crate) const VER_UE3_LATEST: i32 = 864;
@@ -122,13 +122,8 @@ impl Readable for FLegacyPackageVersioningInfo {
     fn de<S: Read>(s: &mut S) -> Result<Self> {
         // We can only read latest UE4 packages (4.26+) and UE5 packages, bail out if the package is too old
         let legacy_file_version: i32 = s.de()?;
-        if legacy_file_version != FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE4 && legacy_file_version != FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE5 {
-            bail!(
-                "Package file version too old: {} (Supported versions are {} for UE4 and {} for UE5)",
-                legacy_file_version,
-                FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE4,
-                FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE5
-            );
+        if legacy_file_version > FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE4 {
+            bail!("Package file version too old: {}", legacy_file_version);
         }
 
         // For versioned assets, there should only ever be the highest legacy UE3 version written here
@@ -140,21 +135,20 @@ impl Readable for FLegacyPackageVersioningInfo {
 
         // Read raw file version for UE4 and UE5 (if package is UE5)
         let raw_file_version_ue4: i32 = s.de()?;
-        let raw_file_version_ue5: i32 = if legacy_file_version == FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE5 { s.de()? } else { 0 };
+        let raw_file_version_ue5: i32 = if legacy_file_version <= FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE5 { s.de()? } else { 0 };
         let package_file_version = FPackageFileVersion {
             file_version_ue4: raw_file_version_ue4,
             file_version_ue5: raw_file_version_ue5,
         };
 
         let licensee_version: i32 = s.de()?;
-        let custom_versions: Vec<FCustomVersion> = s.de()?;
-        let is_unversioned = legacy_ue3_version == 0 && raw_file_version_ue4 == 0 && raw_file_version_ue5 == 0 && licensee_version == 0 && custom_versions.is_empty();
+
+        let is_unversioned = raw_file_version_ue4 == 0 && raw_file_version_ue5 == 0 && licensee_version == 0;
 
         Ok(Self {
             legacy_file_version,
             package_file_version,
             licensee_version,
-            custom_versions,
             is_unversioned,
         })
     }
@@ -168,7 +162,11 @@ impl Writeable for FLegacyPackageVersioningInfo {
 
         // Derive legacy file version from the presence of UE5 file version
         let legacy_file_version: i32 = if self.package_file_version.file_version_ue5 != 0 {
-            FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE5
+            if self.package_file_version.file_version_ue5 <= EUnrealEngineObjectUE5Version::AssetRegistryPackageBuildDependencies as i32 {
+                FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE5
+            } else {
+                FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE5_CONTRACT_CHANGE
+            }
         } else {
             FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE4
         };
@@ -183,14 +181,13 @@ impl Writeable for FLegacyPackageVersioningInfo {
         // Note that we should not write any versions if this package was loaded as unversioned, since our own version is only used internally and the game should still assume latest
         let raw_file_version_ue4: i32 = if self.is_unversioned { 0 } else { self.package_file_version.file_version_ue4 };
         s.ser(&raw_file_version_ue4)?;
-        if legacy_file_version == FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE5 {
+        if legacy_file_version <= FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE5 {
             let raw_file_version_ue5: i32 = if self.is_unversioned { 0 } else { self.package_file_version.file_version_ue5 };
             s.ser(&raw_file_version_ue5)?;
         }
 
         let licensee_version = if self.is_unversioned { 0 } else { self.licensee_version };
         s.ser(&licensee_version)?;
-        s.ser(&self.custom_versions.clone())?;
         Ok(())
     }
 }
@@ -206,6 +203,7 @@ pub(crate) enum EPackageFlags {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct FLegacyPackageFileSummary {
     pub(crate) versioning_info: FLegacyPackageVersioningInfo,
+    pub(crate) custom_versions: Vec<FCustomVersion>,
     pub(crate) total_header_size: i32,
     pub(crate) package_name: String,
     pub(crate) package_flags: u32,
@@ -218,6 +216,7 @@ pub(crate) struct FLegacyPackageFileSummary {
     pub(crate) cell_imports: FCountOffsetPair,
     // empty placeholder for cooked packages
     pub(crate) depends_offset: i32,
+    pub(crate) saved_hash: [u8; 20],
     pub(crate) package_guid: FGuid,
     pub(crate) package_source: u32,
     world_tile_info_data_offset: i32,
@@ -252,6 +251,7 @@ impl FLegacyPackageFileSummary {
         }
 
         let mut versioning_info: FLegacyPackageVersioningInfo = s.de()?;
+
         // We need a valid package file version to deserialize this package, so we rely on having a fallback if the package is unversioned
         if versioning_info.is_unversioned {
             if package_version_fallback.is_none() {
@@ -268,7 +268,21 @@ impl FLegacyPackageFileSummary {
             );
         }
 
-        let total_header_size: i32 = s.de()?;
+        let mut total_header_size: i32 = 0;
+        let saved_hash: [u8; 20];
+        if versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::PackageSavedHash as i32 {
+            saved_hash = s.de()?;
+            total_header_size = s.de()?;
+        } else {
+            saved_hash = [0; 20];
+        }
+
+        let custom_versions: Vec<FCustomVersion> = s.de()?;
+
+        if versioning_info.package_file_version.file_version_ue5 < EUnrealEngineObjectUE5Version::PackageSavedHash as i32 {
+            total_header_size = s.de()?;
+        }
+
         let package_name: String = s.de()?;
         let package_flags: u32 = s.de()?;
 
@@ -295,7 +309,7 @@ impl FLegacyPackageFileSummary {
         } else { (FCountOffsetPair::default(), FCountOffsetPair::default()) };
 
         // Metadata will never be serialized for cooked packages, so this value is not used but is always written regardless
-        let _metadata_offset: i32 = if versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::VerseCells as i32 { s.de()? } else { -1 };
+        let _metadata_offset: i32 = if versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::MetadataSerializationOffset as i32 { s.de()? } else { -1 };
 
         // Serialized for cooked packages, but is always an empty array for each export. We need it to calculate the size of the exports though
         let depends_offset: i32 = s.de()?;
@@ -306,7 +320,11 @@ impl FLegacyPackageFileSummary {
         // Cooked packages do not have thumbnails ever, no point in saving this
         let _thumbnail_table_offset: i32 = s.de()?;
 
-        let package_guid: FGuid = s.de()?;
+        let package_guid: FGuid = if versioning_info.package_file_version.file_version_ue5 < EUnrealEngineObjectUE5Version::PackageSavedHash as i32 {
+            s.de()?
+        } else {
+            FGuid::default()
+        };
 
         // Package generations are always 0,0 for modern packages, persistent package GUID is never written for cooked packages
         let _persistent_package_guid: FGuid = if !is_filter_editor_only { s.de()? } else { FGuid::default() };
@@ -359,6 +377,7 @@ impl FLegacyPackageFileSummary {
 
         Ok(FLegacyPackageFileSummary {
             versioning_info,
+            custom_versions,
             total_header_size,
             package_name,
             package_flags,
@@ -369,6 +388,7 @@ impl FLegacyPackageFileSummary {
             cell_exports,
             cell_imports,
             depends_offset,
+            saved_hash,
             package_guid,
             package_source,
             world_tile_info_data_offset,
@@ -383,7 +403,7 @@ impl FLegacyPackageFileSummary {
 
     // Deserializes all the information that can be safely deserialized without knowing the package version
     #[instrument(skip_all, name = "FLegacyPackageFileSummary - Minimal")]
-    pub(crate) fn deserialize_summary_minimal_version_independent<S: Read>(s: &mut S) -> Result<(FLegacyPackageVersioningInfo, FCountOffsetPair, String, i32, u32)> {
+    pub(crate) fn deserialize_summary_minimal_version_independent<S: Read>(s: &mut S) -> Result<FLegacyPackageVersioningInfo> {
         // Check asset magic first
         let asset_magic_tag: u32 = s.de()?;
         if asset_magic_tag != FLegacyPackageFileSummary::PACKAGE_FILE_TAG {
@@ -391,12 +411,8 @@ impl FLegacyPackageFileSummary {
         }
 
         let versioning_info: FLegacyPackageVersioningInfo = s.de()?;
-        let total_header_size: i32 = s.de()?;
-        let package_name: String = s.de()?;
-        let package_flags: u32 = s.de()?;
 
-        let names: FCountOffsetPair = s.de()?;
-        Ok((versioning_info, names, package_name, total_header_size, package_flags))
+        Ok(versioning_info)
     }
 
     #[instrument(skip_all, name = "FLegacyPackageFileSummary")]
@@ -414,7 +430,18 @@ impl FLegacyPackageFileSummary {
         }
 
         s.ser(&self.versioning_info.clone())?;
-        s.ser(&self.total_header_size)?;
+
+        if self.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::PackageSavedHash as i32 {
+            s.ser(&self.saved_hash)?; // TODO: does the hash need to be recomputed?
+            s.ser(&self.total_header_size)?;
+        }
+
+        s.ser(&self.custom_versions)?;
+
+        if self.versioning_info.package_file_version.file_version_ue5 < EUnrealEngineObjectUE5Version::PackageSavedHash as i32 {
+            s.ser(&self.total_header_size)?;
+        }
+
         s.ser(&self.package_name.clone())?;
         s.ser(&self.package_flags)?;
 
@@ -443,7 +470,7 @@ impl FLegacyPackageFileSummary {
 
         // Metadata will never be serialized for cooked packages, so this value is always 0. Metadata is only written for UE 5.6+
         let metadata_offset: i32 = 0;
-        if self.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::VerseCells as i32 {
+        if self.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::MetadataSerializationOffset as i32 {
             s.ser(&metadata_offset)?;
         }
 
@@ -459,7 +486,9 @@ impl FLegacyPackageFileSummary {
         let thumbnails_table_offset: i32 = 0;
         s.ser(&thumbnails_table_offset)?;
 
-        s.ser(&self.package_guid)?;
+        if self.versioning_info.package_file_version.file_version_ue5 < EUnrealEngineObjectUE5Version::PackageSavedHash as i32 {
+            s.ser(&self.package_guid)?;
+        }
 
         // Package generations are always saved as one entry for modern packages, but not used in runtime
         // Note that the FLinkerLoad expects there to still be a single generation, it will crash if there is none
