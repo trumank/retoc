@@ -5,22 +5,39 @@ well as converting between Zen assets and Legacy assets (found in .pak container
 
 ## cli
 ```console
-$ retoc --help
-Usage: retoc [OPTIONS] <COMMAND>
+Usage: retoc.exe --aes-key <AES_KEY> [OPTIONS] <COMMAND>
 
 Commands:
-  manifest    Extract manifest from .utoc
-  info        Show container info
-  list        List fils in .utoc (directory index)
-  unpack      Extracts chunks (files) from .utoc
-  to-legacy   Converts asests and shaders from Zen to Legacy
-  to-zen      Converts assets and shaders from Legacy to Zen
-  help        Print this message or the help of the given subcommand(s)
+  manifest              Extract manifest from .utoc
+  info                  Show container info
+  list                  List fils in .utoc (directory index)
+  verify                Verify IO Store container
+  unpack                Extracts chunks (files) from .utoc
+  unpack-raw            Extracts raw chunks from container
+  pack-raw              Packs directory of raw chunks into container
+  to-legacy             Converts asests and shaders from Zen to Legacy
+  to-zen                Converts assets and shaders from Legacy to Zen
+  get                   Get chunk by index and write to stdout
+  dump-test             Dump test
+  gen-script-objects    Generate script objects global container from UE reflection data JSON see https://github.com/trumank/meatloaf
+  print-script-objects  Print script objects from container
+  help                  Print this message or the help of the given subcommand(s)
 
 Options:
   -a, --aes-key <AES_KEY>
-  -h, --help               Print help
+
+      --override-container-header-version <OVERRIDE_CONTAINER_HEADER_VERSION>
+          [possible values: PreInitial, Initial, LocalizedPackages, OptionalSegmentPackages, NoExportInfo, SoftPackageReferences, SoftPackageReferencesOffset]
+      --override-toc-version <OVERRIDE_TOC_VERSION>
+          [possible values: Invalid, Initial, DirectoryIndex, PartitionSize, PerfectHash, PerfectHashWithOverflow, OnDemandMetaData, RemovedOnDemandMetaData, ReplaceIoChunkHashWithIoHash]
+  -h, --help
+          Print help
+  -V, --version
+          Print version
 ```
+
+### overrides
+Overrides may be required to extract content from certain games (usually pre-5.0 where IOStore version was not well defined). When repacking content to generate mods, the same override must be applied.
 
 ### to-legacy
 ```console
