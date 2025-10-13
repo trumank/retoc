@@ -1337,7 +1337,6 @@ mod test {
 
     #[test]
     fn test_zen_asset_identity_conversion() -> anyhow::Result<()> {
-        /*
         // UE5.4, NoExportInfo zen header, OnDemandMetaData TOC version, and PropertyTagCompleteTypeName package file version
         let eng = EngineVersion::UE5_4;
         let ue5_4 = (eng.toc_version(), eng.container_header_version(), eng.package_file_version());
@@ -1355,8 +1354,6 @@ mod test {
         run_test("tests/UE5.5/T_Test", ue5_5, None)?;
         run_test("tests/UE5.5/SM_Cube", ue5_5, None)?;
         run_test("tests/UE5.5/BP_ThirdPersonCharacter", ue5_5, None)?;
-        
-         */
 
         let eng = EngineVersion::UE5_6;
         let ue5_6 = (eng.toc_version(), eng.container_header_version(), eng.package_file_version());
