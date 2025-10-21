@@ -14,27 +14,27 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct ZenScriptObjects {
-    pub(crate) global_name_map: FNameMap,
-    pub(crate) script_objects: Vec<FScriptObjectEntry>,
-    pub(crate) script_object_lookup: HashMap<FPackageObjectIndex, FScriptObjectEntry>,
+pub struct ZenScriptObjects {
+    pub global_name_map: FNameMap,
+    pub script_objects: Vec<FScriptObjectEntry>,
+    pub script_object_lookup: HashMap<FPackageObjectIndex, FScriptObjectEntry>,
 }
 impl ZenScriptObjects {
     #[instrument(skip_all, name = "ZenScriptObjects")]
-    pub(crate) fn deserialize_new<S: Read>(s: &mut S) -> Result<Self> {
+    pub fn deserialize_new<S: Read>(s: &mut S) -> Result<Self> {
         let global_name_map: FNameMap = FNameMap::deserialize(s, EMappedNameType::Global)?;
         Ok(Self::new(s.de()?, global_name_map))
     }
     #[instrument(skip_all, name = "ZenScriptObjects")]
-    pub(crate) fn deserialize_old<S: Read>(s: &mut S, names: &[u8]) -> Result<Self> {
+    pub fn deserialize_old<S: Read>(s: &mut S, names: &[u8]) -> Result<Self> {
         let global_name_map: FNameMap = FNameMap::create_from_names(EMappedNameType::Global, read_name_batch_parts(names)?);
         Ok(Self::new(s.de()?, global_name_map))
     }
     #[instrument(skip_all, name = "ZenScriptObjects")]
-    pub(crate) fn serialize_new<S: Write>(&self, s: &mut S) -> Result<()> {
+    pub fn serialize_new<S: Write>(&self, s: &mut S) -> Result<()> {
         self.global_name_map.serialize(s)?;
         s.ser(&self.script_objects)?;
-        Ok({})
+        Ok(())
     }
     fn new(script_objects: Vec<FScriptObjectEntry>, global_name_map: FNameMap) -> Self {
         // Build lookup by package object index for fast access
@@ -44,7 +44,7 @@ impl ZenScriptObjects {
         });
         Self { global_name_map, script_objects, script_object_lookup }
     }
-    pub(crate) fn print(&self) {
+    pub fn print(&self) {
         for s in &self.script_objects {
             println!("{}:", self.global_name_map.get(s.object_name));
             println!("  global_index:    {:?}", s.global_index.value());
@@ -55,11 +55,11 @@ impl ZenScriptObjects {
 }
 
 #[derive(Debug, Copy, Clone, Default)]
-pub(crate) struct FScriptObjectEntry {
-    pub(crate) object_name: FMappedName,
-    pub(crate) global_index: FPackageObjectIndex,
-    pub(crate) outer_index: FPackageObjectIndex,
-    pub(crate) cdo_class_index: FPackageObjectIndex,
+pub struct FScriptObjectEntry {
+    pub object_name: FMappedName,
+    pub global_index: FPackageObjectIndex,
+    pub outer_index: FPackageObjectIndex,
+    pub cdo_class_index: FPackageObjectIndex,
 }
 impl Readable for FScriptObjectEntry {
     #[instrument(skip_all, name = "FScriptObjectEntry")]
@@ -85,12 +85,12 @@ impl Writeable for FScriptObjectEntry {
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Hash)]
 #[repr(C)] // Needed for sizeof to determine number of entries in package header
-pub(crate) struct FPackageObjectIndex {
+pub struct FPackageObjectIndex {
     type_and_id: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, FromRepr)]
-pub(crate) enum FPackageObjectIndexType {
+pub enum FPackageObjectIndexType {
     Export,
     ScriptImport,
     PackageImport,
@@ -98,9 +98,9 @@ pub(crate) enum FPackageObjectIndexType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub(crate) struct FPackageImportReference {
-    pub(crate) imported_package_index: u32,
-    pub(crate) imported_public_export_hash_index: u32,
+pub struct FPackageImportReference {
+    pub imported_package_index: u32,
+    pub imported_public_export_hash_index: u32,
 }
 
 impl FPackageObjectIndex {
@@ -109,59 +109,59 @@ impl FPackageObjectIndex {
     const TYPE_SHIFT: u64 = Self::INDEX_BITS;
     const INVALID_ID: u64 = !0;
 
-    pub(crate) fn create_from_raw(raw: u64) -> Self {
+    pub fn create_from_raw(raw: u64) -> Self {
         Self { type_and_id: raw }
     }
-    pub(crate) fn create(kind: FPackageObjectIndexType, value: u64) -> Self {
+    pub fn create(kind: FPackageObjectIndexType, value: u64) -> Self {
         Self {
             type_and_id: ((kind as u64) << Self::TYPE_SHIFT) | value,
         }
     }
-    pub(crate) fn create_null() -> Self {
+    pub fn create_null() -> Self {
         Self::create(FPackageObjectIndexType::Null, Self::INVALID_ID)
     }
-    pub(crate) fn create_export(export_index: u32) -> Self {
+    pub fn create_export(export_index: u32) -> Self {
         Self::create(FPackageObjectIndexType::Export, export_index as u64)
     }
-    pub(crate) fn create_script_import(object_path: &str) -> Self {
+    pub fn create_script_import(object_path: &str) -> Self {
         let import_hash = Self::generate_import_hash_from_object_path(object_path);
         Self::create(FPackageObjectIndexType::ScriptImport, import_hash)
     }
-    pub(crate) fn create_package_import(import_ref: FPackageImportReference) -> Self {
+    pub fn create_package_import(import_ref: FPackageImportReference) -> Self {
         let import_value = import_ref.imported_public_export_hash_index as u64 | ((import_ref.imported_package_index as u64) << 32);
         Self::create(FPackageObjectIndexType::PackageImport, import_value)
     }
-    pub(crate) fn create_script_import_from_verse_path(verse_path: &str) -> Self {
+    pub fn create_script_import_from_verse_path(verse_path: &str) -> Self {
         let import_hash = Self::generate_import_hash_from_verse_path(verse_path);
         Self::create(FPackageObjectIndexType::ScriptImport, import_hash)
     }
     // Function to create a legacy UE4 zen package import from the full, lower-case name of the imported/exported object using / as a separator
-    pub(crate) fn create_legacy_package_import_from_path(object_path: &str) -> Self {
+    pub fn create_legacy_package_import_from_path(object_path: &str) -> Self {
         let import_hash = Self::generate_import_hash_from_object_path(object_path);
         Self::create(FPackageObjectIndexType::PackageImport, import_hash)
     }
-    pub(crate) fn raw_index(self) -> u64 {
+    pub fn raw_index(self) -> u64 {
         self.type_and_id & Self::INDEX_MASK
     }
-    pub(crate) fn kind(self) -> FPackageObjectIndexType {
+    pub fn kind(self) -> FPackageObjectIndexType {
         FPackageObjectIndexType::from_repr((self.type_and_id >> Self::TYPE_SHIFT) as usize).unwrap()
     }
-    pub(crate) fn value(self) -> Option<u64> {
+    pub fn value(self) -> Option<u64> {
         (self.kind() != FPackageObjectIndexType::Null).then_some(self.type_and_id)
     }
-    pub(crate) fn export(self) -> Option<u32> {
+    pub fn export(self) -> Option<u32> {
         (self.kind() == FPackageObjectIndexType::Export).then_some(self.type_and_id as u32)
     }
-    pub(crate) fn package_import(self) -> Option<FPackageImportReference> {
+    pub fn package_import(self) -> Option<FPackageImportReference> {
         (self.kind() == FPackageObjectIndexType::PackageImport).then_some(FPackageImportReference {
             imported_package_index: ((self.type_and_id & FPackageObjectIndex::INDEX_MASK) >> 32) as u32,
             imported_public_export_hash_index: (self.type_and_id as u32),
         })
     }
-    pub(crate) fn is_null(self) -> bool {
+    pub fn is_null(self) -> bool {
         self.kind() == FPackageObjectIndexType::Null
     }
-    pub(crate) fn to_raw(self) -> u64 {
+    pub fn to_raw(self) -> u64 {
         self.type_and_id
     }
 

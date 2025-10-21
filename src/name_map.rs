@@ -24,7 +24,7 @@ fn name_header(name: &str) -> [u8; 2] {
     len.to_be_bytes()
 }
 
-pub(crate) fn read_name_batch<S: Read>(s: &mut S) -> Result<Vec<String>> {
+pub fn read_name_batch<S: Read>(s: &mut S) -> Result<Vec<String>> {
     let num: u32 = s.de()?;
     if num == 0 {
         return Ok(vec![]);
@@ -45,7 +45,7 @@ pub(crate) fn read_name_batch<S: Read>(s: &mut S) -> Result<Vec<String>> {
     Ok(names)
 }
 
-pub(crate) fn write_name_batch<S: Write>(s: &mut S, names: &[String]) -> Result<()> {
+pub fn write_name_batch<S: Write>(s: &mut S, names: &[String]) -> Result<()> {
     fn name_byte_size(name: &str) -> u32 {
         if name.is_ascii() { name.len() as u32 } else { name.encode_utf16().count() as u32 * 2 }
     }
@@ -78,7 +78,7 @@ pub(crate) fn write_name_batch<S: Write>(s: &mut S, names: &[String]) -> Result<
     Ok(())
 }
 
-pub(crate) fn read_name_batch_parts(names_buffer: &[u8]) -> Result<Vec<String>> {
+pub fn read_name_batch_parts(names_buffer: &[u8]) -> Result<Vec<String>> {
     let mut names = vec![];
     let mut s = Cursor::new(names_buffer);
     while s.position() < names_buffer.len() as u64 {
@@ -93,7 +93,7 @@ pub(crate) fn read_name_batch_parts(names_buffer: &[u8]) -> Result<Vec<String>> 
     Ok(names)
 }
 
-pub(crate) fn write_name_batch_parts(names: &[String]) -> Result<(Vec<u8>, Vec<u8>)> {
+pub fn write_name_batch_parts(names: &[String]) -> Result<(Vec<u8>, Vec<u8>)> {
     let mut cur_names = Cursor::new(vec![]);
     let mut cur_hashes = Cursor::new(vec![]);
 
@@ -118,41 +118,41 @@ pub(crate) fn write_name_batch_parts(names: &[String]) -> Result<(Vec<u8>, Vec<u
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct FNameMap {
+pub struct FNameMap {
     kind: EMappedNameType,
     names: Vec<String>,
     name_lookup: HashMap<String, usize>,
 }
 impl FNameMap {
     #[instrument(skip_all, "FNameMap")]
-    pub(crate) fn deserialize<S: Read>(s: &mut S, kind: EMappedNameType) -> Result<Self> {
+    pub fn deserialize<S: Read>(s: &mut S, kind: EMappedNameType) -> Result<Self> {
         let names: Vec<String> = read_name_batch(s)?;
         Ok(Self::create_from_names(kind, names))
     }
     #[instrument(skip_all, "FNameMap")]
-    pub(crate) fn serialize<S: Write>(&self, s: &mut S) -> Result<()> {
+    pub fn serialize<S: Write>(&self, s: &mut S) -> Result<()> {
         write_name_batch(s, &self.names)
     }
 }
 
 impl FNameMap {
-    pub(crate) fn create(kind: EMappedNameType) -> Self {
+    pub fn create(kind: EMappedNameType) -> Self {
         Self { kind, names: Vec::new(), name_lookup: HashMap::new() }
     }
-    pub(crate) fn create_from_names(kind: EMappedNameType, names: Vec<String>) -> Self {
+    pub fn create_from_names(kind: EMappedNameType, names: Vec<String>) -> Self {
         let mut name_lookup: HashMap<String, usize> = HashMap::with_capacity(names.len());
         for (name_index, name) in names.iter().cloned().enumerate() {
             name_lookup.insert(name, name_index);
         }
         Self { kind, names, name_lookup }
     }
-    pub(crate) fn get(&self, name: FMappedName) -> Cow<'_, str> {
+    pub fn get(&self, name: FMappedName) -> Cow<'_, str> {
         assert_eq!(name.kind(), self.kind, "Attempt to map name of the different kind in this name map Name Kind is {}, but name map kind is {}", name.kind(), self.kind);
         let n = &self.names[name.index() as usize];
         if name.number != 0 { format!("{n}_{}", name.number - 1).into() } else { n.into() }
     }
 
-    pub(crate) fn store(&mut self, name: &str) -> FMappedName {
+    pub fn store(&mut self, name: &str) -> FMappedName {
         let (name_without_number, name_number) = break_down_name_string(name);
 
         // Attempt to resolve the existing name through lookup
@@ -167,38 +167,38 @@ impl FNameMap {
         FMappedName::create(new_name_index as u32, self.kind, name_number as u32)
     }
 
-    pub(crate) fn copy_raw_names(&self) -> Vec<String> {
+    pub fn copy_raw_names(&self) -> Vec<String> {
         self.names.clone()
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Display, FromRepr, Serialize, Deserialize)]
 #[repr(u32)]
-pub(crate) enum EMappedNameType {
+pub enum EMappedNameType {
     #[default]
     Package = 0,
     Container = 1,
     Global = 2,
 }
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct FMappedName {
+pub struct FMappedName {
     index_and_type: u32,
-    pub(crate) number: u32,
+    pub number: u32,
 }
 impl FMappedName {
     const INDEX_BITS: u32 = 30;
     const INDEX_MASK: u32 = (1 << Self::INDEX_BITS) - 1;
     const TYPE_MASK: u32 = !Self::INDEX_MASK;
     const TYPE_SHIFT: u32 = Self::INDEX_BITS;
-    pub(crate) fn create(index: u32, kind: EMappedNameType, number: u32) -> Self {
+    pub fn create(index: u32, kind: EMappedNameType, number: u32) -> Self {
         let shifted_type: u32 = (kind as u32) << Self::TYPE_SHIFT;
         let index_and_type: u32 = (index & Self::INDEX_MASK) | (shifted_type & Self::TYPE_MASK);
         FMappedName { index_and_type, number }
     }
-    pub(crate) fn index(self) -> u32 {
+    pub fn index(self) -> u32 {
         self.index_and_type & Self::INDEX_MASK
     }
-    pub(crate) fn kind(self) -> EMappedNameType {
+    pub fn kind(self) -> EMappedNameType {
         let kind: u32 = (self.index_and_type & Self::TYPE_MASK) >> Self::TYPE_SHIFT;
         EMappedNameType::from_repr(kind).unwrap()
     }

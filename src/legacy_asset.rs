@@ -1,4 +1,5 @@
-use crate::logging::*;
+use crate::debug;
+use crate::logging::Log;
 use crate::version_heuristics::heuristic_package_version_from_legacy_package;
 use crate::zen::{EUnrealEngineObjectUE4Version, EUnrealEngineObjectUE5Version, FCustomVersion, FPackageFileVersion, FPackageIndex};
 use crate::{FGuid, break_down_name_string, ser::*};
@@ -11,7 +12,7 @@ use strum::FromRepr;
 use tracing::instrument;
 
 #[derive(Debug, Copy, Clone, Default)]
-pub(crate) struct FMinimalName {
+pub struct FMinimalName {
     index: i32,
     number: i32,
 }
@@ -31,9 +32,9 @@ impl Writeable for FMinimalName {
 }
 
 #[derive(Debug, Copy, Clone, Default)]
-pub(crate) struct FCountOffsetPair {
-    pub(crate) count: i32,
-    pub(crate) offset: i32,
+pub struct FCountOffsetPair {
+    pub count: i32,
+    pub offset: i32,
 }
 impl Readable for FCountOffsetPair {
     #[instrument(skip_all, name = "FCountOffsetPair")]
@@ -71,12 +72,12 @@ impl Writeable for FGenerationInfo {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct FEngineVersion {
-    pub(crate) engine_major: u16,
-    pub(crate) engine_minor: u16,
-    pub(crate) engine_patch: u16,
-    pub(crate) changelist: u32,
-    pub(crate) branch: String,
+pub struct FEngineVersion {
+    pub engine_major: u16,
+    pub engine_minor: u16,
+    pub engine_patch: u16,
+    pub changelist: u32,
+    pub branch: String,
 }
 impl Readable for FEngineVersion {
     #[instrument(skip_all, name = "FEngineVersion")]
@@ -104,22 +105,22 @@ impl Writeable for FEngineVersion {
 
 #[derive(Debug, Clone, Default)]
 #[allow(unused)]
-pub(crate) struct FLegacyPackageVersioningInfo {
-    pub(crate) legacy_file_version: i32,
-    pub(crate) package_file_version: FPackageFileVersion,
-    pub(crate) licensee_version: i32,
-    pub(crate) saved_hash: [u8; 20],
-    pub(crate) custom_versions: Vec<FCustomVersion>,
-    pub(crate) total_header_size: i32,
-    pub(crate) is_unversioned: bool,
+pub struct FLegacyPackageVersioningInfo {
+    pub legacy_file_version: i32,
+    pub package_file_version: FPackageFileVersion,
+    pub licensee_version: i32,
+    pub saved_hash: [u8; 20],
+    pub custom_versions: Vec<FCustomVersion>,
+    pub total_header_size: i32,
+    pub is_unversioned: bool,
 }
 impl FLegacyPackageVersioningInfo {
-    pub(crate) const LEGACY_FILE_VERSION_UE5_6: i32 = -9;
-    pub(crate) const LEGACY_FILE_VERSION_UE5: i32 = -8;
-    pub(crate) const LEGACY_FILE_VERSION_UE4: i32 = -7;
-    pub(crate) const VER_UE3_LATEST: i32 = 864;
+    pub const LEGACY_FILE_VERSION_UE5_6: i32 = -9;
+    pub const LEGACY_FILE_VERSION_UE5: i32 = -8;
+    pub const LEGACY_FILE_VERSION_UE4: i32 = -7;
+    pub const VER_UE3_LATEST: i32 = 864;
     #[allow(unused)]
-    pub(crate) const VER_UE4_LATEST: i32 = 522;
+    pub const VER_UE4_LATEST: i32 = 522;
 }
 impl Readable for FLegacyPackageVersioningInfo {
     fn de<S: Read>(s: &mut S) -> Result<Self> {
@@ -228,32 +229,32 @@ impl Writeable for FLegacyPackageVersioningInfo {
 
 #[derive(Debug, PartialEq)]
 #[repr(u32)]
-pub(crate) enum EPackageFlags {
+pub enum EPackageFlags {
     Cooked = 0x00000200,
     FilterEditorOnly = 0x80000000,
     UsesUnversionedProperties = 0x00002000,
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct FLegacyPackageFileSummary {
-    pub(crate) versioning_info: FLegacyPackageVersioningInfo,
-    pub(crate) package_name: String,
-    pub(crate) package_flags: u32,
-    pub(crate) names: FCountOffsetPair,
+pub struct FLegacyPackageFileSummary {
+    pub versioning_info: FLegacyPackageVersioningInfo,
+    pub package_name: String,
+    pub package_flags: u32,
+    pub names: FCountOffsetPair,
     // never written for cooked packages
-    pub(crate) soft_object_paths: FCountOffsetPair,
-    pub(crate) exports: FCountOffsetPair,
-    pub(crate) imports: FCountOffsetPair,
-    pub(crate) cell_exports: FCountOffsetPair,
-    pub(crate) cell_imports: FCountOffsetPair,
+    pub soft_object_paths: FCountOffsetPair,
+    pub exports: FCountOffsetPair,
+    pub imports: FCountOffsetPair,
+    pub cell_exports: FCountOffsetPair,
+    pub cell_imports: FCountOffsetPair,
     // empty placeholder for cooked packages
-    pub(crate) depends_offset: i32,
-    pub(crate) package_guid: FGuid,
-    pub(crate) package_source: u32,
+    pub depends_offset: i32,
+    pub package_guid: FGuid,
+    pub package_source: u32,
     world_tile_info_data_offset: i32,
     chunk_ids: Vec<i32>,
     preload_dependencies: FCountOffsetPair,
-    pub(crate) names_referenced_from_export_data_count: i32,
+    pub names_referenced_from_export_data_count: i32,
     data_resource_offset: i32,
     // empty placeholder for cooked packages
     asset_registry_data_offset: i32,
@@ -261,20 +262,20 @@ pub(crate) struct FLegacyPackageFileSummary {
     bulk_data_start_offset: i64,
 }
 impl FLegacyPackageFileSummary {
-    pub(crate) const PACKAGE_FILE_TAG: u32 = 0x9E2A83C1;
-    pub(crate) fn has_package_flags(&self, package_flags: EPackageFlags) -> bool {
+    pub const PACKAGE_FILE_TAG: u32 = 0x9E2A83C1;
+    pub fn has_package_flags(&self, package_flags: EPackageFlags) -> bool {
         (self.package_flags & package_flags as u32) != 0
     }
-    pub(crate) fn is_filter_editor_only(&self) -> bool {
+    pub fn is_filter_editor_only(&self) -> bool {
         self.has_package_flags(EPackageFlags::FilterEditorOnly)
     }
-    pub(crate) fn uses_unversioned_property_serialization(&self) -> bool {
+    pub fn uses_unversioned_property_serialization(&self) -> bool {
         self.has_package_flags(EPackageFlags::UsesUnversionedProperties)
     }
 }
 impl FLegacyPackageFileSummary {
     #[instrument(skip_all, name = "FLegacyPackageFileSummary")]
-    pub(crate) fn deserialize<S: Read>(s: &mut S, package_version_fallback: Option<FPackageFileVersion>) -> Result<Self> {
+    pub fn deserialize<S: Read>(s: &mut S, package_version_fallback: Option<FPackageFileVersion>) -> Result<Self> {
         // Check asset magic first
         let asset_magic_tag: u32 = s.de()?;
         if asset_magic_tag != FLegacyPackageFileSummary::PACKAGE_FILE_TAG {
@@ -417,7 +418,7 @@ impl FLegacyPackageFileSummary {
 
     // Deserializes all the information that can be safely deserialized without knowing the package version
     #[instrument(skip_all, name = "FLegacyPackageFileSummary - Minimal")]
-    pub(crate) fn deserialize_summary_minimal_version_independent<S: Read>(s: &mut S) -> Result<(FLegacyPackageVersioningInfo, FCountOffsetPair, String, u32)> {
+    pub fn deserialize_summary_minimal_version_independent<S: Read>(s: &mut S) -> Result<(FLegacyPackageVersioningInfo, FCountOffsetPair, String, u32)> {
         // Check asset magic first
         let asset_magic_tag: u32 = s.de()?;
         if asset_magic_tag != FLegacyPackageFileSummary::PACKAGE_FILE_TAG {
@@ -570,27 +571,27 @@ impl FLegacyPackageFileSummary {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct FPackageNameMap {
+pub struct FPackageNameMap {
     names: Vec<String>,
     name_lookup: HashMap<String, usize>,
 }
 impl FPackageNameMap {
     #[allow(unused)]
-    pub(crate) fn create() -> Self {
+    pub fn create() -> Self {
         FPackageNameMap { names: Vec::new(), name_lookup: HashMap::new() }
     }
-    pub(crate) fn create_from_names(names: Vec<String>) -> Self {
+    pub fn create_from_names(names: Vec<String>) -> Self {
         let mut name_lookup: HashMap<String, usize> = HashMap::with_capacity(names.len());
         for (name_index, name) in names.iter().cloned().enumerate() {
             name_lookup.insert(name, name_index);
         }
         Self { names, name_lookup }
     }
-    pub(crate) fn num_names(&self) -> usize {
+    pub fn num_names(&self) -> usize {
         self.names.len()
     }
     #[instrument(skip_all, name = "FPackageNameMap")]
-    pub(crate) fn read<S: Read + Seek>(stream: &mut S, summary: &FLegacyPackageFileSummary) -> Result<FPackageNameMap> {
+    pub fn read<S: Read + Seek>(stream: &mut S, summary: &FLegacyPackageFileSummary) -> Result<FPackageNameMap> {
         stream.seek(SeekFrom::Start(summary.names.offset as u64))?;
 
         let mut names: Vec<String> = Vec::with_capacity(summary.names.count as usize);
@@ -608,7 +609,7 @@ impl FPackageNameMap {
         Ok(Self { names, name_lookup })
     }
     #[instrument(skip_all, name = "FPackageNameMap")]
-    pub(crate) fn write<S: Write + Seek>(&self, stream: &mut S, summary: &mut FLegacyPackageFileSummary, package_summary_offset: u64) -> Result<()> {
+    pub fn write<S: Write + Seek>(&self, stream: &mut S, summary: &mut FLegacyPackageFileSummary, package_summary_offset: u64) -> Result<()> {
         // Tell the summary where the names start and how many there are
         summary.names.offset = (stream.stream_position()? - package_summary_offset) as i32;
         summary.names.count = self.names.len() as i32;
@@ -625,11 +626,11 @@ impl FPackageNameMap {
         }
         Ok(())
     }
-    pub(crate) fn get(&self, name: FMinimalName) -> Cow<'_, str> {
+    pub fn get(&self, name: FMinimalName) -> Cow<'_, str> {
         let bare_name = &self.names[name.index as usize];
         if name.number != 0 { format!("{bare_name}_{}", name.number - 1).into() } else { bare_name.into() }
     }
-    pub(crate) fn store(&mut self, name: &str) -> FMinimalName {
+    pub fn store(&mut self, name: &str) -> FMinimalName {
         let (name_without_number, name_number) = break_down_name_string(name);
 
         // Attempt to resolve the existing name through lookup
@@ -643,22 +644,22 @@ impl FPackageNameMap {
         self.names.push(name_without_number.to_string());
         FMinimalName { index: new_name_index as i32, number: name_number }
     }
-    pub(crate) fn copy_raw_names(&self) -> Vec<String> {
+    pub fn copy_raw_names(&self) -> Vec<String> {
         self.names.clone()
     }
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct FObjectImport {
-    pub(crate) class_package: FMinimalName,
-    pub(crate) class_name: FMinimalName,
-    pub(crate) outer_index: FPackageIndex,
-    pub(crate) object_name: FMinimalName,
-    pub(crate) is_optional: bool,
+pub struct FObjectImport {
+    pub class_package: FMinimalName,
+    pub class_name: FMinimalName,
+    pub outer_index: FPackageIndex,
+    pub object_name: FMinimalName,
+    pub is_optional: bool,
 }
 impl FObjectImport {
     #[instrument(skip_all, name = "FObjectImport")]
-    pub(crate) fn deserialize<S: Read>(s: &mut S, summary: &FLegacyPackageFileSummary) -> Result<Self> {
+    pub fn deserialize<S: Read>(s: &mut S, summary: &FLegacyPackageFileSummary) -> Result<Self> {
         let class_package: FMinimalName = s.de()?;
         let class_name: FMinimalName = s.de()?;
         let outer_index: FPackageIndex = s.de()?;
@@ -704,33 +705,33 @@ impl FObjectImport {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct FObjectExport {
-    pub(crate) class_index: FPackageIndex,
-    pub(crate) super_index: FPackageIndex,
-    pub(crate) template_index: FPackageIndex,
-    pub(crate) outer_index: FPackageIndex,
-    pub(crate) object_name: FMinimalName,
-    pub(crate) object_flags: u32,
-    pub(crate) serial_size: i64,
-    pub(crate) serial_offset: i64,
-    pub(crate) is_not_for_client: bool,
-    pub(crate) is_not_for_server: bool,
-    pub(crate) is_inherited_instance: bool,
+pub struct FObjectExport {
+    pub class_index: FPackageIndex,
+    pub super_index: FPackageIndex,
+    pub template_index: FPackageIndex,
+    pub outer_index: FPackageIndex,
+    pub object_name: FMinimalName,
+    pub object_flags: u32,
+    pub serial_size: i64,
+    pub serial_offset: i64,
+    pub is_not_for_client: bool,
+    pub is_not_for_server: bool,
+    pub is_inherited_instance: bool,
     // if false, the object must be kept for editor builds running client/server builds even if it is to be stripped based on not for server/client
-    pub(crate) is_not_always_loaded_for_editor_game: bool,
-    pub(crate) is_asset: bool,
-    pub(crate) generate_public_hash: bool,
-    pub(crate) first_export_dependency_index: i32,
-    pub(crate) serialize_before_serialize_dependencies: i32,
-    pub(crate) create_before_serialize_dependencies: i32,
-    pub(crate) serialize_before_create_dependencies: i32,
-    pub(crate) create_before_create_dependencies: i32,
-    pub(crate) script_serialization_start_offset: i64,
-    pub(crate) script_serialization_end_offset: i64,
+    pub is_not_always_loaded_for_editor_game: bool,
+    pub is_asset: bool,
+    pub generate_public_hash: bool,
+    pub first_export_dependency_index: i32,
+    pub serialize_before_serialize_dependencies: i32,
+    pub create_before_serialize_dependencies: i32,
+    pub serialize_before_create_dependencies: i32,
+    pub create_before_create_dependencies: i32,
+    pub script_serialization_start_offset: i64,
+    pub script_serialization_end_offset: i64,
 }
 impl FObjectExport {
     #[instrument(skip_all, name = "FObjectExport")]
-    pub(crate) fn deserialize<S: Read>(s: &mut S, summary: &FLegacyPackageFileSummary) -> Result<Self> {
+    pub fn deserialize<S: Read>(s: &mut S, summary: &FLegacyPackageFileSummary) -> Result<Self> {
         let class_index: FPackageIndex = s.de()?;
         let super_index: FPackageIndex = s.de()?;
         let template_index: FPackageIndex = s.de()?;
@@ -861,19 +862,19 @@ impl FObjectExport {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct FCellExport {
-    pub(crate) cpp_class_info: FMinimalName,
-    pub(crate) verse_path: Utf8String,
-    pub(crate) serial_offset: i64,
-    pub(crate) serial_layout_size: i64,
-    pub(crate) serial_size: i64,
-    pub(crate) first_export_dependency_index: i32,
-    pub(crate) serialize_before_serialize_dependencies: i32,
-    pub(crate) create_before_serialize_dependencies: i32,
+pub struct FCellExport {
+    pub cpp_class_info: FMinimalName,
+    pub verse_path: Utf8String,
+    pub serial_offset: i64,
+    pub serial_layout_size: i64,
+    pub serial_size: i64,
+    pub first_export_dependency_index: i32,
+    pub serialize_before_serialize_dependencies: i32,
+    pub create_before_serialize_dependencies: i32,
 }
 impl FCellExport {
     #[instrument(skip_all, name = "FCellExport")]
-    pub(crate) fn deserialize<S: Read>(s: &mut S, _summary: &FLegacyPackageFileSummary) -> Result<Self> {
+    pub fn deserialize<S: Read>(s: &mut S, _summary: &FLegacyPackageFileSummary) -> Result<Self> {
         let cpp_class_info: FMinimalName = s.de()?;
         let verse_path: Utf8String = s.de()?;
         let serial_offset: i64 = s.de()?;
@@ -908,13 +909,13 @@ impl FCellExport {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct FCellImport {
-    pub(crate) package_index: FPackageIndex,
-    pub(crate) verse_path: Utf8String,
+pub struct FCellImport {
+    pub package_index: FPackageIndex,
+    pub verse_path: Utf8String,
 }
 impl FCellImport {
     #[instrument(skip_all, name = "FCellImport")]
-    pub(crate) fn deserialize<S: Read>(s: &mut S, _summary: &FLegacyPackageFileSummary) -> Result<Self> {
+    pub fn deserialize<S: Read>(s: &mut S, _summary: &FLegacyPackageFileSummary) -> Result<Self> {
         let package_index: FPackageIndex = s.de()?;
         let verse_path: Utf8String = s.de()?;
         Ok(FCellImport { package_index, verse_path })
@@ -929,7 +930,7 @@ impl FCellImport {
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, FromRepr)]
 #[repr(u32)]
-pub(crate) enum EObjectDataResourceVersion {
+pub enum EObjectDataResourceVersion {
     Invalid,
     #[default]
     Initial,
@@ -949,15 +950,15 @@ impl Writeable for EObjectDataResourceVersion {
 }
 
 #[derive(Debug, Copy, Clone, Default)]
-pub(crate) struct FObjectDataResource {
-    pub(crate) flags: u32,
-    pub(crate) cooked_index: Option<u8>,
-    pub(crate) serial_offset: i64,
-    pub(crate) duplicate_serial_offset: i64,
-    pub(crate) serial_size: i64,
-    pub(crate) raw_size: i64,
-    pub(crate) outer_index: FPackageIndex,
-    pub(crate) legacy_bulk_data_flags: u32,
+pub struct FObjectDataResource {
+    pub flags: u32,
+    pub cooked_index: Option<u8>,
+    pub serial_offset: i64,
+    pub duplicate_serial_offset: i64,
+    pub serial_size: i64,
+    pub raw_size: i64,
+    pub outer_index: FPackageIndex,
+    pub legacy_bulk_data_flags: u32,
 }
 impl ReadableCtx<EObjectDataResourceVersion> for FObjectDataResource {
     fn de<S: Read>(s: &mut S, version: EObjectDataResourceVersion) -> Result<Self> {
@@ -998,19 +999,19 @@ impl Writeable for FObjectDataResource {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct FLegacyPackageHeader {
-    pub(crate) summary: FLegacyPackageFileSummary,
-    pub(crate) name_map: FPackageNameMap,
-    pub(crate) imports: Vec<FObjectImport>,
-    pub(crate) exports: Vec<FObjectExport>,
-    pub(crate) cell_imports: Vec<FCellImport>,
-    pub(crate) cell_exports: Vec<FCellExport>,
-    pub(crate) preload_dependencies: Vec<FPackageIndex>,
-    pub(crate) data_resources: Vec<FObjectDataResource>,
-    pub(crate) data_resource_version: Option<EObjectDataResourceVersion>,
+pub struct FLegacyPackageHeader {
+    pub summary: FLegacyPackageFileSummary,
+    pub name_map: FPackageNameMap,
+    pub imports: Vec<FObjectImport>,
+    pub exports: Vec<FObjectExport>,
+    pub cell_imports: Vec<FCellImport>,
+    pub cell_exports: Vec<FCellExport>,
+    pub preload_dependencies: Vec<FPackageIndex>,
+    pub data_resources: Vec<FObjectDataResource>,
+    pub data_resource_version: Option<EObjectDataResourceVersion>,
 }
 impl FLegacyPackageHeader {
-    pub(crate) fn deserialize<S: Read + Seek>(s: &mut S, package_version_fallback: Option<FPackageFileVersion>) -> Result<FLegacyPackageHeader> {
+    pub fn deserialize<S: Read + Seek>(s: &mut S, package_version_fallback: Option<FPackageFileVersion>) -> Result<FLegacyPackageHeader> {
         // Determine the package version first. We need package version to parse the summary and the rest of the header
         let package_file_version = heuristic_package_version_from_legacy_package(s, package_version_fallback)?;
 
@@ -1095,7 +1096,7 @@ impl FLegacyPackageHeader {
             data_resource_version,
         })
     }
-    pub(crate) fn serialize<S: Write + Seek>(&self, s: &mut S, desired_header_size: Option<usize>, log: &Log) -> Result<()> {
+    pub fn serialize<S: Write + Seek>(&self, s: &mut S, desired_header_size: Option<usize>, log: &Log) -> Result<()> {
         let package_summary_offset: u64 = s.stream_position()?;
         let mut package_summary: FLegacyPackageFileSummary = self.summary.clone();
 
@@ -1247,7 +1248,7 @@ impl FLegacyPackageHeader {
 }
 
 // Returns package name and package-relative path to the object
-pub(crate) fn get_package_object_full_name(package: &FLegacyPackageHeader, object_index: FPackageIndex, path_separator: char, lowercase_path: bool, package_name_override: Option<&str>) -> (String, String) {
+pub fn get_package_object_full_name(package: &FLegacyPackageHeader, object_index: FPackageIndex, path_separator: char, lowercase_path: bool, package_name_override: Option<&str>) -> (String, String) {
     // From the outermost to the innermost, e.g. SubObject;Asset;PackageName
     let mut package_object_outer_chain: Vec<FPackageIndex> = Vec::with_capacity(4);
     let mut current_object_index = object_index;
@@ -1308,7 +1309,7 @@ pub(crate) fn get_package_object_full_name(package: &FLegacyPackageHeader, objec
 }
 
 // Attempts to resolve an original package name from a localized package name. Returns None if the provided package name is not a localized package name. Returns source package name and culture name otherwise
-pub(crate) fn convert_localized_package_name_to_source(package_name: &str) -> Option<(String, String)> {
+pub fn convert_localized_package_name_to_source(package_name: &str) -> Option<(String, String)> {
     // If the first character is not a /, this is not a localized package (or a valid package name, for that matter)
     if !package_name.starts_with('/') {
         return None;
@@ -1330,19 +1331,19 @@ pub(crate) fn convert_localized_package_name_to_source(package_name: &str) -> Op
 }
 
 #[derive(Default, Clone)]
-pub(crate) struct FSerializedAssetBundle {
-    pub(crate) asset_file_buffer: Vec<u8>,                      // uasset
-    pub(crate) exports_file_buffer: Vec<u8>,                    // uexp
-    pub(crate) bulk_data_buffer: Option<Vec<u8>>,               // .ubulk
-    pub(crate) optional_bulk_data_buffer: Option<Vec<u8>>,      // .uptnl
-    pub(crate) memory_mapped_bulk_data_buffer: Option<Vec<u8>>, // .m.ubulk
+pub struct FSerializedAssetBundle {
+    pub asset_file_buffer: Vec<u8>,                      // uasset
+    pub exports_file_buffer: Vec<u8>,                    // uexp
+    pub bulk_data_buffer: Option<Vec<u8>>,               // .ubulk
+    pub optional_bulk_data_buffer: Option<Vec<u8>>,      // .uptnl
+    pub memory_mapped_bulk_data_buffer: Option<Vec<u8>>, // .m.ubulk
 }
 
 // Constants for use by asset conversion
-pub(crate) const CORE_OBJECT_PACKAGE_NAME: &str = "/Script/CoreUObject";
+pub const CORE_OBJECT_PACKAGE_NAME: &str = "/Script/CoreUObject";
 #[allow(unused)]
-pub(crate) const ENGINE_PACKAGE_NAME: &str = "/Script/Engine";
-pub(crate) const OBJECT_CLASS_NAME: &str = "Object";
-pub(crate) const CLASS_CLASS_NAME: &str = "Class";
-pub(crate) const PACKAGE_CLASS_NAME: &str = "Package";
-pub(crate) const PRESTREAM_PACKAGE_CLASS_NAME: &str = "PrestreamPackage";
+pub const ENGINE_PACKAGE_NAME: &str = "/Script/Engine";
+pub const OBJECT_CLASS_NAME: &str = "Object";
+pub const CLASS_CLASS_NAME: &str = "Class";
+pub const PACKAGE_CLASS_NAME: &str = "Package";
+pub const PRESTREAM_PACKAGE_CLASS_NAME: &str = "PrestreamPackage";

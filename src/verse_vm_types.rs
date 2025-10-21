@@ -18,12 +18,12 @@ enum EVerseEncodedValueType {
 impl Writeable for EVerseEncodedValueType {
     fn ser<S: Write>(&self, stream: &mut S) -> anyhow::Result<()> {
         stream.ser(&(*self as u8))?;
-        Ok({})
+        Ok(())
     }
 }
 impl Readable for EVerseEncodedValueType {
     fn de<S: Read>(stream: &mut S) -> anyhow::Result<Self> {
-        Ok(Self::from_repr(stream.de()?).ok_or_else(|| anyhow!("Unknown encoded verse value type"))?)
+        Self::from_repr(stream.de()?).ok_or_else(|| anyhow!("Unknown encoded verse value type"))
     }
 }
 
@@ -42,37 +42,37 @@ impl Writeable for VValue {
         match self {
             VValue::None => {
                 stream.ser(&EVerseEncodedValueType::None)?;
-                Ok({})
+                Ok(())
             }
             VValue::Cell(cell_package_index) => {
                 stream.ser(&EVerseEncodedValueType::Cell)?;
                 stream.ser(cell_package_index)?;
-                Ok({})
+                Ok(())
             }
             VValue::Object(object_package_index) => {
                 stream.ser(&EVerseEncodedValueType::Object)?;
                 stream.ser(object_package_index)?;
-                Ok({})
+                Ok(())
             }
             VValue::Char(char_value) => {
                 stream.ser(&EVerseEncodedValueType::Char)?;
                 stream.ser(char_value)?;
-                Ok({})
+                Ok(())
             }
             VValue::Char32(char32_value) => {
                 stream.ser(&EVerseEncodedValueType::Char32)?;
                 stream.ser(char32_value)?;
-                Ok({})
+                Ok(())
             }
             VValue::Float(float_value) => {
                 stream.ser(&EVerseEncodedValueType::Float)?;
                 stream.ser(float_value)?;
-                Ok({})
+                Ok(())
             }
             VValue::Int(int_value) => {
                 stream.ser(&EVerseEncodedValueType::Int)?;
                 stream.ser(int_value)?;
-                Ok({})
+                Ok(())
             }
         }
     }
@@ -119,7 +119,7 @@ impl Writeable for VNameValueMapEntry {
     fn ser<S: Write>(&self, stream: &mut S) -> anyhow::Result<()> {
         stream.ser(&self.name)?;
         stream.ser(&self.value)?;
-        Ok({})
+        Ok(())
     }
 }
 impl Readable for VNameValueMapEntry {
@@ -141,7 +141,7 @@ impl Writeable for VPackage {
         stream.ser(&self.root_path)?;
         stream.ser(&self.definitions)?;
         stream.ser(&self.associated_u_package)?;
-        Ok({})
+        Ok(())
     }
 }
 impl Readable for VPackage {

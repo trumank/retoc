@@ -18,19 +18,19 @@ use crate::{
     name_map::{FMappedName, FNameMap},
 };
 
-pub(crate) fn get_package_name(data: &[u8], container_header_version: EIoContainerHeaderVersion) -> Result<String> {
+pub fn get_package_name(data: &[u8], container_header_version: EIoContainerHeaderVersion) -> Result<String> {
     FZenPackageHeader::get_package_name(&mut Cursor::new(data), container_header_version)
 }
 
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
-pub(crate) struct FZenPackageSummary {
-    pub(crate) has_versioning_info: u32,
-    pub(crate) header_size: u32,
-    pub(crate) name: FMappedName,
-    pub(crate) source_name: FMappedName, // version == Initial
-    pub(crate) package_flags: u32,
-    pub(crate) cooked_header_size: u32,
-    pub(crate) imported_public_export_hashes_offset: i32,
+pub struct FZenPackageSummary {
+    pub has_versioning_info: u32,
+    pub header_size: u32,
+    pub name: FMappedName,
+    pub source_name: FMappedName, // version == Initial
+    pub package_flags: u32,
+    pub cooked_header_size: u32,
+    pub imported_public_export_hashes_offset: i32,
     import_map_offset: i32,
     export_map_offset: i32,
     export_bundle_entries_offset: i32,
@@ -174,7 +174,7 @@ impl FZenPackageSummary {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, FromRepr)]
 #[repr(u32)]
-pub(crate) enum EZenPackageVersion {
+pub enum EZenPackageVersion {
     Initial,
     DataResourceTable,
     ImportedPackageNames,
@@ -183,21 +183,21 @@ pub(crate) enum EZenPackageVersion {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub(crate) struct FPackageFileVersion {
-    pub(crate) file_version_ue4: i32,
-    pub(crate) file_version_ue5: i32,
+pub struct FPackageFileVersion {
+    pub file_version_ue4: i32,
+    pub file_version_ue5: i32,
 }
 impl FPackageFileVersion {
-    pub(crate) fn create_ue4(version: EUnrealEngineObjectUE4Version) -> Self {
+    pub fn create_ue4(version: EUnrealEngineObjectUE4Version) -> Self {
         FPackageFileVersion { file_version_ue4: version as i32, file_version_ue5: 0 }
     }
-    pub(crate) fn create_ue5(version: EUnrealEngineObjectUE5Version) -> Self {
+    pub fn create_ue5(version: EUnrealEngineObjectUE5Version) -> Self {
         FPackageFileVersion {
             file_version_ue4: EUnrealEngineObjectUE4Version::CorrectLicenseeFlag as i32,
             file_version_ue5: version as i32,
         }
     }
-    pub(crate) fn is_ue5(self) -> bool {
+    pub fn is_ue5(self) -> bool {
         self.file_version_ue5 != 0
     }
 }
@@ -217,9 +217,9 @@ impl Writeable for FPackageFileVersion {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub(crate) struct FCustomVersion {
-    pub(crate) key: FGuid,
-    pub(crate) version: i32,
+pub struct FCustomVersion {
+    pub key: FGuid,
+    pub version: i32,
 }
 impl Readable for FCustomVersion {
     #[instrument(skip_all, name = "FCustomVersion")]
@@ -237,11 +237,11 @@ impl Writeable for FCustomVersion {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct FZenPackageVersioningInfo {
-    pub(crate) zen_version: EZenPackageVersion,
-    pub(crate) package_file_version: FPackageFileVersion,
-    pub(crate) licensee_version: i32,
-    pub(crate) custom_versions: Vec<FCustomVersion>,
+pub struct FZenPackageVersioningInfo {
+    pub zen_version: EZenPackageVersion,
+    pub package_file_version: FPackageFileVersion,
+    pub licensee_version: i32,
+    pub custom_versions: Vec<FCustomVersion>,
 }
 impl Readable for FZenPackageVersioningInfo {
     #[instrument(skip_all, name = "FZenPackageVersioningInfo")]
@@ -269,13 +269,13 @@ impl Writeable for FZenPackageVersioningInfo {
 
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 #[repr(C)] // Needed to determine the number of bulk data entries
-pub(crate) struct FBulkDataMapEntry {
-    pub(crate) serial_offset: i64,
-    pub(crate) duplicate_serial_offset: i64,
-    pub(crate) serial_size: i64,
-    pub(crate) flags: u32,
-    pub(crate) cooked_index: u8,
-    pub(crate) pad: [u8; 3],
+pub struct FBulkDataMapEntry {
+    pub serial_offset: i64,
+    pub duplicate_serial_offset: i64,
+    pub serial_size: i64,
+    pub flags: u32,
+    pub cooked_index: u8,
+    pub pad: [u8; 3],
 }
 impl Readable for FBulkDataMapEntry {
     #[instrument(skip_all, name = "FBulkDataMapEntry")]
@@ -305,7 +305,7 @@ impl Writeable for FBulkDataMapEntry {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromRepr)]
 #[repr(u8)]
-pub(crate) enum EExportFilterFlags {
+pub enum EExportFilterFlags {
     None = 0,
     NotForClient = 1,
     NotForServer = 2,
@@ -315,7 +315,7 @@ pub(crate) enum EExportFilterFlags {
 #[derive(Debug, Clone, Copy, PartialEq, FromRepr)]
 #[repr(u32)]
 #[allow(unused)]
-pub(crate) enum EObjectFlags {
+pub enum EObjectFlags {
     Public = 0x00000001,
     Standalone = 0x00000002,
     Transactional = 0x00000008,
@@ -325,19 +325,19 @@ pub(crate) enum EObjectFlags {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[repr(C)] // Needed to determine the number of export entries
-pub(crate) struct FExportMapEntry {
-    pub(crate) cooked_serial_offset: u64,
-    pub(crate) cooked_serial_size: u64,
-    pub(crate) object_name: FMappedName,
-    pub(crate) outer_index: FPackageObjectIndex,
-    pub(crate) class_index: FPackageObjectIndex,
-    pub(crate) super_index: FPackageObjectIndex,
-    pub(crate) template_index: FPackageObjectIndex,
-    pub(crate) public_export_hash: u64,
-    pub(crate) object_flags: u32,
+pub struct FExportMapEntry {
+    pub cooked_serial_offset: u64,
+    pub cooked_serial_size: u64,
+    pub object_name: FMappedName,
+    pub outer_index: FPackageObjectIndex,
+    pub class_index: FPackageObjectIndex,
+    pub super_index: FPackageObjectIndex,
+    pub template_index: FPackageObjectIndex,
+    pub public_export_hash: u64,
+    pub object_flags: u32,
     // Contrary to the popular belief and the name of this field, this is not in fact bitflags - this is just a single enum value
-    pub(crate) filter_flags: EExportFilterFlags,
-    pub(crate) padding: [u8; 3],
+    pub filter_flags: EExportFilterFlags,
+    pub padding: [u8; 3],
 }
 impl Readable for FExportMapEntry {
     #[instrument(skip_all, name = "FExportMapEntry")]
@@ -378,11 +378,11 @@ impl Writeable for FExportMapEntry {
 
 impl FExportMapEntry {
     // Reinterprets public export hash as global import index. Only valid for legacy zen packages before UE5.0
-    pub(crate) fn legacy_global_import_index(&self) -> FPackageObjectIndex {
+    pub fn legacy_global_import_index(&self) -> FPackageObjectIndex {
         FPackageObjectIndex::create_from_raw(self.public_export_hash)
     }
     // Returns true if this is a public export
-    pub(crate) fn is_public_export(&self) -> bool {
+    pub fn is_public_export(&self) -> bool {
         // Even if this is a new style export, the risk of collision here is so low that we can check both the new style hash and the old style global import index
         // FPackageObjectIndex::create_null() returns u64 that has all bits set, and the chances of the export hash having ALL of its bits set are the same as the chances of it having none of its bits set(e.g. being 0)
         self.public_export_hash != 0 && self.legacy_global_import_index() != FPackageObjectIndex::create_null()
@@ -391,12 +391,12 @@ impl FExportMapEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[repr(C)] // Needed to determine the number of cell export entries
-pub(crate) struct FCellExportMapEntry {
-    pub(crate) cooked_serial_offset: u64,
-    pub(crate) cooked_serial_layout_size: u64,
-    pub(crate) cooked_serial_size: u64,
-    pub(crate) cpp_class_info: FMappedName,
-    pub(crate) public_export_hash: u64,
+pub struct FCellExportMapEntry {
+    pub cooked_serial_offset: u64,
+    pub cooked_serial_layout_size: u64,
+    pub cooked_serial_size: u64,
+    pub cpp_class_info: FMappedName,
+    pub public_export_hash: u64,
 }
 impl Readable for FCellExportMapEntry {
     #[instrument(skip_all, name = "FCellExportMapEntry")]
@@ -424,7 +424,7 @@ impl Writeable for FCellExportMapEntry {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, FromRepr)]
 #[repr(u32)]
-pub(crate) enum EExportCommandType {
+pub enum EExportCommandType {
     #[default]
     Create,
     Serialize,
@@ -432,9 +432,9 @@ pub(crate) enum EExportCommandType {
 }
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(C)] // Needed to determine the number of export bundle entries
-pub(crate) struct FExportBundleEntry {
-    pub(crate) local_export_index: u32,
-    pub(crate) command_type: EExportCommandType,
+pub struct FExportBundleEntry {
+    pub local_export_index: u32,
+    pub command_type: EExportCommandType,
 }
 impl Readable for FExportBundleEntry {
     #[instrument(skip_all, name = "FExportBundleEntry")]
@@ -457,14 +457,14 @@ impl Writeable for FExportBundleEntry {
 
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 #[repr(C)] // Needed to determine the number of bundle headers
-pub(crate) struct FDependencyBundleHeader {
-    pub(crate) first_entry_index: i32,
+pub struct FDependencyBundleHeader {
+    pub first_entry_index: i32,
     // Note that this is defined as uint32 EntryCount[ExportCommandType_Count][ExportCommandType_Count], but this is a really awkward definition to work with,
     // so here it is defined as 4 individual properties: [Create][Create], [Create][Serialize], [Serialize][Create] and [Serialize][Serialize]
-    pub(crate) create_before_create_dependencies: u32,
-    pub(crate) serialize_before_create_dependencies: u32,
-    pub(crate) create_before_serialize_dependencies: u32,
-    pub(crate) serialize_before_serialize_dependencies: u32,
+    pub create_before_create_dependencies: u32,
+    pub serialize_before_create_dependencies: u32,
+    pub create_before_serialize_dependencies: u32,
+    pub serialize_before_serialize_dependencies: u32,
 }
 impl Readable for FDependencyBundleHeader {
     #[instrument(skip_all, name = "FDependencyBundleHeader")]
@@ -491,11 +491,11 @@ impl Writeable for FDependencyBundleHeader {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct VerseScriptCell {
+pub struct VerseScriptCell {
     /// Name of the UPackage associated with this script cell. For intrinsics this is /Script/CoreUObject
-    pub(crate) associated_package_name: String,
+    pub associated_package_name: String,
     /// Verse path to the script cell. This is a verse format path and not an object path
-    pub(crate) verse_path: String,
+    pub verse_path: String,
 }
 impl Display for VerseScriptCell {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -518,16 +518,16 @@ impl FromStr for VerseScriptCell {
 /// Verse script cells are only used for VM Intrinsics currently, and as such, there are very few definitions and no game-specific ones
 /// So we can just store them here, and allow adding additional intrinsics on demand if necessary
 #[derive(Debug, Clone, Default)]
-pub(crate) struct ZenScriptCellsStore {
+pub struct ZenScriptCellsStore {
     script_cells: HashMap<FPackageObjectIndex, VerseScriptCell>,
 }
 impl ZenScriptCellsStore {
     /// Creates an empty verse script cells store
-    pub(crate) fn create_empty() -> Self {
+    pub fn create_empty() -> Self {
         Self::default()
     }
     /// Adds Verse VM Intrinsics to the script cells store
-    pub(crate) fn add_vm_intrinsics(&mut self) {
+    pub fn add_vm_intrinsics(&mut self) {
         self.add_script_cell(VerseScriptCell {
             associated_package_name: "/Script/CoreUObject".into(),
             verse_path: "(/Verse.org/Verse/(/Verse.org/Verse:)Abs:)Native".into(),
@@ -546,46 +546,46 @@ impl ZenScriptCellsStore {
         });
     }
     /// Adds a script cell to the store. Package object index will be automatically derived from the verse path
-    pub(crate) fn add_script_cell(&mut self, script_cell: VerseScriptCell) {
+    pub fn add_script_cell(&mut self, script_cell: VerseScriptCell) {
         let script_object_index = FPackageObjectIndex::create_script_import_from_verse_path(&script_cell.verse_path);
         self.script_cells.insert(script_object_index, script_cell);
     }
     /// Retrieves script cell by the package object index
-    pub(crate) fn find_script_cell(&self, script_object_index: &FPackageObjectIndex) -> Option<VerseScriptCell> {
-        self.script_cells.get(&script_object_index).cloned()
+    pub fn find_script_cell(&self, script_object_index: &FPackageObjectIndex) -> Option<VerseScriptCell> {
+        self.script_cells.get(script_object_index).cloned()
     }
 }
 
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Hash)]
-pub(crate) struct FPackageIndex {
+pub struct FPackageIndex {
     index: i32, // positive is index into the export map, negative is index into import map, zero is none
 }
 impl FPackageIndex {
-    pub(crate) fn create_null() -> FPackageIndex {
+    pub fn create_null() -> FPackageIndex {
         FPackageIndex { index: 0 }
     }
-    pub(crate) fn create_import(import_index: u32) -> FPackageIndex {
+    pub fn create_import(import_index: u32) -> FPackageIndex {
         FPackageIndex { index: -(import_index as i32) - 1 }
     }
-    pub(crate) fn create_export(export_index: u32) -> FPackageIndex {
+    pub fn create_export(export_index: u32) -> FPackageIndex {
         FPackageIndex { index: (export_index as i32) + 1 }
     }
 
-    pub(crate) fn is_import(&self) -> bool {
+    pub fn is_import(&self) -> bool {
         self.index < 0
     }
-    pub(crate) fn is_export(&self) -> bool {
+    pub fn is_export(&self) -> bool {
         self.index > 0
     }
-    pub(crate) fn is_null(&self) -> bool {
+    pub fn is_null(&self) -> bool {
         self.index == 0
     }
 
-    pub(crate) fn to_import_index(self) -> u32 {
+    pub fn to_import_index(self) -> u32 {
         assert!(self.index < 0);
         (-self.index - 1) as u32
     }
-    pub(crate) fn to_export_index(self) -> u32 {
+    pub fn to_export_index(self) -> u32 {
         assert!(self.index > 0);
         (self.index - 1) as u32
     }
@@ -605,8 +605,8 @@ impl Writeable for FPackageIndex {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(C)] // Needed to determine the number of bundle entries
-pub(crate) struct FDependencyBundleEntry {
-    pub(crate) local_import_or_export_index: FPackageIndex,
+pub struct FDependencyBundleEntry {
+    pub local_import_or_export_index: FPackageIndex,
 }
 impl Readable for FDependencyBundleEntry {
     #[instrument(skip_all, name = "FDependencyBundleEntry")]
@@ -624,9 +624,9 @@ impl Writeable for FDependencyBundleEntry {
 
 // Actual UE type name not known, type layout from AsyncLoading2.cpp SetupSerializedArcs on 5.2.2
 #[derive(Debug, Copy, Clone, Default, Hash, PartialEq, Eq)]
-pub(crate) struct FInternalDependencyArc {
-    pub(crate) from_export_bundle_index: i32,
-    pub(crate) to_export_bundle_index: i32,
+pub struct FInternalDependencyArc {
+    pub from_export_bundle_index: i32,
+    pub to_export_bundle_index: i32,
 }
 impl Readable for FInternalDependencyArc {
     #[instrument(skip_all, name = "FInternalDependencyArc")]
@@ -648,10 +648,10 @@ impl Writeable for FInternalDependencyArc {
 
 // Actual UE type name not known, type layout from AsyncLoading2.cpp SetupSerializedArcs on 5.2.2
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub(crate) struct FExternalDependencyArc {
-    pub(crate) from_import_index: i32,
-    pub(crate) from_command_type: EExportCommandType,
-    pub(crate) to_export_bundle_index: i32,
+pub struct FExternalDependencyArc {
+    pub from_import_index: i32,
+    pub from_command_type: EExportCommandType,
+    pub to_export_bundle_index: i32,
 }
 impl Readable for FExternalDependencyArc {
     #[instrument(skip_all, name = "FExternalDependencyArc")]
@@ -681,30 +681,30 @@ impl Writeable for FExternalDependencyArc {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) struct ExternalPackageDependency {
-    pub(crate) from_package_id: FPackageId,
+pub struct ExternalPackageDependency {
+    pub from_package_id: FPackageId,
     // External dependency arcs link an import from this package to an export bundle in this package
-    pub(crate) external_dependency_arcs: Vec<FExternalDependencyArc>,
+    pub external_dependency_arcs: Vec<FExternalDependencyArc>,
     // Legacy dependency arcs link export bundle in imported package to an export bundle in current package
-    pub(crate) legacy_dependency_arcs: Vec<FInternalDependencyArc>,
+    pub legacy_dependency_arcs: Vec<FInternalDependencyArc>,
 }
 
 // Legacy, UE 5.2 and below, when there were multiple export bundles instead of just one
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 #[repr(C)] // needed to determine the offset of the arc data
-pub(crate) struct FExportBundleHeader {
+pub struct FExportBundleHeader {
     // Serial offset to the first serialized export in this bundle. Each bundle begins with an export, and all serialized exports in the bundle are laid out in sequence,
     // one after another. cooked serial offset on the exports is not actually used for locating export blobs by the async loader
     // This is relative to the zen header size
-    pub(crate) serial_offset: u64,
+    pub serial_offset: u64,
     // Index into ExportBundleEntries to the first entry belonging to this export bundle
-    pub(crate) first_entry_index: u32,
+    pub first_entry_index: u32,
     // Number of entries in this export bundle
-    pub(crate) entry_count: u32,
+    pub entry_count: u32,
 }
 impl FExportBundleHeader {
     #[instrument(skip_all, name = "FExportBundleHeader")]
-    pub(crate) fn deserialize<S: Read>(s: &mut S, container_header_version: EIoContainerHeaderVersion) -> Result<Self> {
+    pub fn deserialize<S: Read>(s: &mut S, container_header_version: EIoContainerHeaderVersion) -> Result<Self> {
         // For legacy UE4 packages, serial offset of the bundle is not written, it is implied because bundles are always laid out sequentially
         let serial_offset = if container_header_version > EIoContainerHeaderVersion::Initial { s.de()? } else { u64::MAX };
 
@@ -716,7 +716,7 @@ impl FExportBundleHeader {
     }
 
     #[instrument(skip_all, name = "FExportBundleHeader")]
-    pub(crate) fn serialize<S: Write>(&self, s: &mut S, container_header_version: EIoContainerHeaderVersion) -> Result<()> {
+    pub fn serialize<S: Write>(&self, s: &mut S, container_header_version: EIoContainerHeaderVersion) -> Result<()> {
         if container_header_version > EIoContainerHeaderVersion::Initial {
             s.ser(&self.serial_offset)?;
         }
@@ -738,7 +738,7 @@ impl Writeable for FExportBundleHeader {
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, FromRepr)]
 #[repr(i32)]
 #[allow(unused)]
-pub(crate) enum EUnrealEngineObjectUE5Version {
+pub enum EUnrealEngineObjectUE5Version {
     InitialVersion = 1000,
     NamesReferencedFromExportData = 1001,
     PayloadTOC = 1002,
@@ -761,7 +761,7 @@ pub(crate) enum EUnrealEngineObjectUE5Version {
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, FromRepr)]
 #[repr(i32)]
 #[allow(unused)]
-pub(crate) enum EUnrealEngineObjectUE4Version {
+pub enum EUnrealEngineObjectUE4Version {
     AddedPackageOwner = 518,
     SkinweightProfileDataLayoutChanges = 519,
     NonOuterPackageImport = 520,
@@ -807,37 +807,37 @@ impl Writeable for FZenPackageImportedPackageNamesContainer {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub(crate) struct FZenPackageHeader {
-    pub(crate) summary: FZenPackageSummary,
-    pub(crate) versioning_info: FZenPackageVersioningInfo,
-    pub(crate) name_map: FNameMap,
-    pub(crate) bulk_data: Vec<FBulkDataMapEntry>,
-    pub(crate) imported_public_export_hashes: Vec<u64>,
-    pub(crate) import_map: Vec<FPackageObjectIndex>,
-    pub(crate) export_map: Vec<FExportMapEntry>,
+pub struct FZenPackageHeader {
+    pub summary: FZenPackageSummary,
+    pub versioning_info: FZenPackageVersioningInfo,
+    pub name_map: FNameMap,
+    pub bulk_data: Vec<FBulkDataMapEntry>,
+    pub imported_public_export_hashes: Vec<u64>,
+    pub import_map: Vec<FPackageObjectIndex>,
+    pub export_map: Vec<FExportMapEntry>,
     // Only available before 5.3, where zen packages could have multiple export bundles and not just one
-    pub(crate) export_bundle_headers: Vec<FExportBundleHeader>,
+    pub export_bundle_headers: Vec<FExportBundleHeader>,
     // Meaning depending on the version. In 5.2 and below, this array is the data storage for export bundles, their contents are specified by export bundle headers
     // In 5.3 and later, there is only a single export bundle, and it's contents are represented by export bundle entries
-    pub(crate) export_bundle_entries: Vec<FExportBundleEntry>,
-    pub(crate) dependency_bundle_headers: Vec<FDependencyBundleHeader>,
-    pub(crate) dependency_bundle_entries: Vec<FDependencyBundleEntry>,
-    pub(crate) imported_package_names: Vec<String>,
-    pub(crate) imported_packages: Vec<FPackageId>,
-    pub(crate) shader_map_hashes: Vec<FSHAHash>,
-    pub(crate) is_unversioned: bool,
-    pub(crate) internal_dependency_arcs: Vec<FInternalDependencyArc>,
-    pub(crate) external_package_dependencies: Vec<ExternalPackageDependency>,
-    pub(crate) container_header_version: EIoContainerHeaderVersion,
-    pub(crate) cell_import_map: Vec<FPackageObjectIndex>,
-    pub(crate) cell_export_map: Vec<FCellExportMapEntry>,
+    pub export_bundle_entries: Vec<FExportBundleEntry>,
+    pub dependency_bundle_headers: Vec<FDependencyBundleHeader>,
+    pub dependency_bundle_entries: Vec<FDependencyBundleEntry>,
+    pub imported_package_names: Vec<String>,
+    pub imported_packages: Vec<FPackageId>,
+    pub shader_map_hashes: Vec<FSHAHash>,
+    pub is_unversioned: bool,
+    pub internal_dependency_arcs: Vec<FInternalDependencyArc>,
+    pub external_package_dependencies: Vec<ExternalPackageDependency>,
+    pub container_header_version: EIoContainerHeaderVersion,
+    pub cell_import_map: Vec<FPackageObjectIndex>,
+    pub cell_export_map: Vec<FCellExportMapEntry>,
 }
 impl FZenPackageHeader {
-    pub(crate) fn package_name(&self) -> String {
+    pub fn package_name(&self) -> String {
         self.name_map.get(self.summary.name).to_string()
     }
     // Returns source package name for this package if it is present, or it's normal package name otherwise
-    pub(crate) fn source_package_name(&self) -> String {
+    pub fn source_package_name(&self) -> String {
         if self.container_header_version <= EIoContainerHeaderVersion::Initial {
             let source_package_name = self.name_map.get(self.summary.source_name).to_string();
             if source_package_name != "None" {
@@ -849,7 +849,7 @@ impl FZenPackageHeader {
 
     // Retrieves the package name from the package. Does the bare minimum of package reading to get the name out
     #[instrument(skip_all, name = "FZenPackageHeader - GetPackageName")]
-    pub(crate) fn get_package_name<S: Read + Seek>(s: &mut S, container_header_version: EIoContainerHeaderVersion) -> Result<String> {
+    pub fn get_package_name<S: Read + Seek>(s: &mut S, container_header_version: EIoContainerHeaderVersion) -> Result<String> {
         let summary: FZenPackageSummary = FZenPackageSummary::deserialize(s, container_header_version)?;
         let name_map = if container_header_version > EIoContainerHeaderVersion::Initial {
             let _versioning_info: Option<FZenPackageVersioningInfo> = if summary.has_versioning_info != 0 { Some(s.de()?) } else { None };
@@ -863,7 +863,7 @@ impl FZenPackageHeader {
     }
 
     #[instrument(skip_all, name = "FZenPackageHeader")]
-    pub(crate) fn deserialize<S: Read + Seek>(s: &mut S, optional_store_entry: Option<StoreEntry>, container_version: EIoStoreTocVersion, header_version: EIoContainerHeaderVersion, package_version_override: Option<FPackageFileVersion>) -> Result<Self> {
+    pub fn deserialize<S: Read + Seek>(s: &mut S, optional_store_entry: Option<StoreEntry>, container_version: EIoStoreTocVersion, header_version: EIoContainerHeaderVersion, package_version_override: Option<FPackageFileVersion>) -> Result<Self> {
         let package_start_offset = s.stream_position()?;
         let summary: FZenPackageSummary = FZenPackageSummary::deserialize(s, header_version)?;
         let optional_versioning_info: Option<FZenPackageVersioningInfo> = if summary.has_versioning_info != 0 { Some(s.de()?) } else { None };
@@ -1097,7 +1097,7 @@ impl FZenPackageHeader {
     }
 
     #[instrument(skip_all, name = "FZenPackageHeader")]
-    pub(crate) fn serialize<S: Write + Seek>(&self, s: &mut S, store_entry: &mut StoreEntry, container_header_version: EIoContainerHeaderVersion) -> Result<Vec<u64>> {
+    pub fn serialize<S: Write + Seek>(&self, s: &mut S, store_entry: &mut StoreEntry, container_header_version: EIoContainerHeaderVersion) -> Result<Vec<u64>> {
         let mut package_summary = self.summary;
         package_summary.has_versioning_info = if self.is_unversioned { 0 } else { 1 };
 

@@ -12,7 +12,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub(crate) struct IoStoreWriter {
+pub struct IoStoreWriter {
     #[allow(unused)]
     toc_path: PathBuf,
     toc_stream: BufWriter<fs::File>,
@@ -22,7 +22,7 @@ pub(crate) struct IoStoreWriter {
 }
 
 impl IoStoreWriter {
-    pub(crate) fn new<P: AsRef<Path>>(toc_path: P, toc_version: EIoStoreTocVersion, container_header_version: Option<EIoContainerHeaderVersion>, mount_point: UEPathBuf) -> Result<Self> {
+    pub fn new<P: AsRef<Path>>(toc_path: P, toc_version: EIoStoreTocVersion, container_header_version: Option<EIoContainerHeaderVersion>, mount_point: UEPathBuf) -> Result<Self> {
         let toc_path = toc_path.as_ref().to_path_buf();
         let name = toc_path.file_stem().unwrap().to_string_lossy();
         let toc_stream = BufWriter::new(fs::File::create(&toc_path)?);
@@ -45,10 +45,10 @@ impl IoStoreWriter {
             container_header,
         })
     }
-    pub(crate) fn write_chunk_raw(&mut self, chunk_id_raw: FIoChunkIdRaw, path: Option<&UEPath>, data: &[u8]) -> Result<()> {
+    pub fn write_chunk_raw(&mut self, chunk_id_raw: FIoChunkIdRaw, path: Option<&UEPath>, data: &[u8]) -> Result<()> {
         self.write_chunk(FIoChunkId::from_raw(chunk_id_raw, self.toc.version), path, data)
     }
-    pub(crate) fn write_chunk(&mut self, chunk_id: FIoChunkId, path: Option<&UEPath>, data: &[u8]) -> Result<()> {
+    pub fn write_chunk(&mut self, chunk_id: FIoChunkId, path: Option<&UEPath>, data: &[u8]) -> Result<()> {
         if let Some(path) = path {
             let index = &mut self.toc.directory_index;
             let relative_path = path.strip_prefix(&index.mount_point).with_context(|| format!("mount point {} does not contain path {path}", index.mount_point))?;
@@ -84,26 +84,26 @@ impl IoStoreWriter {
         Ok(())
     }
 
-    pub(crate) fn write_package_chunk(&mut self, chunk_id: FIoChunkId, path: Option<&UEPath>, data: &[u8], store_entry: &StoreEntry) -> Result<()> {
+    pub fn write_package_chunk(&mut self, chunk_id: FIoChunkId, path: Option<&UEPath>, data: &[u8], store_entry: &StoreEntry) -> Result<()> {
         let container_header = self.container_header.as_mut().expect("FIoContainerHeader is required to write package chunks");
         container_header.add_package(FPackageId(chunk_id.get_chunk_id()), store_entry.clone());
         self.write_chunk(chunk_id, path, data)
     }
-    pub(crate) fn add_localized_package(&mut self, package_culture: &str, source_package_name: &str, localized_package_id: FPackageId) -> Result<()> {
+    pub fn add_localized_package(&mut self, package_culture: &str, source_package_name: &str, localized_package_id: FPackageId) -> Result<()> {
         let container_header = self.container_header.as_mut().expect("FIoContainerHeader is required to add localized packages");
         container_header.add_localized_package(package_culture, source_package_name, localized_package_id)
     }
-    pub(crate) fn add_package_redirect(&mut self, source_package_name: &str, redirect_package_id: FPackageId) -> Result<()> {
+    pub fn add_package_redirect(&mut self, source_package_name: &str, redirect_package_id: FPackageId) -> Result<()> {
         let container_header = self.container_header.as_mut().expect("FIoContainerHeader is required to add package redirects");
         container_header.add_package_redirect(source_package_name, redirect_package_id)
     }
-    pub(crate) fn container_version(&self) -> EIoStoreTocVersion {
+    pub fn container_version(&self) -> EIoStoreTocVersion {
         self.toc.version
     }
-    pub(crate) fn container_header_version(&self) -> EIoContainerHeaderVersion {
+    pub fn container_header_version(&self) -> EIoContainerHeaderVersion {
         self.container_header.as_ref().unwrap().version
     }
-    pub(crate) fn finalize(mut self) -> Result<()> {
+    pub fn finalize(mut self) -> Result<()> {
         if let Some(container_header) = &self.container_header {
             let mut chunk_buffer = vec![];
             container_header.serialize(&mut Cursor::new(&mut chunk_buffer))?;

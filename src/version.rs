@@ -7,7 +7,7 @@ use crate::{
 use EngineVersion::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 #[clap(rename_all = "verbatim")]
-pub(crate) enum EngineVersion {
+pub enum EngineVersion {
     UE4_25,
     UE4_26,
     UE4_27,
@@ -21,7 +21,7 @@ pub(crate) enum EngineVersion {
 }
 
 impl EngineVersion {
-    pub(crate) fn toc_version(self) -> EIoStoreTocVersion {
+    pub fn toc_version(self) -> EIoStoreTocVersion {
         use EIoStoreTocVersion::*;
         match self {
             UE4_25 => DirectoryIndex,
@@ -36,7 +36,7 @@ impl EngineVersion {
             UE5_6 => ReplaceIoChunkHashWithIoHash,
         }
     }
-    pub(crate) fn container_header_version(self) -> EIoContainerHeaderVersion {
+    pub fn container_header_version(self) -> EIoContainerHeaderVersion {
         use EIoContainerHeaderVersion::*;
         match self {
             UE4_25 => Initial,
@@ -51,7 +51,7 @@ impl EngineVersion {
             UE5_6 => SoftPackageReferencesOffset,
         }
     }
-    pub(crate) fn object_ue4_version(self) -> EUnrealEngineObjectUE4Version {
+    pub fn object_ue4_version(self) -> EUnrealEngineObjectUE4Version {
         use EUnrealEngineObjectUE4Version::*;
         match self {
             UE4_25 => AddedPackageOwner,
@@ -60,7 +60,7 @@ impl EngineVersion {
             _ => unreachable!(),
         }
     }
-    pub(crate) fn object_ue5_version(self) -> EUnrealEngineObjectUE5Version {
+    pub fn object_ue5_version(self) -> EUnrealEngineObjectUE5Version {
         use EUnrealEngineObjectUE5Version::*;
         match self {
             UE5_0 => LargeWorldCoordinates,
@@ -73,7 +73,7 @@ impl EngineVersion {
             _ => unreachable!(),
         }
     }
-    pub(crate) fn package_file_version(self) -> FPackageFileVersion {
+    pub fn package_file_version(self) -> FPackageFileVersion {
         if self < UE5_0 { FPackageFileVersion::create_ue4(self.object_ue4_version()) } else { FPackageFileVersion::create_ue5(self.object_ue5_version()) }
     }
 }

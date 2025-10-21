@@ -1,7 +1,7 @@
 use crate::container_header::{EIoContainerHeaderVersion, StoreEntry};
 use crate::iostore_writer::IoStoreWriter;
 use crate::legacy_asset::{EPackageFlags, FLegacyPackageFileSummary, FLegacyPackageHeader, FSerializedAssetBundle, convert_localized_package_name_to_source, get_package_object_full_name};
-use crate::logging::{Log, debug, warning};
+use crate::logging::Log;
 use crate::name_map::{EMappedNameType, FNameMap};
 use crate::script_objects::{FPackageImportReference, FPackageObjectIndex, FPackageObjectIndexType, ZenScriptObjects};
 use crate::ser::{ReadExt, WriteExt};
@@ -11,6 +11,7 @@ use crate::zen::{
     FPackageFileVersion, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo, ZenScriptCellsStore,
 };
 use crate::{EIoChunkType, FIoChunkId, FPackageId, FSHAHash, UEPath, UEPathBuf};
+use crate::{debug, warning};
 use anyhow::{Context, anyhow, bail};
 use byteorder::{LE, ReadBytesExt};
 use std::cmp::{Ordering, max};
@@ -20,10 +21,10 @@ use std::ops::Deref;
 use std::sync::{Arc, RwLock};
 
 /// NOTE: assumes leading slash is already stripped
-pub(crate) fn get_public_export_hash(package_relative_export_path: &str) -> u64 {
+pub fn get_public_export_hash(package_relative_export_path: &str) -> u64 {
     cityhasher::hash(package_relative_export_path.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<u8>>())
 }
-pub(crate) fn get_cell_export_hash(verse_path: &str) -> u64 {
+pub fn get_cell_export_hash(verse_path: &str) -> u64 {
     cityhasher::hash(verse_path.as_bytes())
 }
 
@@ -1145,9 +1146,9 @@ fn build_converted_zen_asset(builder: &ZenPackageBuilder, legacy_asset_bundle: F
     })
 }
 
-pub(crate) struct ConvertedZenAssetBundle {
-    pub(crate) package_id: FPackageId,
-    pub(crate) package_name: String,
+pub struct ConvertedZenAssetBundle {
+    pub package_id: FPackageId,
+    pub package_name: String,
     path: UEPathBuf,
     store_entry: StoreEntry,
     package_buffer: Vec<u8>,
@@ -1162,10 +1163,10 @@ pub(crate) struct ConvertedZenAssetBundle {
     legacy_export_bundle_mapping_data: Vec<ZenLegacyPackageExportBundleMapping>,
 }
 impl ConvertedZenAssetBundle {
-    pub(crate) fn package_data_size(&self) -> usize {
+    pub fn package_data_size(&self) -> usize {
         self.package_buffer.len()
     }
-    pub(crate) fn fixup_legacy_external_arcs(&mut self, global_package_lookup: &HashMap<FPackageId, Arc<RwLock<ConvertedZenAssetBundle>>>, log: &Log) -> anyhow::Result<()> {
+    pub fn fixup_legacy_external_arcs(&mut self, global_package_lookup: &HashMap<FPackageId, Arc<RwLock<ConvertedZenAssetBundle>>>, log: &Log) -> anyhow::Result<()> {
         for legacy_serialized_offset in &self.legacy_external_arc_serialized_offsets {
             // Seek to the relevant position and read the ID of the placeholder from bundle index
             let placeholder_from_bundle_index: i32 = {
@@ -1230,14 +1231,14 @@ impl ConvertedZenAssetBundle {
     }
 
     // Writes both the package data and the bulk data in one go
-    pub(crate) fn write(&mut self, writer: &mut IoStoreWriter) -> anyhow::Result<()> {
+    pub fn write(&mut self, writer: &mut IoStoreWriter) -> anyhow::Result<()> {
         self.write_package_data(writer)?;
         self.write_and_release_bulk_data(writer)?;
         Ok(())
     }
 
     // Writes package data into the container, and releases the reference to it
-    pub(crate) fn write_package_data(&mut self, writer: &mut IoStoreWriter) -> anyhow::Result<()> {
+    pub fn write_package_data(&mut self, writer: &mut IoStoreWriter) -> anyhow::Result<()> {
         let package_chunk_id = FIoChunkId::from_package_id(self.package_id, 0, EIoChunkType::ExportBundleData);
         writer.write_package_chunk(package_chunk_id, Some(&self.path), &self.package_buffer, &self.store_entry)?;
 
@@ -1255,7 +1256,7 @@ impl ConvertedZenAssetBundle {
     }
 
     // Writes bulk data into the container, and releases the reference to it so that it is no longer stored in memory. Needed for two-stage processing of legacy UE4.27 zen assets
-    pub(crate) fn write_and_release_bulk_data(&mut self, writer: &mut IoStoreWriter) -> anyhow::Result<()> {
+    pub fn write_and_release_bulk_data(&mut self, writer: &mut IoStoreWriter) -> anyhow::Result<()> {
         // Write bulk data chunk if it is present
         if let Some(bulk_data_buffer) = &self.bulk_data_buffer {
             let bulk_data_chunk_id = FIoChunkId::from_package_id(self.package_id, 0, EIoChunkType::BulkData);
@@ -1314,7 +1315,7 @@ fn build_zen_asset_internal<'a>(
 }
 
 // Builds zen asset and writes it into the container using the provided serialized legacy asset and package version
-pub(crate) fn build_zen_asset(
+pub fn build_zen_asset(
     legacy_asset: FSerializedAssetBundle,
     package_name_to_referenced_shader_maps: &HashMap<String, Vec<FSHAHash>>,
     path: &UEPath,
@@ -1350,7 +1351,7 @@ mod test {
     use fs_err as fs;
 
     // Builds zen asset and returns the resulting package ID, chunk data buffer, and it's store entry. Zen package conversion does not modify bulk data in any way.
-    pub(crate) fn build_serialize_zen_asset(legacy_asset: &FSerializedAssetBundle, container_header_version: EIoContainerHeaderVersion, package_version_fallback: Option<FPackageFileVersion>, source_package_name: Option<String>) -> anyhow::Result<(FPackageId, StoreEntry, Vec<u8>)> {
+    pub fn build_serialize_zen_asset(legacy_asset: &FSerializedAssetBundle, container_header_version: EIoContainerHeaderVersion, package_version_fallback: Option<FPackageFileVersion>, source_package_name: Option<String>) -> anyhow::Result<(FPackageId, StoreEntry, Vec<u8>)> {
         // Do not allow legacy external arc fixup, just emit the asset that does not require fixup immediately using only the information available from this asset
         let logger = Log::no_log();
         let builder = build_zen_asset_internal(legacy_asset, container_header_version, package_version_fallback, false, source_package_name, None, None, &logger)?;

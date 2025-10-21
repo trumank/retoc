@@ -5,7 +5,7 @@ use std::ops::{Deref, DerefMut};
 use std::{io::Read, io::Write};
 use tracing::instrument;
 
-pub(crate) trait Readable {
+pub trait Readable {
     fn de<S: Read>(stream: &mut S) -> Result<Self>
     where
         Self: Sized;
@@ -26,7 +26,7 @@ pub(crate) trait Readable {
         Ok(buf)
     }
 }
-pub(crate) trait Writeable {
+pub trait Writeable {
     fn ser<S: Write>(&self, stream: &mut S) -> Result<()>;
     fn ser_array<S: Write, T: AsRef<[Self]>>(this: T, stream: &mut S) -> Result<()>
     where
@@ -38,14 +38,14 @@ pub(crate) trait Writeable {
         Ok(())
     }
 }
-pub(crate) trait ReadableCtx<C> {
+pub trait ReadableCtx<C> {
     fn de<S: Read>(stream: &mut S, ctx: C) -> Result<Self>
     where
         Self: Sized;
 }
 
 impl<T> ReadExt for T where T: Read {}
-pub(crate) trait ReadExt: Read {
+pub trait ReadExt: Read {
     #[instrument(skip_all)]
     fn de<T: Readable>(&mut self) -> Result<T>
     where
@@ -62,7 +62,7 @@ pub(crate) trait ReadExt: Read {
     }
 }
 impl<T> WriteExt for T where T: Write {}
-pub(crate) trait WriteExt: Write {
+pub trait WriteExt: Write {
     #[instrument(skip_all)]
     fn ser<T: Writeable>(&mut self, value: &T) -> Result<()>
     where
@@ -259,7 +259,7 @@ impl Writeable for f64 {
 }
 
 #[instrument(skip_all)]
-pub(crate) fn read_array<S: Read, T, F>(len: usize, stream: &mut S, mut f: F) -> Result<Vec<T>>
+pub fn read_array<S: Read, T, F>(len: usize, stream: &mut S, mut f: F) -> Result<Vec<T>>
 where
     F: FnMut(&mut S) -> Result<T>,
 {
@@ -271,7 +271,7 @@ where
 }
 
 #[instrument(skip_all)]
-pub(crate) fn read_string<S: Read>(len: i32, stream: &mut S) -> Result<String> {
+pub fn read_string<S: Read>(len: i32, stream: &mut S) -> Result<String> {
     if len < 0 {
         let chars = read_array((-len) as usize, stream, |r| Ok(r.read_u16::<LE>()?))?;
         let length = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
@@ -284,7 +284,7 @@ pub(crate) fn read_string<S: Read>(len: i32, stream: &mut S) -> Result<String> {
     }
 }
 
-pub(crate) fn write_string<S: Write>(stream: &mut S, value: &str) -> Result<()> {
+pub fn write_string<S: Write>(stream: &mut S, value: &str) -> Result<()> {
     if value.is_empty() {
         stream.write_u32::<LE>(0)?;
     } else if value.is_ascii() {
@@ -303,22 +303,22 @@ pub(crate) fn write_string<S: Write>(stream: &mut S, value: &str) -> Result<()> 
 }
 
 #[instrument(skip_all)]
-pub(crate) fn read_utf8_string<S: Read>(stream: &mut S) -> Result<String> {
+pub fn read_utf8_string<S: Read>(stream: &mut S) -> Result<String> {
     let len: i32 = stream.de()?;
     let mut chars = vec![0; len as usize];
     stream.read_exact(&mut chars)?;
     Ok(String::from_utf8(chars).unwrap())
 }
 
-pub(crate) fn write_utf8_string<S: Write>(stream: &mut S, value: &str) -> Result<()> {
+pub fn write_utf8_string<S: Write>(stream: &mut S, value: &str) -> Result<()> {
     let len: i32 = value.len() as i32;
     stream.ser(&len)?;
     stream.write_all(value.as_bytes())?;
-    Ok({})
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct Utf8String(pub(crate) String);
+pub struct Utf8String(pub String);
 impl Display for Utf8String {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)

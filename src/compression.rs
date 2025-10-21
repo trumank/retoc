@@ -10,7 +10,7 @@ pub enum CompressionMethod {
     Oodle,
 }
 impl CompressionMethod {
-    pub(crate) fn from_str_ignore_case(value: &str) -> Option<Self> {
+    pub fn from_str_ignore_case(value: &str) -> Option<Self> {
         CompressionMethod::VARIANTS.iter().copied().find(|v| v.as_ref().eq_ignore_ascii_case(value))
     }
 }

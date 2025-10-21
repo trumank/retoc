@@ -5,7 +5,6 @@ use crate::legacy_asset::{
     PRESTREAM_PACKAGE_CLASS_NAME,
 };
 use crate::logging::Log;
-use crate::logging::*;
 use crate::name_map::FMappedName;
 use crate::script_objects::{FPackageObjectIndex, FPackageObjectIndexType, FScriptObjectEntry, ZenScriptObjects};
 use crate::ser::{ReadExt, Utf8String, WriteExt};
@@ -13,6 +12,7 @@ use crate::verse_vm_types::VPackage;
 use crate::zen::{EExportCommandType, EExportFilterFlags, EObjectFlags, FCellExportMapEntry, FExportMapEntry, FExternalDependencyArc, FInternalDependencyArc, FPackageFileVersion, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo, ZenScriptCellsStore};
 use crate::zen_asset_conversion::get_cell_export_hash;
 use crate::{EIoChunkType, FGuid, FIoChunkId, FPackageId, FileWriterTrait, UEPath};
+use crate::{debug, info, verbose, warning};
 use anyhow::{anyhow, bail};
 use key_mutex::KeyMutex;
 use std::cmp::max;
@@ -21,7 +21,7 @@ use std::io::{Cursor, Seek, SeekFrom, Write};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 // Cache that stores the packages that were retrieved for the purpose of dependency resolution, to avoid loading and parsing them multiple times
-pub(crate) struct FZenPackageContext<'a> {
+pub struct FZenPackageContext<'a> {
     store_access: &'a dyn IoStoreTrait,
     fallback_package_file_version: Option<FPackageFileVersion>,
     log: &'a Log,
@@ -45,7 +45,7 @@ struct FZenPackageContextScriptObjects {
     script_objects_resolved_as_classes: HashSet<FPackageObjectIndex>,
 }
 impl<'a> FZenPackageContext<'a> {
-    pub(crate) fn create(store_access: &'a dyn IoStoreTrait, fallback_package_file_version: Option<FPackageFileVersion>, log: &'a Log, script_cells: Option<Arc<ZenScriptCellsStore>>) -> Self {
+    pub fn create(store_access: &'a dyn IoStoreTrait, fallback_package_file_version: Option<FPackageFileVersion>, log: &'a Log, script_cells: Option<Arc<ZenScriptCellsStore>>) -> Self {
         Self {
             store_access,
             fallback_package_file_version,
@@ -609,7 +609,7 @@ fn find_or_add_resolved_import(builder: &mut LegacyAssetBuilder, import: &Resolv
 }
 
 fn resolve_verse_cell_import(builder: &mut LegacyAssetBuilder, cell_import_index: usize) -> anyhow::Result<()> {
-    let cell_import: FPackageObjectIndex = builder.zen_package.cell_import_map[cell_import_index].clone();
+    let cell_import: FPackageObjectIndex = builder.zen_package.cell_import_map[cell_import_index];
 
     let (package_name, verse_path) = if cell_import.kind() == FPackageObjectIndexType::ScriptImport {
         // Script import refers to a verse script cell that is imported from the native import store. Resolve it
@@ -626,7 +626,7 @@ fn resolve_verse_cell_import(builder: &mut LegacyAssetBuilder, cell_import_index
         }
     } else if cell_import.kind() == FPackageObjectIndexType::PackageImport {
         // This is an import of cell export from another package
-        resolve_cell_package_import(&builder.package_context, &builder.zen_package, cell_import)?
+        resolve_cell_package_import(builder.package_context, &builder.zen_package, cell_import)?
     } else {
         bail!("Verse cell import is not a Script Import or Package Import. Did not expect Null or Export package index in the verse cell import table");
     };
@@ -646,7 +646,7 @@ fn resolve_verse_cell_import(builder: &mut LegacyAssetBuilder, cell_import_index
         package_index: package_import_index,
         verse_path: Utf8String(verse_path),
     });
-    Ok({})
+    Ok(())
 }
 
 // Builds the import map entries for the legacy package. Returns true if some imports failed to resolve
@@ -1482,7 +1482,7 @@ fn write_asset(builder: &LegacyAssetBuilder, out_asset_path: &UEPath, file_write
     Ok(())
 }
 
-pub(crate) fn build_legacy(package_context: &FZenPackageContext, package_id: FPackageId, out_path: &UEPath, file_writer: &dyn FileWriterTrait) -> anyhow::Result<()> {
+pub fn build_legacy(package_context: &FZenPackageContext, package_id: FPackageId, out_path: &UEPath, file_writer: &dyn FileWriterTrait) -> anyhow::Result<()> {
     // Build the asset from zen
     let asset_builder = build_asset_from_zen(package_context, package_id)?;
     // Write the asset to the file

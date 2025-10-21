@@ -2,10 +2,11 @@ use crate::chunk_id::FIoChunkIdRaw;
 use crate::compression::{CompressionMethod, compress, decompress};
 use crate::iostore::IoStoreTrait;
 use crate::iostore_writer::IoStoreWriter;
-use crate::logging::*;
+use crate::logging::Log;
 use crate::ser::{ReadExt, Readable, WriteExt, Writeable};
 use crate::zen::FZenPackageHeader;
 use crate::{EIoChunkType, EIoStoreTocVersion, FIoChunkId, FSHAHash, UEPath};
+use crate::{info, warning};
 use anyhow::{Context as _, anyhow, bail};
 use key_mutex::Empty;
 use serde::{Deserialize, Serialize};
@@ -222,7 +223,7 @@ fn compress_shader(shader_data: &[u8], compression_method: CompressionMethod) ->
 
 #[derive(Debug, Clone)]
 #[allow(unused)]
-pub(crate) struct IoStoreShaderCodeArchive {
+pub struct IoStoreShaderCodeArchive {
     version: EIoStoreShaderLibraryVersion,
     header: FIoStoreShaderCodeArchiveHeader,
     compression_method: Option<CompressionMethod>,
@@ -231,7 +232,7 @@ pub(crate) struct IoStoreShaderCodeArchive {
 }
 impl IoStoreShaderCodeArchive {
     // Reads full IoStore shader code archive
-    pub(crate) fn read(store_access: &dyn IoStoreTrait, library_chunk_id: FIoChunkId) -> anyhow::Result<IoStoreShaderCodeArchive> {
+    pub fn read(store_access: &dyn IoStoreTrait, library_chunk_id: FIoChunkId) -> anyhow::Result<IoStoreShaderCodeArchive> {
         // Read shader library header raw data
         let shader_library_header_data = store_access.read(library_chunk_id)?;
         let mut shader_library_reader = Cursor::new(&shader_library_header_data);
@@ -609,21 +610,21 @@ fn layout_write_shader_code(shader_library: &IoStoreShaderCodeArchive, compress_
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]
-pub(crate) struct ShaderMapToPackageNameListEntry {
+pub struct ShaderMapToPackageNameListEntry {
     #[serde(rename = "ShaderMapHash")]
-    pub(crate) shader_map_hash: FSHAHash,
+    pub shader_map_hash: FSHAHash,
     #[serde(rename = "Assets")]
-    pub(crate) package_names: Vec<String>,
+    pub package_names: Vec<String>,
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]
-pub(crate) struct ShaderAssetInfoFileRoot {
+pub struct ShaderAssetInfoFileRoot {
     #[serde(rename = "ShaderCodeToAssets")]
-    pub(crate) shader_code_to_assets: Vec<ShaderMapToPackageNameListEntry>,
+    pub shader_code_to_assets: Vec<ShaderMapToPackageNameListEntry>,
 }
 
 // Resolves shader library filename (with optional path) into a shader asset info filename associated with that library
-pub(crate) fn get_shader_asset_info_filename_from_library_filename(shader_library_filename: &str) -> anyhow::Result<String> {
+pub fn get_shader_asset_info_filename_from_library_filename(shader_library_filename: &str) -> anyhow::Result<String> {
     let library_name_without_extension = UEPath::new(shader_library_filename).file_stem().ok_or_else(|| anyhow!("Failed to retrieve filename from path"))?;
     let prefix_separator_index = library_name_without_extension.find('-').ok_or_else(|| anyhow!("Invalid shader library filename, does not have a library name and format separator"))?;
     let library_name_and_format = &library_name_without_extension[prefix_separator_index + 1..];
@@ -698,7 +699,7 @@ fn build_shader_asset_metadata_from_io_store_packages(store_access: &dyn IoStore
 }
 
 // Returns the file contents of the built shader library on success. Second file contents are that of asset metadata for the shader library
-pub(crate) fn rebuild_shader_library_from_io_store(store_access: &dyn IoStoreTrait, library_chunk_id: FIoChunkId, log: &Log, compress_shaders: bool) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
+pub fn rebuild_shader_library_from_io_store(store_access: &dyn IoStoreTrait, library_chunk_id: FIoChunkId, log: &Log, compress_shaders: bool) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
     // Read IoStore shader library
     let io_store_shader_library = IoStoreShaderCodeArchive::read(store_access, library_chunk_id)?;
 
@@ -1058,7 +1059,7 @@ fn build_io_store_shader_code_archive_header(shader_library: &FShaderLibraryHead
     io_store_library_header
 }
 
-pub(crate) fn read_shader_asset_info(shader_asset_metadata_buffer: &[u8], package_name_to_shader_maps: &mut HashMap<String, Vec<FSHAHash>>) -> anyhow::Result<()> {
+pub fn read_shader_asset_info(shader_asset_metadata_buffer: &[u8], package_name_to_shader_maps: &mut HashMap<String, Vec<FSHAHash>>) -> anyhow::Result<()> {
     let shader_asset_info: ShaderAssetInfoFileRoot = serde_json::from_slice(shader_asset_metadata_buffer)?;
 
     for shader_map_entry in &shader_asset_info.shader_code_to_assets {
@@ -1069,7 +1070,7 @@ pub(crate) fn read_shader_asset_info(shader_asset_metadata_buffer: &[u8], packag
     Ok(())
 }
 
-pub(crate) fn write_io_store_library(store_writer: &mut IoStoreWriter, raw_shader_library_buffer: &Vec<u8>, shader_library_path: &UEPath, log: &Log) -> anyhow::Result<()> {
+pub fn write_io_store_library(store_writer: &mut IoStoreWriter, raw_shader_library_buffer: &Vec<u8>, shader_library_path: &UEPath, log: &Log) -> anyhow::Result<()> {
     let mut shader_library_reader = Cursor::new(raw_shader_library_buffer);
 
     // Read shader library header
