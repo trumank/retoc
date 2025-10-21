@@ -12,16 +12,16 @@ mod name_map;
 mod script_objects;
 mod ser;
 mod shader_library;
+mod verse_vm_types;
 mod version;
 mod version_heuristics;
 mod zen;
 mod zen_asset_conversion;
-mod verse_vm_types;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use bitflags::bitflags;
 use clap::Parser;
-use compression::{decompress, CompressionMethod};
+use compression::{CompressionMethod, decompress};
 use container_header::StoreEntry;
 use file_pool::FilePool;
 use fs_err as fs;
@@ -40,8 +40,8 @@ use std::ffi::OsStr;
 use std::fmt::{Debug, Display, Formatter};
 use std::io::BufWriter;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
     collections::HashMap,
     io::{BufReader, Cursor, Read, Seek, SeekFrom, Write},
@@ -54,7 +54,7 @@ use tracing::instrument;
 use version::EngineVersion;
 use zen_asset_conversion::ConvertedZenAssetBundle;
 
-use name_map::{write_name_batch_parts, EMappedNameType, FNameMap};
+use name_map::{EMappedNameType, FNameMap, write_name_batch_parts};
 use script_objects::{FPackageObjectIndex, FScriptObjectEntry};
 
 #[derive(Parser, Debug)]
@@ -991,8 +991,17 @@ fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
                 memory_mapped_bulk_data_buffer: input.read_opt(&path.with_extension("m.ubulk"))?,
             };
 
-            let converted = zen_asset_conversion::build_zen_asset(bundle, &package_name_to_referenced_shader_maps, &mount_point.join(path),
-                Some(args.version.package_file_version()), container_header_version, needs_asset_import_fixup, script_objects.clone(), Some(script_cell_store.clone()), &log)?;
+            let converted = zen_asset_conversion::build_zen_asset(
+                bundle,
+                &package_name_to_referenced_shader_maps,
+                &mount_point.join(path),
+                Some(args.version.package_file_version()),
+                container_header_version,
+                needs_asset_import_fixup,
+                script_objects.clone(),
+                Some(script_cell_store.clone()),
+                &log,
+            )?;
 
             tx.send(converted)?;
 
@@ -1247,7 +1256,7 @@ impl std::str::FromStr for AesKey {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         use aes::cipher::KeyInit;
-        use base64::{engine::general_purpose, Engine as _};
+        use base64::{Engine as _, engine::general_purpose};
         let try_parse = |bytes: Vec<_>| aes::Aes256::new_from_slice(&bytes).ok().map(AesKey);
         hex::decode(s.strip_prefix("0x").unwrap_or(s))
             .ok()

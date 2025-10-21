@@ -40,11 +40,11 @@ macro_rules! error {
 }
 
 pub(crate) use debug;
-pub(crate) use verbose;
-pub(crate) use info;
-pub(crate) use warning;
 #[allow(unused)]
 pub(crate) use error;
+pub(crate) use info;
+pub(crate) use verbose;
+pub(crate) use warning;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Display)]
 pub(crate) enum LogLevel {
@@ -91,11 +91,17 @@ impl Log {
         Self { min_log_level, backend, progress: Default::default() }
     }
     pub(crate) fn new_stdout(verbose: bool, debug: bool) -> Self {
-        let min_log_level = if debug { LogLevel::Debug } else if verbose { LogLevel::Verbose } else { LogLevel::Info };
-        Self::new(min_log_level, Arc::new(StdoutLogBackend{}))
+        let min_log_level = if debug {
+            LogLevel::Debug
+        } else if verbose {
+            LogLevel::Verbose
+        } else {
+            LogLevel::Info
+        };
+        Self::new(min_log_level, Arc::new(StdoutLogBackend {}))
     }
     pub(crate) fn no_log() -> Self {
-        Self::new(LogLevel::Error, Arc::new(NoopLogBackend{}))
+        Self::new(LogLevel::Error, Arc::new(NoopLogBackend {}))
     }
     pub(crate) fn set_progress(&self, progress: Option<&indicatif::ProgressBar>) {
         *self.progress.lock().unwrap() = progress.cloned();

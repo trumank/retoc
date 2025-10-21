@@ -321,7 +321,9 @@ impl FLegacyPackageFileSummary {
         // Read cell export map and cell import map location information on UE 5.6+
         let (cell_exports, cell_imports) = if versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::VerseCells as i32 {
             (s.de()?, s.de()?)
-        } else { (FCountOffsetPair::default(), FCountOffsetPair::default()) };
+        } else {
+            (FCountOffsetPair::default(), FCountOffsetPair::default())
+        };
 
         // Metadata will never be serialized for cooked packages, so this value is not used but is always written regardless
         let _metadata_offset: i32 = if versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::MetadataSerializationOffset as i32 { s.de()? } else { -1 };
@@ -337,7 +339,9 @@ impl FLegacyPackageFileSummary {
 
         let package_guid: FGuid = if versioning_info.package_file_version.file_version_ue5 < EUnrealEngineObjectUE5Version::PackageSavedHash as i32 {
             s.de()?
-        } else { FGuid::default() };
+        } else {
+            FGuid::default()
+        };
 
         // Package generations are always 0,0 for modern packages, persistent package GUID is never written for cooked packages
         let _persistent_package_guid: FGuid = if !is_filter_editor_only { s.de()? } else { FGuid::default() };

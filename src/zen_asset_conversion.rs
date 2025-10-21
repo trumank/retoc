@@ -6,7 +6,10 @@ use crate::name_map::{EMappedNameType, FNameMap};
 use crate::script_objects::{FPackageImportReference, FPackageObjectIndex, FPackageObjectIndexType, ZenScriptObjects};
 use crate::ser::{ReadExt, WriteExt};
 use crate::version_heuristics::heuristic_zen_version_from_package_file_version;
-use crate::zen::{EExportCommandType, EExportFilterFlags, EObjectFlags, EZenPackageVersion, ExternalPackageDependency, FBulkDataMapEntry, FCellExportMapEntry, FDependencyBundleEntry, FDependencyBundleHeader, FExportBundleEntry, FExportBundleHeader, FExportMapEntry, FExternalDependencyArc, FInternalDependencyArc, FPackageFileVersion, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo, ZenScriptCellsStore};
+use crate::zen::{
+    EExportCommandType, EExportFilterFlags, EObjectFlags, EZenPackageVersion, ExternalPackageDependency, FBulkDataMapEntry, FCellExportMapEntry, FDependencyBundleEntry, FDependencyBundleHeader, FExportBundleEntry, FExportBundleHeader, FExportMapEntry, FExternalDependencyArc, FInternalDependencyArc,
+    FPackageFileVersion, FPackageIndex, FZenPackageHeader, FZenPackageVersioningInfo, ZenScriptCellsStore,
+};
 use crate::{EIoChunkType, FIoChunkId, FPackageId, FSHAHash, UEPath, UEPathBuf};
 use anyhow::{Context, anyhow, bail};
 use byteorder::{LE, ReadBytesExt};
@@ -67,7 +70,15 @@ struct ZenPackageBuilder<'a> {
 }
 
 // Flow is create_asset_builder -> setup_zen_package_summary -> build_zen_import_map -> build_zen_export_map -> build_zen_preload_dependencies -> serialize_zen_asset
-fn create_asset_builder<'a>(package: FLegacyPackageHeader, container_header_version: EIoContainerHeaderVersion, fixup_legacy_external_arcs: bool, source_package_name: Option<String>, script_objects: Option<Arc<ZenScriptObjects>>, script_cells: Option<Arc<ZenScriptCellsStore>>, log: &'a Log) -> ZenPackageBuilder<'a> {
+fn create_asset_builder<'a>(
+    package: FLegacyPackageHeader,
+    container_header_version: EIoContainerHeaderVersion,
+    fixup_legacy_external_arcs: bool,
+    source_package_name: Option<String>,
+    script_objects: Option<Arc<ZenScriptObjects>>,
+    script_cells: Option<Arc<ZenScriptCellsStore>>,
+    log: &'a Log,
+) -> ZenPackageBuilder<'a> {
     let package_name = source_package_name.as_deref().unwrap_or(&package.summary.package_name).to_string();
     ZenPackageBuilder {
         package_id: FPackageId::from_name(&package_name),
@@ -215,7 +226,9 @@ fn convert_legacy_import_to_object_index(builder: &mut ZenPackageBuilder, import
     let is_script_import = package_name.starts_with("/Script/");
     if is_script_import {
         let script_object_index = FPackageObjectIndex::create_script_import(&full_import_name);
-        if let Some(script_objects) = &builder.script_objects && !script_objects.script_object_lookup.contains_key(&script_object_index) {
+        if let Some(script_objects) = &builder.script_objects
+            && !script_objects.script_object_lookup.contains_key(&script_object_index)
+        {
             warning!(builder.log, "Package {} is referencing missing script import {}", &builder.package_name, &full_import_name);
         }
         return Ok(script_object_index);
@@ -280,7 +293,9 @@ fn convert_cell_import_to_object_index(builder: &mut ZenPackageBuilder, cell_imp
     if is_script_import {
         let script_object_index = FPackageObjectIndex::create_script_import_from_verse_path(&cell_import.verse_path);
         // Check that the cell actually exists in the store. This is important for converting zen back to legacy assets, since missing script cell references cannot be converted back from the hash
-        if let Some(script_cells) = &builder.script_cells && script_cells.find_script_cell(&script_object_index).is_none() {
+        if let Some(script_cells) = &builder.script_cells
+            && script_cells.find_script_cell(&script_object_index).is_none()
+        {
             warning!(builder.log, "Package {} is referencing missing Verse Cell import {} (from native package {})", &builder.package_name, &cell_import.verse_path, &package_name);
         }
         return Ok(script_object_index);
@@ -339,7 +354,9 @@ fn build_zen_import_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
 
         // Remap import_map and build import_to_package_id_lookup
         for import in &mut builder.zen_package.import_map {
-            if import.kind() == FPackageObjectIndexType::PackageImport && let Some(mut package_import) = import.package_import() {
+            if import.kind() == FPackageObjectIndexType::PackageImport
+                && let Some(mut package_import) = import.package_import()
+            {
                 let old_package_index = package_import.imported_package_index;
                 let new_package_index = index_remap[old_package_index as usize];
                 package_import.imported_package_index = new_package_index;
@@ -353,7 +370,9 @@ fn build_zen_import_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
 
         // Remap cell_import_map to the new imported package indices
         for cell_import in &mut builder.zen_package.cell_import_map {
-            if cell_import.kind() == FPackageObjectIndexType::PackageImport && let Some(mut package_import) = cell_import.package_import() {
+            if cell_import.kind() == FPackageObjectIndexType::PackageImport
+                && let Some(mut package_import) = cell_import.package_import()
+            {
                 let old_package_index = package_import.imported_package_index;
                 let new_package_index = index_remap[old_package_index as usize];
                 package_import.imported_package_index = new_package_index;
@@ -445,11 +464,9 @@ fn build_zen_export_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
         let mapped_cpp_class_info = builder.zen_package.name_map.store(&cpp_class_info);
 
         // Export hash is zero if the verse path is empty, otherwise it is calculated from the verse path
-        let public_export_hash: u64 = if !cell_export.verse_path.is_empty() {
-            get_cell_export_hash(&cell_export.verse_path)
-        } else { 0 };
+        let public_export_hash: u64 = if !cell_export.verse_path.is_empty() { get_cell_export_hash(&cell_export.verse_path) } else { 0 };
 
-        let zen_cell_export = FCellExportMapEntry{
+        let zen_cell_export = FCellExportMapEntry {
             cooked_serial_offset: serial_offset,
             cooked_serial_layout_size: serial_layout_size,
             cooked_serial_size: serial_size,
@@ -687,7 +704,9 @@ fn build_zen_dependency_bundle_new(builder: &mut ZenPackageBuilder, export_load_
                     let raw_import_index = from_dependency_node.package_index.to_import_index() as usize;
                     let zen_import_package_index = if raw_import_index < immut_builder.zen_package.import_map.len() {
                         immut_builder.zen_package.import_map[raw_import_index]
-                    } else { immut_builder.zen_package.cell_import_map[raw_import_index - immut_builder.zen_package.import_map.len()] };
+                    } else {
+                        immut_builder.zen_package.cell_import_map[raw_import_index - immut_builder.zen_package.import_map.len()]
+                    };
 
                     if zen_import_package_index.kind() == FPackageObjectIndexType::PackageImport {
                         result_dependencies.push(FDependencyBundleEntry {
@@ -1001,9 +1020,7 @@ fn build_zen_preload_dependencies(builder: &mut ZenPackageBuilder) -> anyhow::Re
                 // Note that we are working with "extended" package indices here, e.g. indices past normal import/export maps refer to cell import/export maps
                 // So we need to check that the raw export index actually belongs to the export map and not cell export map here. Cell exports are never considered public.
                 let raw_export_index = raw_dependency_node.package_index.to_export_index() as usize;
-                let is_public_export = if raw_export_index < builder.zen_package.export_map.len() {
-                    builder.zen_package.export_map[raw_export_index].is_public_export()
-                } else { false };
+                let is_public_export = if raw_export_index < builder.zen_package.export_map.len() { builder.zen_package.export_map[raw_export_index].is_public_export() } else { false };
 
                 // Create the dependency node and add the dependant node to its dependants list
                 let dependency_node = ZenExportGraphNode { node: *raw_dependency_node, is_public_export };
@@ -1265,7 +1282,16 @@ impl ConvertedZenAssetBundle {
     }
 }
 
-fn build_zen_asset_internal<'a>(legacy_asset: &FSerializedAssetBundle, container_header_version: EIoContainerHeaderVersion, package_version_fallback: Option<FPackageFileVersion>, fixup_legacy_external_arcs: bool, source_package_name: Option<String>, script_objects: Option<Arc<ZenScriptObjects>>, script_cells: Option<Arc<ZenScriptCellsStore>>, log: &'a Log) -> anyhow::Result<ZenPackageBuilder<'a>> {
+fn build_zen_asset_internal<'a>(
+    legacy_asset: &FSerializedAssetBundle,
+    container_header_version: EIoContainerHeaderVersion,
+    package_version_fallback: Option<FPackageFileVersion>,
+    fixup_legacy_external_arcs: bool,
+    source_package_name: Option<String>,
+    script_objects: Option<Arc<ZenScriptObjects>>,
+    script_cells: Option<Arc<ZenScriptCellsStore>>,
+    log: &'a Log,
+) -> anyhow::Result<ZenPackageBuilder<'a>> {
     // Read legacy package header
     let mut asset_header_reader = Cursor::new(&legacy_asset.asset_file_buffer);
     let legacy_package_header = FLegacyPackageHeader::deserialize(&mut asset_header_reader, package_version_fallback)?;

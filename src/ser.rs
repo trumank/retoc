@@ -1,8 +1,8 @@
-use std::{io::Read, io::Write};
-use std::fmt::{Display, Formatter};
-use std::ops::{Deref, DerefMut};
 use anyhow::Result;
 use byteorder::{LE, ReadBytesExt, WriteBytesExt};
+use std::fmt::{Display, Formatter};
+use std::ops::{Deref, DerefMut};
+use std::{io::Read, io::Write};
 use tracing::instrument;
 
 pub(crate) trait Readable {
@@ -303,14 +303,14 @@ pub(crate) fn write_string<S: Write>(stream: &mut S, value: &str) -> Result<()> 
 }
 
 #[instrument(skip_all)]
-pub(crate) fn read_utf8_string<S : Read>(stream: &mut S) -> Result<String> {
+pub(crate) fn read_utf8_string<S: Read>(stream: &mut S) -> Result<String> {
     let len: i32 = stream.de()?;
     let mut chars = vec![0; len as usize];
     stream.read_exact(&mut chars)?;
     Ok(String::from_utf8(chars).unwrap())
 }
 
-pub(crate) fn write_utf8_string<S : Write>(stream: &mut S, value: &str) -> Result<()> {
+pub(crate) fn write_utf8_string<S: Write>(stream: &mut S, value: &str) -> Result<()> {
     let len: i32 = value.len() as i32;
     stream.ser(&len)?;
     stream.write_all(value.as_bytes())?;

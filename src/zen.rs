@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -9,13 +9,13 @@ use tracing::instrument;
 
 use crate::align_usize;
 use crate::container_header::{EIoContainerHeaderVersion, StoreEntry};
-use crate::name_map::{read_name_batch, read_name_batch_parts, write_name_batch, write_name_batch_parts, EMappedNameType};
+use crate::name_map::{EMappedNameType, read_name_batch, read_name_batch_parts, write_name_batch, write_name_batch_parts};
 use crate::script_objects::FPackageObjectIndex;
 use crate::ser::{WriteExt, Writeable};
 use crate::version_heuristics::{heuristic_zen_has_bulk_data, heuristic_zen_package_version};
 use crate::{
-    align_u64, break_down_name_string, name_map::{FMappedName, FNameMap}, EIoStoreTocVersion, FGuid, FPackageId, FSHAHash, ReadExt,
-    Readable,
+    EIoStoreTocVersion, FGuid, FPackageId, FSHAHash, ReadExt, Readable, align_u64, break_down_name_string,
+    name_map::{FMappedName, FNameMap},
 };
 
 pub(crate) fn get_package_name(data: &[u8], container_header_version: EIoContainerHeaderVersion) -> Result<String> {
@@ -505,9 +505,11 @@ impl Display for VerseScriptCell {
 impl FromStr for VerseScriptCell {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (package_name, verse_path) = s.split_once('!')
-            .ok_or_else(|| anyhow!("Verse cell format must be '<package_name>!<verse_path>'"))?;
-        Ok(VerseScriptCell { associated_package_name: package_name.to_string(), verse_path: verse_path.to_string() })
+        let (package_name, verse_path) = s.split_once('!').ok_or_else(|| anyhow!("Verse cell format must be '<package_name>!<verse_path>'"))?;
+        Ok(VerseScriptCell {
+            associated_package_name: package_name.to_string(),
+            verse_path: verse_path.to_string(),
+        })
     }
 }
 
@@ -526,10 +528,22 @@ impl ZenScriptCellsStore {
     }
     /// Adds Verse VM Intrinsics to the script cells store
     pub(crate) fn add_vm_intrinsics(&mut self) {
-        self.add_script_cell(VerseScriptCell{associated_package_name: "/Script/CoreUObject".into(), verse_path: "(/Verse.org/Verse/(/Verse.org/Verse:)Abs:)Native".into()});
-        self.add_script_cell(VerseScriptCell{associated_package_name: "/Script/CoreUObject".into(), verse_path: "(/Verse.org/Verse/(/Verse.org/Verse:)Ceil:)Native".into()});
-        self.add_script_cell(VerseScriptCell{associated_package_name: "/Script/CoreUObject".into(), verse_path: "(/Verse.org/Verse/(/Verse.org/Verse:)Floor:)Native".into()});
-        self.add_script_cell(VerseScriptCell{associated_package_name: "/Script/CoreUObject".into(), verse_path: "(/Verse.org/Verse/(/Verse.org/Verse:)ConcatenateMaps:)Native".into()});
+        self.add_script_cell(VerseScriptCell {
+            associated_package_name: "/Script/CoreUObject".into(),
+            verse_path: "(/Verse.org/Verse/(/Verse.org/Verse:)Abs:)Native".into(),
+        });
+        self.add_script_cell(VerseScriptCell {
+            associated_package_name: "/Script/CoreUObject".into(),
+            verse_path: "(/Verse.org/Verse/(/Verse.org/Verse:)Ceil:)Native".into(),
+        });
+        self.add_script_cell(VerseScriptCell {
+            associated_package_name: "/Script/CoreUObject".into(),
+            verse_path: "(/Verse.org/Verse/(/Verse.org/Verse:)Floor:)Native".into(),
+        });
+        self.add_script_cell(VerseScriptCell {
+            associated_package_name: "/Script/CoreUObject".into(),
+            verse_path: "(/Verse.org/Verse/(/Verse.org/Verse:)ConcatenateMaps:)Native".into(),
+        });
     }
     /// Adds a script cell to the store. Package object index will be automatically derived from the verse path
     pub(crate) fn add_script_cell(&mut self, script_cell: VerseScriptCell) {

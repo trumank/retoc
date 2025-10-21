@@ -129,7 +129,7 @@ pub(crate) fn heuristic_package_version_from_legacy_package<S: Read + Seek>(s: &
     // Determine set of possible package file versions for the given legacy file version
     if versioning_info.legacy_file_version <= FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE5_6 {
         package_versions_to_try = vec![
-            FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::OsSubObjectShadowSerialization),        // UE 5.6
+            FPackageFileVersion::create_ue5(EUnrealEngineObjectUE5Version::OsSubObjectShadowSerialization), // UE 5.6
         ];
     } else if versioning_info.legacy_file_version <= FLegacyPackageVersioningInfo::LEGACY_FILE_VERSION_UE5 {
         package_versions_to_try = vec![
@@ -142,7 +142,7 @@ pub(crate) fn heuristic_package_version_from_legacy_package<S: Read + Seek>(s: &
         ];
     } else {
         package_versions_to_try = vec![
-            FPackageFileVersion::create_ue4(EUnrealEngineObjectUE4Version::CorrectLicenseeFlag),                   // UE 4.27 and 4.26
+            FPackageFileVersion::create_ue4(EUnrealEngineObjectUE4Version::CorrectLicenseeFlag), // UE 4.27 and 4.26
         ];
     }
 

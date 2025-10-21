@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::io::Seek;
 use std::{
     collections::BTreeMap,
     io::{Cursor, Read, SeekFrom, Write},
     marker::PhantomData,
 };
-use std::io::Seek;
 use strum::FromRepr;
 use tracing::instrument;
 

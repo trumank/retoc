@@ -1,8 +1,3 @@
-use std::{
-    io::{BufWriter, Seek, Write},
-    path::{Path, PathBuf},
-};
-use std::io::Cursor;
 use crate::{
     EIoChunkType, FPackageId, UEPath, UEPathBuf, align_usize,
     chunk_id::FIoChunkIdRaw,
@@ -11,6 +6,11 @@ use crate::{
 use crate::{EIoStoreTocVersion, FIoChunkHash, FIoChunkId, FIoContainerId, FIoOffsetAndLength, FIoStoreTocCompressedBlockEntry, FIoStoreTocEntryMeta, FIoStoreTocEntryMetaFlags, Toc, ser::*};
 use anyhow::{Context, Result};
 use fs_err as fs;
+use std::io::Cursor;
+use std::{
+    io::{BufWriter, Seek, Write},
+    path::{Path, PathBuf},
+};
 
 pub(crate) struct IoStoreWriter {
     #[allow(unused)]

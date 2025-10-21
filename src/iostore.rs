@@ -459,7 +459,7 @@ mod test {
         ];
         containers.sort_by(|a, b| sort_container_name(b).cmp(&sort_container_name(a)));
         //for container in containers {
-            //eprintln!("{:?}", sort_container_name(container));
+        //eprintln!("{:?}", sort_container_name(container));
         //}
         assert_eq!(
             containers,
