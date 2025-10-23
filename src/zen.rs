@@ -853,6 +853,10 @@ impl FZenPackageHeader {
         let summary: FZenPackageSummary = FZenPackageSummary::deserialize(s, container_header_version)?;
         let name_map = if container_header_version > EIoContainerHeaderVersion::Initial {
             let _versioning_info: Option<FZenPackageVersioningInfo> = if summary.has_versioning_info != 0 { Some(s.de()?) } else { None };
+            if container_header_version >= EIoContainerHeaderVersion::SoftPackageReferencesOffset {
+                let _cell_import_map_offset: i32 = s.de()?;
+                let _cell_export_map_offset: i32 = s.de()?;
+            }
             FNameMap::deserialize(s, EMappedNameType::Package)?
         } else {
             s.seek(SeekFrom::Start(summary.name_map_names_offset as u64))?;
