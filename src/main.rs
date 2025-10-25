@@ -996,7 +996,7 @@ fn action_dump_test(args: ActionDumpTest, config: Arc<Config>) -> Result<()> {
 }
 
 fn action_gen_script_objects(args: ActionGenScriptObjects, _config: Arc<Config>) -> Result<()> {
-    let dump: ue_reflection::ReflectionData = serde_json::from_reader(BufReader::new(fs::File::open(&args.input)?))?;
+    let dump: jmap::Jmap = serde_json::from_reader(BufReader::new(fs::File::open(&args.input)?))?;
 
     // map CDO => Class
     let mut cdos = HashMap::<&str, &str>::new();
@@ -1006,7 +1006,7 @@ fn action_gen_script_objects(args: ActionGenScriptObjects, _config: Arc<Config>)
 
     for (path, object) in &dump.objects {
         if path.starts_with("/Script/")
-            && let ue_reflection::ObjectType::Class(class) = &object
+            && let jmap::ObjectType::Class(class) = &object
             && let Some(cdo) = &class.class_default_object
         {
             cdos.insert(cdo, path);
@@ -1015,7 +1015,7 @@ fn action_gen_script_objects(args: ActionGenScriptObjects, _config: Arc<Config>)
 
     for (path, object) in &dump.objects {
         if path.starts_with("/Script/") {
-            if let ue_reflection::ObjectType::Class(class) = &object
+            if let jmap::ObjectType::Class(class) = &object
                 && let Some(cdo) = &class.class_default_object
             {
                 cdos.insert(cdo, path);

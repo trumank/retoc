@@ -834,6 +834,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c"
 
 [[package]]
+name = "jmap"
+version = "0.1.0"
+source = "git+https://github.com/trumank/jmap.git#cd31b2ea60f41c67359c6bc8492d41fbd8aeb5ce"
+dependencies = [
+ "bitflags",
+ "bytemuck",
+ "ordered-float",
+ "ordermap",
+ "serde",
+ "serde_json",
+ "strum 0.27.2",
+]
+
+[[package]]
 name = "jobserver"
 version = "0.1.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1226,6 +1240,7 @@ dependencies = [
  "indexmap 2.11.4",
  "indicatif",
  "itertools",
+ "jmap",
  "key-mutex",
  "lz4_flex",
  "oodle_loader",
@@ -1241,7 +1256,6 @@ dependencies = [
  "strum 0.26.3",
  "tracing",
  "typed-path",
- "ue_reflection",
  "zstd",
 ]
 
@@ -1700,20 +1714,6 @@ name = "typenum"
 version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42ff0bf0c66b8238c6f3b578df37d0b7848e55df8577b3f74f92a69acceeb825"
-
-[[package]]
-name = "ue_reflection"
-version = "0.1.0"
-source = "git+https://github.com/trumank/meatloaf.git#241d7190106083c0eb09ea28cdd70d5addbcb237"
-dependencies = [
- "bitflags",
- "bytemuck",
- "ordered-float",
- "ordermap",
- "serde",
- "serde_json",
- "strum 0.27.2",
-]
 
 [[package]]
 name = "unicode-ident"
