@@ -209,7 +209,7 @@ struct ActionDumpTest {
 
 #[derive(Parser, Debug)]
 struct ActionGenScriptObjects {
-    /// Input reflection data JSON dump
+    /// Input reflection data .jmap dump
     #[arg(index = 1)]
     input: PathBuf,
     /// Output .utoc file
@@ -256,8 +256,8 @@ enum Action {
     /// Dump test
     DumpTest(ActionDumpTest),
 
-    /// Generate script objects global container from UE reflection data JSON
-    /// see https://github.com/trumank/meatloaf
+    /// Generate script objects global container from UE reflection data .jmap
+    /// see https://github.com/trumank/jmap
     GenScriptObjects(ActionGenScriptObjects),
 
     /// Print script objects from container

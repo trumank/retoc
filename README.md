@@ -19,7 +19,7 @@ Commands:
   to-zen                Converts assets and shaders from Legacy to Zen
   get                   Get chunk by index and write to stdout
   dump-test             Dump test
-  gen-script-objects    Generate script objects global container from UE reflection data JSON see https://github.com/trumank/meatloaf
+  gen-script-objects    Generate script objects global container from UE reflection data .jmap see https://github.com/trumank/jmap
   print-script-objects  Print script objects from container
   help                  Print this message or the help of the given subcommand(s)
 
