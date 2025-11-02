@@ -13,8 +13,8 @@ use tracing::instrument;
 
 #[derive(Debug, Copy, Clone, Default)]
 pub struct FMinimalName {
-    index: i32,
-    number: i32,
+    pub index: i32,
+    pub number: i32,
 }
 impl Readable for FMinimalName {
     #[instrument(skip_all, name = "FMinimalName")]

@@ -558,7 +558,7 @@ impl ZenScriptCellsStore {
 
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq, Hash)]
 pub struct FPackageIndex {
-    index: i32, // positive is index into the export map, negative is index into import map, zero is none
+    pub index: i32, // positive is index into the export map, negative is index into import map, zero is none
 }
 impl FPackageIndex {
     pub fn create_null() -> FPackageIndex {
