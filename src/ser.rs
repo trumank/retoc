@@ -94,7 +94,7 @@ impl<const N: usize, T: Writeable> Writeable for [T; N] {
 
 impl Readable for String {
     fn de<S: Read>(s: &mut S) -> Result<Self> {
-        read_string(s.de()?, s)
+        read_string_data(s.de()?, s)
     }
 }
 impl Writeable for String {
@@ -271,7 +271,7 @@ where
 }
 
 #[instrument(skip_all)]
-pub fn read_string<S: Read>(len: i32, stream: &mut S) -> Result<String> {
+pub fn read_string_data<S: Read>(len: i32, stream: &mut S) -> Result<String> {
     if len < 0 {
         let chars = read_array((-len) as usize, stream, |r| Ok(r.read_u16::<LE>()?))?;
         let length = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
@@ -282,6 +282,32 @@ pub fn read_string<S: Read>(len: i32, stream: &mut S) -> Result<String> {
         let length = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
         Ok(String::from_utf8_lossy(&chars[..length]).into_owned())
     }
+}
+
+/// Write string data only. Do not write length prefix
+pub fn write_string_data<S: Write>(stream: &mut S, value: &str) -> Result<()> {
+    if value.is_empty() {
+    } else if value.is_ascii() {
+        stream.write_all(value.as_bytes())?;
+        stream.write_u8(0)?;
+    } else {
+        let chars: Vec<u16> = value.encode_utf16().collect();
+        for c in chars {
+            stream.write_u16::<LE>(c)?;
+        }
+        stream.write_u16::<LE>(0)?;
+    }
+    Ok(())
+}
+
+pub fn serialized_string_len<S: Write>(_stream: &mut S, value: &str) -> Result<i32> {
+    Ok(if value.is_empty() {
+        0
+    } else if value.is_ascii() {
+        value.len() as i32 + 1
+    } else {
+        -(value.encode_utf16().count() as i32 + 1)
+    })
 }
 
 pub fn write_string<S: Write>(stream: &mut S, value: &str) -> Result<()> {

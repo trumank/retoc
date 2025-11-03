@@ -228,6 +228,13 @@ struct ActionPrintScriptObjects {
 }
 
 #[derive(Parser, Debug)]
+struct ActionAssetRegistry {
+    /// Input AssetRegistry.bin file
+    #[arg(index = 1)]
+    input: PathBuf,
+}
+
+#[derive(Parser, Debug)]
 enum Action {
     /// Extract manifest from .utoc
     Manifest(ActionManifest),
@@ -262,6 +269,9 @@ enum Action {
 
     /// Print script objects from container
     PrintScriptObjects(ActionPrintScriptObjects),
+
+    /// Parse and print asset registry contents
+    AssetRegistry(ActionAssetRegistry),
 }
 
 #[derive(Parser, Debug)]
@@ -310,6 +320,8 @@ fn main() -> Result<()> {
         Action::GenScriptObjects(action) => action_gen_script_objects(action, config),
 
         Action::PrintScriptObjects(action) => action_print_script_objects(action, config),
+
+        Action::AssetRegistry(action) => action_asset_registry(action, config),
     }
 }
 
@@ -1078,5 +1090,26 @@ fn action_print_script_objects(args: ActionPrintScriptObjects, config: Arc<Confi
     let iostore = iostore::open(args.input, config)?;
     let script_objects = iostore.load_script_objects()?;
     script_objects.print();
+    Ok(())
+}
+
+fn action_asset_registry(args: ActionAssetRegistry, _config: Arc<Config>) -> Result<()> {
+    use retoc::asset_registry::{AssetRegistry, dbg::Dbg};
+
+    let data = fs::read(&args.input)?;
+    let mut cursor = Cursor::new(&data);
+    let registry = AssetRegistry::deserialize(&mut cursor)?;
+
+    println!("Asset Registry");
+    println!("  Version: {:?}", registry.version);
+    println!("  Registry Version: {:?}", registry.registry_version);
+    println!("  Assets: {}", registry.asset_data.len());
+    println!();
+
+    for asset in &registry.asset_data {
+        println!("{:#?}", Dbg::new(&registry, asset));
+        println!();
+    }
+
     Ok(())
 }

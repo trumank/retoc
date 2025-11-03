@@ -9,12 +9,12 @@ use tracing::instrument;
 
 use crate::align_usize;
 use crate::container_header::{EIoContainerHeaderVersion, StoreEntry};
-use crate::name_map::{EMappedNameType, read_name_batch, read_name_batch_parts, write_name_batch, write_name_batch_parts};
+use crate::name_map::{EMappedNameType, break_down_name_string, read_name_batch, read_name_batch_parts, write_name_batch, write_name_batch_parts};
 use crate::script_objects::FPackageObjectIndex;
 use crate::ser::{WriteExt, Writeable};
 use crate::version_heuristics::{heuristic_zen_has_bulk_data, heuristic_zen_package_version};
 use crate::{
-    EIoStoreTocVersion, FGuid, FPackageId, FSHAHash, ReadExt, Readable, align_u64, break_down_name_string,
+    EIoStoreTocVersion, FGuid, FPackageId, FSHAHash, ReadExt, Readable, align_u64,
     name_map::{FMappedName, FNameMap},
 };
 

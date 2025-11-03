@@ -6,7 +6,7 @@ use std::{borrow::Cow, io::Read};
 use strum::{Display, FromRepr};
 use tracing::instrument;
 
-use crate::{break_down_name_string, read_array, read_string, ser::*};
+use crate::{read_array, read_string_data, ser::*};
 
 const FNAME_HASH_ALGORITHM_ID: u64 = 0xC164_0000;
 
@@ -24,6 +24,26 @@ fn name_header(name: &str) -> [u8; 2] {
     len.to_be_bytes()
 }
 
+/// Breaks down a combined FName string into a base name and a number. Number is 0 if there is no number
+pub(crate) fn break_down_name_string<'a>(name: &'a str) -> (&'a str, i32) {
+    let mut name_without_number: &'a str = name;
+    let mut name_number: i32 = 0; // 0 means no number
+
+    // Attempt to break down the composite name into the name part and the number part
+    if let Some((left, right)) = name.rsplit_once('_') {
+        // Right part needs to be parsed as a valid signed integer that is >= 0 and converts back to the same string
+        // Last part is important for not touching names like: Rocket_04 - 04 should stay a part of the name, not a number, otherwise we would actually get Rocket_4 when deserializing!
+        if let Ok(parsed_number) = right.parse::<i32>()
+            && parsed_number >= 0
+            && parsed_number.to_string() == right
+        {
+            name_without_number = left;
+            name_number = parsed_number + 1; // stored as 1 more than the actual number
+        }
+    }
+    (name_without_number, name_number)
+}
+
 pub fn read_name_batch<S: Read>(s: &mut S) -> Result<Vec<String>> {
     let num: u32 = s.de()?;
     if num == 0 {
@@ -39,13 +59,13 @@ pub fn read_name_batch<S: Read>(s: &mut S) -> Result<Vec<String>> {
         .iter()
         .map(|&l| {
             let l = if l < 0 { i16::MIN - l } else { l };
-            read_string(l as i32, s)
+            read_string_data(l as i32, s)
         })
         .collect::<Result<_>>()?;
     Ok(names)
 }
 
-pub fn write_name_batch<S: Write>(s: &mut S, names: &[String]) -> Result<()> {
+pub fn write_name_batch<S: Write, T: AsRef<str>>(s: &mut S, names: &[T]) -> Result<()> {
     fn name_byte_size(name: &str) -> u32 {
         if name.is_ascii() { name.len() as u32 } else { name.encode_utf16().count() as u32 * 2 }
     }
@@ -55,18 +75,19 @@ pub fn write_name_batch<S: Write>(s: &mut S, names: &[String]) -> Result<()> {
         return Ok(());
     }
 
-    s.ser(&names.iter().map(|s| name_byte_size(s)).sum::<u32>())?;
+    s.ser(&names.iter().map(|s| name_byte_size(s.as_ref())).sum::<u32>())?;
     s.ser(&FNAME_HASH_ALGORITHM_ID)?;
 
     for name in names {
-        s.ser(&name_hash(name))?;
+        s.ser(&name_hash(name.as_ref()))?;
     }
 
     for name in names {
-        s.ser(&name_header(name))?;
+        s.ser(&name_header(name.as_ref()))?;
     }
 
     for name in names {
+        let name = name.as_ref();
         if name.is_ascii() {
             s.write_all(name.as_bytes())?;
         } else {
@@ -88,18 +109,19 @@ pub fn read_name_batch_parts(names_buffer: &[u8]) -> Result<Vec<String>> {
             // UTF16 strings aligned to 2 bytes so read one byte to reach alignment
             s.de::<u8>()?;
         }
-        names.push(read_string(l as i32, &mut s)?);
+        names.push(read_string_data(l as i32, &mut s)?);
     }
     Ok(names)
 }
 
-pub fn write_name_batch_parts(names: &[String]) -> Result<(Vec<u8>, Vec<u8>)> {
+pub fn write_name_batch_parts<T: AsRef<str>>(names: &[T]) -> Result<(Vec<u8>, Vec<u8>)> {
     let mut cur_names = Cursor::new(vec![]);
     let mut cur_hashes = Cursor::new(vec![]);
 
     cur_hashes.ser(&FNAME_HASH_ALGORITHM_ID)?;
 
     for name in names {
+        let name = name.as_ref();
         cur_names.ser(&name_header(name))?;
         if name.is_ascii() {
             cur_names.write_all(name.as_bytes())?;

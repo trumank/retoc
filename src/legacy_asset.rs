@@ -1,8 +1,9 @@
 use crate::debug;
 use crate::logging::Log;
+use crate::name_map::break_down_name_string;
 use crate::version_heuristics::heuristic_package_version_from_legacy_package;
 use crate::zen::{EUnrealEngineObjectUE4Version, EUnrealEngineObjectUE5Version, FCustomVersion, FPackageFileVersion, FPackageIndex};
-use crate::{FGuid, break_down_name_string, ser::*};
+use crate::{FGuid, ser::*};
 use anyhow::{Context, Result, bail};
 use std::borrow::Cow;
 use std::cmp::max;
