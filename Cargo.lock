@@ -1260,6 +1260,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "retoc_cli"
+version = "0.1.4"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "cityhasher",
+ "clap",
+ "fs-err",
+ "hex",
+ "indicatif",
+ "itertools",
+ "jmap",
+ "rayon",
+ "repak",
+ "retoc",
+ "ser-hex",
+ "serde",
+ "serde_json",
+ "strum 0.26.3",
+]
+
+[[package]]
 name = "ring"
 version = "0.17.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
