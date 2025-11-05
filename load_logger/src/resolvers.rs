@@ -27,7 +27,7 @@ impl_collector! {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct EventDrivenCreateExport(pub usize);
+pub struct EventDrivenCreateExport(pub u64);
 impl_resolver_singleton!(all, EventDrivenCreateExport, |ctx| async {
     let strings = ctx
         .scan(util::utf16_pattern("EventDrivenCreateExport\0"))
@@ -38,7 +38,7 @@ impl_resolver_singleton!(all, EventDrivenCreateExport, |ctx| async {
 });
 
 #[derive(Debug, PartialEq)]
-pub struct EventDrivenIndexToObject(pub usize);
+pub struct EventDrivenIndexToObject(pub u64);
 impl_resolver_singleton!(all, EventDrivenIndexToObject, |ctx| async {
     let strings = ctx
         .scan(util::utf16_pattern(
@@ -51,7 +51,7 @@ impl_resolver_singleton!(all, EventDrivenIndexToObject, |ctx| async {
 });
 
 #[derive(Debug, PartialEq)]
-pub struct CheckForCyclesInner(pub usize);
+pub struct CheckForCyclesInner(pub u64);
 impl_resolver_singleton!(all, CheckForCyclesInner, |ctx| async {
     let patterns = [
         "4c 89 44 24 18 48 89 4c 24 08 55 56 41 54 41 55 41 57 48 81 ec ?? 00 00 00 4c 8b ac 24 ?? 00 00 00 4d 8b e0 48 8b f2 4d 8b c5 48 8d 54 24 34",
