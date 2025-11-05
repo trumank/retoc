@@ -1155,8 +1155,8 @@ pub fn write_io_store_library(store_writer: &mut IoStoreWriter, raw_shader_libra
         }
 
         // If we know the compression method for shaders, compress this groups content with it
-        if compression_method.is_some() {
-            let compressed_group_data = compress_shader(&shader_group_chunk_buffer, compression_method.unwrap())?;
+        if let Some(compression_method) = compression_method {
+            let compressed_group_data = compress_shader(&shader_group_chunk_buffer, compression_method)?;
 
             // Only take the compressed data over the decompressed data if it is actually smaller
             if compressed_group_data.len() < actual_uncompressed_group_size {

@@ -9,7 +9,7 @@ use crate::name_map::{break_down_name_string, read_name_batch, write_name_batch}
 use crate::{FGuid, ser::*};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-struct FAssetRegistryHeader {
+pub struct FAssetRegistryHeader {
     filter_editor_only_data: bool,
 }
 

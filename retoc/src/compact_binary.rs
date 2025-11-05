@@ -163,7 +163,7 @@ fn read_string<S: Read>(stream: &mut S) -> Result<String> {
 }
 
 #[instrument(skip_all)]
-fn read_compact_binary<S: Read>(stream: &mut S) -> Result<Field> {
+pub fn read_compact_binary<S: Read>(stream: &mut S) -> Result<Field> {
     read_field(&mut Ctx::new(stream), ECbFieldTypeFlags::HasFieldType)
 }
 #[instrument(skip_all)]
