@@ -10,6 +10,39 @@ repository = "https://github.com/trumank/retoc"
 homepage = "https://github.com/trumank/retoc"
 license = "MIT"
 
+[workspace.dependencies]
+aes = "0.8.4"
+anyhow = "1.0.100"
+base64 = "0.22.1"
+bitflags = "2.9.4"
+blake3 = "1.8.2"
+byteorder = "1.5.0"
+cityhasher = "0.1.0"
+clap = { version = "4.5.48", features = ["derive"] }
+flate2 = { version = "1.1.2", features = ["zlib"] }
+fs-err = "3.1.2"
+hex = "0.4.3"
+indexmap = { version = "2.11.4", features = ["serde"] }
+indicatif = "0.17.11"
+itertools = "0.14.0"
+jmap = { git = "https://github.com/trumank/jmap.git", version = "0.1.0" }
+key-mutex = "0.1.3"
+lz4_flex = "0.11.5"
+oodle_loader = { git = "https://github.com/trumank/repak.git", version = "0.2.2" }
+pariter = "0.5.1"
+pretty_assertions = "1.4.1"
+rayon = "1.11.0"
+repak = { git = "https://github.com/trumank/repak.git", version = "0.2.2", features = ["oodle"] }
+ser-hex = { git = "https://github.com/trumank/ser-hex.git", version = "0.1.0" }
+serde = { version = "1.0.227", features = ["derive"] }
+serde_json = "1.0.145"
+serde_with = { version = "3.14.1", features = ["hex"] }
+sha1 = "0.10.6"
+strum = { version = "0.26.3", features = ["derive"] }
+tracing = "0.1.41"
+typed-path = "0.10.0"
+zstd = "0.13.3"
+
 [profile.release]
 debug = true
 

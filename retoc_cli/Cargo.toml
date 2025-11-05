@@ -13,18 +13,18 @@ path = "src/main.rs"
 
 [dependencies]
 retoc = { path = "../retoc" }
-anyhow = "1.0.100"
-blake3 = "1.8.2"
-cityhasher = "0.1.0"
-clap = { version = "4.5.48", features = ["derive"] }
-fs-err = "3.1.2"
-hex = "0.4.3"
-indicatif = "0.17.11"
-itertools = "0.14.0"
-jmap = { git = "https://github.com/trumank/jmap.git", version = "0.1.0" }
-rayon = "1.11.0"
-repak = { git = "https://github.com/trumank/repak.git", version = "0.2.2", features = ["oodle"] }
-ser-hex = { git = "https://github.com/trumank/ser-hex", version = "0.1.0" }
-serde = { version = "1.0.227", features = ["derive"] }
-serde_json = "1.0.145"
-strum = { version = "0.26.3", features = ["derive"] }
+anyhow.workspace = true
+blake3.workspace = true
+cityhasher.workspace = true
+clap.workspace = true
+fs-err.workspace = true
+hex.workspace = true
+indicatif.workspace = true
+itertools.workspace = true
+jmap.workspace = true
+rayon.workspace = true
+repak.workspace = true
+ser-hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+strum.workspace = true
