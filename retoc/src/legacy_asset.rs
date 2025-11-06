@@ -627,9 +627,9 @@ impl FPackageNameMap {
         }
         Ok(())
     }
-    pub fn get(&self, name: FMinimalName) -> Cow<'_, str> {
-        let bare_name = &self.names[name.index as usize];
-        if name.number != 0 { format!("{bare_name}_{}", name.number - 1).into() } else { bare_name.into() }
+    pub fn get(&self, name: FMinimalName) -> Result<Cow<'_, str>> {
+        let bare_name = self.names.get(name.index as usize).with_context(|| format!("invalid FName index {}", name.index))?;
+        Ok(if name.number != 0 { format!("{bare_name}_{}", name.number - 1).into() } else { bare_name.into() })
     }
     pub fn store(&mut self, name: &str) -> FMinimalName {
         let (name_without_number, name_number) = break_down_name_string(name);
@@ -1276,7 +1276,7 @@ pub fn get_package_object_full_name(package: &FLegacyPackageHeader, object_index
         let package_import_index = package_object_outer_chain[0].to_import_index() as usize;
 
         // If the innermost package index is an import, it's a package name. Otherwise, this package name is the package name
-        package_name = package.name_map.get(package.imports[package_import_index].object_name).to_string();
+        package_name = package.name_map.get(package.imports[package_import_index].object_name).unwrap().to_string();
         start_object_index = 1;
     } else {
         // This is an export, package name is this package name, and we should start path building at index 0
@@ -1294,12 +1294,12 @@ pub fn get_package_object_full_name(package: &FLegacyPackageHeader, object_index
         // Append the name of the object if it's an import
         if outer.is_import() {
             let import_index = outer.to_import_index() as usize;
-            full_object_name.push_str(&package.name_map.get(package.imports[import_index].object_name));
+            full_object_name.push_str(&package.name_map.get(package.imports[import_index].object_name).unwrap());
 
             // Append the name of the object if it's an import
         } else if outer.is_export() {
             let export_index = outer.to_export_index() as usize;
-            full_object_name.push_str(&package.name_map.get(package.exports[export_index].object_name));
+            full_object_name.push_str(&package.name_map.get(package.exports[export_index].object_name).unwrap());
         }
     }
     // Make sure the entire path is lowercase. This is a requirement for GetPublicExportHash

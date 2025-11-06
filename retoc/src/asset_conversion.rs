@@ -1188,7 +1188,7 @@ fn resolve_prestream_package_imports(builder: &mut LegacyAssetBuilder) -> anyhow
         .imports
         .iter()
         .filter(|x| x.outer_index.is_null())
-        .map(|x| builder.legacy_package.name_map.get(x.object_name).to_string())
+        .map(|x| builder.legacy_package.name_map.get(x.object_name).unwrap().to_string())
         .filter(|x| !x.starts_with("/Script/"))
         .map(|x| FPackageId::from_name(&x))
         .collect();

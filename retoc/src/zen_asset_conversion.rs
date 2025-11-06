@@ -402,7 +402,7 @@ fn build_zen_export_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
     for export_index in 0..builder.legacy_package.exports.len() {
         let object_export = builder.legacy_package.exports[export_index].clone();
         let total_header_size = builder.legacy_package.summary.versioning_info.total_header_size as u64;
-        let object_name = builder.legacy_package.name_map.get(object_export.object_name).to_string();
+        let object_name = builder.legacy_package.name_map.get(object_export.object_name)?.to_string();
 
         let mut cooked_serial_offset = object_export.serial_offset as u64;
         if builder.container_header_version > EIoContainerHeaderVersion::Initial {
@@ -461,7 +461,7 @@ fn build_zen_export_map(builder: &mut ZenPackageBuilder) -> anyhow::Result<()> {
         let serial_layout_size: u64 = cell_export.serial_layout_size as u64;
         let serial_size: u64 = cell_export.serial_size as u64;
 
-        let cpp_class_info = builder.legacy_package.name_map.get(cell_export.cpp_class_info).to_string();
+        let cpp_class_info = builder.legacy_package.name_map.get(cell_export.cpp_class_info)?.to_string();
         let mapped_cpp_class_info = builder.zen_package.name_map.store(&cpp_class_info);
 
         // Export hash is zero if the verse path is empty, otherwise it is calculated from the verse path
