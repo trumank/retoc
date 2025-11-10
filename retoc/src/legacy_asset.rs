@@ -252,15 +252,15 @@ pub struct FLegacyPackageFileSummary {
     pub depends_offset: i32,
     pub package_guid: FGuid,
     pub package_source: u32,
-    world_tile_info_data_offset: i32,
-    chunk_ids: Vec<i32>,
-    preload_dependencies: FCountOffsetPair,
+    pub world_tile_info_data_offset: i32,
+    pub chunk_ids: Vec<i32>,
+    pub preload_dependencies: FCountOffsetPair,
     pub names_referenced_from_export_data_count: i32,
-    data_resource_offset: i32,
+    pub data_resource_offset: i32,
     // empty placeholder for cooked packages
-    asset_registry_data_offset: i32,
+    pub asset_registry_data_offset: i32,
     // not used for cooked packages
-    bulk_data_start_offset: i64,
+    pub bulk_data_start_offset: i64,
 }
 impl FLegacyPackageFileSummary {
     pub const PACKAGE_FILE_TAG: u32 = 0x9E2A83C1;
