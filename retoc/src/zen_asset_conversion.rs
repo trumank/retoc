@@ -1394,11 +1394,12 @@ mod test {
         let eng5_7 = EngineVersion::UE5_7;
         let ue5_7 = (eng5_7.toc_version(), eng5_7.container_header_version(), eng5_7.package_file_version());
 
-        run_test("tests/UE5.7/T_Quinn_01_D", ue5_7, None)?;
-        run_test("tests/UE5.7/SM_Cube", ue5_7, None)?;
-        run_test("tests/UE5.7/BP_ThirdPersonCharacter", ue5_7, None)?;
-        run_test("tests/UE5.7/M_Mannequin", ue5_7, None)?;
-        run_test("tests/UE5.7/SK_Mannequin", ue5_7, None)?;
+        // Using 5.6 Tests for 5.7 (idential IoStore serialization)
+        run_test("tests/UE5.6/T_Quinn_01_D", ue5_7, None)?;
+        run_test("tests/UE5.6/SM_Cube", ue5_7, None)?;
+        run_test("tests/UE5.6/BP_ThirdPersonCharacter", ue5_7, None)?;
+        run_test("tests/UE5.6/M_Mannequin", ue5_7, None)?;
+        run_test("tests/UE5.6/SK_Mannequin", ue5_7, None)?;
 
         Ok(())
     }
