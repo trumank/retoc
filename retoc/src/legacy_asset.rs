@@ -117,6 +117,7 @@ pub struct FLegacyPackageVersioningInfo {
 }
 impl FLegacyPackageVersioningInfo {
     pub const LEGACY_FILE_VERSION_UE5_6: i32 = -9;
+    pub const LEGACY_FILE_VERSION_UE5_7: i32 = -9;
     pub const LEGACY_FILE_VERSION_UE5: i32 = -8;
     pub const LEGACY_FILE_VERSION_UE4: i32 = -7;
     pub const VER_UE3_LATEST: i32 = 864;
