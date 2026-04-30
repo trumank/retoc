@@ -757,6 +757,7 @@ pub enum EUnrealEngineObjectUE5Version {
     VerseCells = 1015,
     PackageSavedHash = 1016,
     OsSubObjectShadowSerialization = 1017,
+    ImportTypeHierarchies = 1018,
 }
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, FromRepr)]
 #[repr(i32)]

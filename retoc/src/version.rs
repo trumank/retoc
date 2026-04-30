@@ -73,7 +73,7 @@ impl EngineVersion {
             UE5_4 => PropertyTagCompleteTypeName,
             UE5_5 => AssetRegistryPackageBuildDependencies,
             UE5_6 => OsSubObjectShadowSerialization,
-            UE5_7 => OsSubObjectShadowSerialization,
+            UE5_7 => ImportTypeHierarchies,
             _ => unreachable!(),
         }
     }

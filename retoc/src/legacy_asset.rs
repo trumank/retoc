@@ -340,6 +340,12 @@ impl FLegacyPackageFileSummary {
         // Cooked packages do not have thumbnails ever, no point in saving this
         let _thumbnail_table_offset: i32 = s.de()?;
 
+        // Cooked packages do not have import type hierarchies (editor-only), but the count/offset are always written
+        if versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::ImportTypeHierarchies as i32 {
+            let _import_type_hierarchies_count: i32 = s.de()?;
+            let _import_type_hierarchies_offset: i32 = s.de()?;
+        }
+
         let package_guid: FGuid = if versioning_info.package_file_version.file_version_ue5 < EUnrealEngineObjectUE5Version::PackageSavedHash as i32 {
             s.de()?
         } else {
@@ -493,6 +499,14 @@ impl FLegacyPackageFileSummary {
         // Cooked packages do not have thumbnails
         let thumbnails_table_offset: i32 = 0;
         s.ser(&thumbnails_table_offset)?;
+
+        // Cooked packages do not have import type hierarchies (editor-only)
+        if self.versioning_info.package_file_version.file_version_ue5 >= EUnrealEngineObjectUE5Version::ImportTypeHierarchies as i32 {
+            let import_type_hierarchies_count: i32 = 0;
+            let import_type_hierarchies_offset: i32 = 0;
+            s.ser(&import_type_hierarchies_count)?;
+            s.ser(&import_type_hierarchies_offset)?;
+        }
 
         if self.versioning_info.package_file_version.file_version_ue5 < EUnrealEngineObjectUE5Version::PackageSavedHash as i32 {
             s.ser(&self.package_guid)?;
