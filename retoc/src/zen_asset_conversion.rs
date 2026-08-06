@@ -490,6 +490,23 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
     let mut current_export_offset: u64 = 0;
     let mut export_to_bundle_map: HashMap<ZenDependencyGraphNode, usize> = HashMap::new();
 
+    // Whether a public export should close the export bundle it belongs to.
+    //
+    // UE4.26/4.27 containers (header version <= Initial) are not cooked that way. Epic's cooker
+    // computes a single global load order across every package in the cook and only closes a
+    // bundle when that walk moves on to a different package, so a package is split into several
+    // bundles only when another package's nodes have to interleave into the middle of its run
+    // (IoStoreUtilities.cpp, BuildBundles). Splitting at every public export instead gives two or
+    // more bundles per package, which is a layout the engine never produces for this target.
+    //
+    // Symptom when it is wrong: plugin mods built by to-zen load and render correctly, but the
+    // game hangs forever in FlushAsyncLoading once anything from the container has been loaded
+    // (exiting to the title screen, loading a save), with no crash and no log entry.
+    //
+    // Later container header versions are produced by the per-package Package Store Optimizer,
+    // where ending a bundle at a public export is correct, so keep that behaviour for them.
+    let split_bundles_at_public_exports = builder.container_header_version > EIoContainerHeaderVersion::Initial;
+
     // Create export bundles from the export list sorted by the dependencies
     for graph_node in export_load_order {
         let dependency_graph_node = graph_node.node;
@@ -543,7 +560,7 @@ fn build_zen_dependency_bundles_legacy(builder: &mut ZenPackageBuilder, export_l
         }
 
         // Export bundles end at a public export with an export hash. So if this is a public export, close the current bundle
-        if is_public_export {
+        if is_public_export && split_bundles_at_public_exports {
             current_export_bundle_header_index = -1;
         }
     }
