@@ -50,8 +50,9 @@ pub fn read_name_batch<S: Read>(s: &mut S) -> Result<Vec<String>> {
         return Ok(vec![]);
     }
     let _num_string_bytes: u32 = s.de()?;
-    let hash_version: u64 = s.de()?;
-    assert_eq!(hash_version, FNAME_HASH_ALGORITHM_ID);
+    let _hash_version: u64 = s.de()?;
+    // non-standard FName hash is not actually fatal
+    // assert_eq!(hash_version, FNAME_HASH_ALGORITHM_ID);
 
     let _hash_bytes: Vec<u8> = s.de_ctx(num as usize * 8)?;
     let lengths = read_array(num as usize, s, |s| Ok(i16::from_be_bytes(s.de()?)))?;
