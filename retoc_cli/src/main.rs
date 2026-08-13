@@ -932,6 +932,7 @@ fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
     prog_ref.inspect(|p| p.finish_with_message(""));
     log.set_progress(None);
 
+    write_script_objects(&mut writer, script_objects.as_deref())?;
     writer.finalize()?;
 
     // create empty pak file if one does not already exist (necessary for game to detect and load container)
@@ -940,6 +941,15 @@ fn action_to_zen(args: ActionToZen, config: Arc<Config>) -> Result<()> {
         repak::PakBuilder::new().writer(&mut BufWriter::new(fs::File::create(pak_path)?), repak::Version::V11, mount_point.to_string(), None).write_index()?;
     }
 
+    Ok(())
+}
+
+fn write_script_objects(writer: &mut IoStoreWriter, script_objects: Option<&ZenScriptObjects>) -> Result<()> {
+    if let Some(script_objects) = script_objects {
+        let mut buffer = vec![];
+        script_objects.serialize_new(&mut buffer)?;
+        writer.write_chunk(FIoChunkId::create(0, 0, EIoChunkType::ScriptObjects), None, &buffer)?;
+    }
     Ok(())
 }
 
@@ -1112,4 +1122,113 @@ fn action_asset_registry(args: ActionAssetRegistry, _config: Arc<Config>) -> Res
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    static NEXT_TEMP_DIR: AtomicUsize = AtomicUsize::new(0);
+
+    struct TestDir {
+        path: PathBuf,
+    }
+
+    impl TestDir {
+        fn new() -> Result<Self> {
+            let path = std::env::temp_dir().join(format!("retoc-to-zen-script-objects-{}-{}", std::process::id(), NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed)));
+            fs::create_dir_all(&path)?;
+            Ok(Self { path })
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.path).ok();
+        }
+    }
+
+    fn to_zen_args(input: PathBuf, output: PathBuf) -> ActionToZen {
+        ActionToZen {
+            input,
+            output,
+            filter: vec![],
+            version: EngineVersion::UE5_3,
+            script_cell: vec![],
+            verbose: false,
+            debug: false,
+            no_parallel: true,
+        }
+    }
+
+    fn assert_script_objects_eq(expected: &ZenScriptObjects, actual: &ZenScriptObjects) {
+        assert!(!expected.script_objects.is_empty());
+        assert_eq!(expected.script_objects.len(), actual.script_objects.len());
+        for (expected_entry, actual_entry) in expected.script_objects.iter().zip(&actual.script_objects) {
+            assert_eq!(expected.global_name_map.get(expected_entry.object_name), actual.global_name_map.get(actual_entry.object_name));
+            assert_eq!(expected_entry.global_index.to_raw(), actual_entry.global_index.to_raw());
+            assert_eq!(expected_entry.outer_index.to_raw(), actual_entry.outer_index.to_raw());
+            assert_eq!(expected_entry.cdo_class_index.to_raw(), actual_entry.cdo_class_index.to_raw());
+        }
+    }
+
+    #[test]
+    fn to_zen_preserves_script_objects_and_round_trips_to_legacy() -> Result<()> {
+        let test_dir = TestDir::new()?;
+        let input = test_dir.path.join("input");
+        let output = test_dir.path.join("mod.utoc");
+        let legacy_output = test_dir.path.join("legacy");
+        fs::create_dir_all(&input)?;
+
+        let source_data = fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../retoc/tests/UE5.3/ScriptObjects.bin"))?;
+        fs::write(input.join("scriptobjects.bin"), &source_data)?;
+        let expected = ZenScriptObjects::deserialize_new(&mut Cursor::new(source_data))?;
+
+        action_to_zen(to_zen_args(input, output.clone()), Arc::new(Config::default()))?;
+
+        let script_objects_chunk = FIoChunkId::create(0, 0, EIoChunkType::ScriptObjects);
+        let container = iostore::open(&output, Arc::new(Config::default()))?;
+        assert!(container.has_chunk_id(script_objects_chunk));
+        let preserved = container.load_script_objects()?;
+        assert_script_objects_eq(&expected, &preserved);
+        drop(container);
+
+        action_to_legacy(
+            ActionToLegacy {
+                input: output,
+                output: legacy_output.clone(),
+                filter: vec![],
+                no_assets: true,
+                no_shaders: true,
+                no_script_objects: false,
+                no_compres_shaders: true,
+                dry_run: false,
+                version: None,
+                script_cell: vec![],
+                verbose: false,
+                debug: false,
+                no_parallel: true,
+            },
+            Arc::new(Config::default()),
+        )?;
+
+        let round_tripped_data = fs::read(legacy_output.join("scriptobjects.bin"))?;
+        let round_tripped = ZenScriptObjects::deserialize_new(&mut Cursor::new(round_tripped_data))?;
+        assert_script_objects_eq(&expected, &round_tripped);
+        Ok(())
+    }
+
+    #[test]
+    fn to_zen_without_script_objects_does_not_add_global_chunk() -> Result<()> {
+        let test_dir = TestDir::new()?;
+        let input = test_dir.path.join("input");
+        let output = test_dir.path.join("mod.utoc");
+        fs::create_dir_all(&input)?;
+
+        action_to_zen(to_zen_args(input, output.clone()), Arc::new(Config::default()))?;
+
+        let container = iostore::open(output, Arc::new(Config::default()))?;
+        assert!(!container.has_chunk_id(FIoChunkId::create(0, 0, EIoChunkType::ScriptObjects)));
+        Ok(())
+    }
 }
