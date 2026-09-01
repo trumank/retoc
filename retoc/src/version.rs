@@ -19,6 +19,7 @@ pub enum EngineVersion {
     UE5_5,
     UE5_6,
     UE5_7,
+    UE5_8,
 }
 
 impl EngineVersion {
@@ -36,6 +37,7 @@ impl EngineVersion {
             UE5_5 => ReplaceIoChunkHashWithIoHash,
             UE5_6 => ReplaceIoChunkHashWithIoHash,
             UE5_7 => ReplaceIoChunkHashWithIoHash,
+            UE5_8 => ReplaceIoChunkHashWithIoHash,
         }
     }
     pub fn container_header_version(self) -> EIoContainerHeaderVersion {
@@ -52,6 +54,7 @@ impl EngineVersion {
             UE5_5 => SoftPackageReferences,
             UE5_6 => SoftPackageReferencesOffset,
             UE5_7 => SoftPackageReferencesOffset,
+            UE5_8 => SoftPackageReferencesOffset,
         }
     }
     pub fn object_ue4_version(self) -> EUnrealEngineObjectUE4Version {
@@ -74,6 +77,8 @@ impl EngineVersion {
             UE5_5 => AssetRegistryPackageBuildDependencies,
             UE5_6 => OsSubObjectShadowSerialization,
             UE5_7 => ImportTypeHierarchies,
+            // UE 5.8 added no new EUnrealEngineObjectUE5Version entries
+            UE5_8 => ImportTypeHierarchies,
             _ => unreachable!(),
         }
     }
