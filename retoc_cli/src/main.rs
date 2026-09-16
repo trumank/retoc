@@ -687,7 +687,13 @@ fn action_to_legacy_assets(args: &ActionToLegacy, file_writer: &dyn FileWriterTr
     let mut packages_to_extract = vec![];
     for package_info in iostore.packages() {
         let chunk_id = FIoChunkId::from_package_id(package_info.id(), 0, EIoChunkType::ExportBundleData);
-        let package_path = iostore.chunk_path(chunk_id).with_context(|| format!("{:?} has no path name entry. Cannot extract", package_info.id()))?;
+        // chunk_path is backed by the directory index, which some third-party packaging tools
+        // apparently never populate correctly (see read_directory_index's own remarks) - the
+        // game engine resolves assets by package ID and never needs this mapping, so a package
+        // with no path entry is still real, extractable data, just without a known human name.
+        // A single unresolvable package used to abort extracting every OTHER package in the
+        // whole container too; fall back to a synthetic path derived from the package ID instead.
+        let package_path = iostore.chunk_path(chunk_id).unwrap_or_else(|| format!("../../../Unknown/0x{:016x}", package_info.id().0));
 
         if !args.filter.is_empty() && !args.filter.iter().any(|f| package_path.contains(f)) {
             continue;

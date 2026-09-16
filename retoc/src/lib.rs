@@ -342,8 +342,14 @@ fn read_directory_index<R: Read>(stream: &mut R, header: &FIoStoreTocHeader, con
     if header.container_flags.contains(EIoContainerFlags::Encrypted) {
         use aes::cipher::BlockDecrypt;
 
+        // buf.len() isn't guaranteed to be a multiple of the AES block size - confirmed on
+        // a real cooked container (directory_index_size 1027, 1027 % 16 == 3) that otherwise
+        // panics in decrypt_block on the final partial chunk ("left: 3, right: 16" from
+        // generic-array). Decrypt only the full blocks; leave a short trailing remainder as-is
+        // rather than guessing at padding that may or may not exist on disk beyond this size.
         let key = config.aes_keys.get(&header.encryption_key_guid).context("missing encryption key")?;
-        for block in buf.chunks_mut(16) {
+        let full_blocks_len = buf.len() / 16 * 16;
+        for block in buf[..full_blocks_len].chunks_mut(16) {
             key.0.decrypt_block(block.into());
         }
     }
@@ -483,7 +489,30 @@ impl ReadableCtx<Arc<Config>> for Toc {
         let mut file_map: HashMap<String, u32> = Default::default();
         let mut file_map_lower: HashMap<String, u32> = Default::default();
         let mut file_map_rev: HashMap<u32, String> = Default::default();
-        let directory_index = if !directory_index.is_empty() { FIoDirectoryIndexResource::de(&mut Cursor::new(directory_index))? } else { FIoDirectoryIndexResource::default() };
+        // A container's directory index only serves human/tool-facing path lookups (browsing,
+        // `list`, `-f <path>` filtering) - the game engine itself resolves assets by numeric
+        // package/chunk ID via the container header at runtime and never reads this structure,
+        // so some third-party packaging tools apparently never populate it correctly (confirmed
+        // against a real cooked container whose directory index decrypts to structurally
+        // implausible bytes - e.g. a claimed mount-point string length of ~998 million - with a
+        // verified-correct key and verified-correct byte offset; every OTHER section of the same
+        // file, including per-chunk metadata immediately after this one, parses perfectly). A
+        // mod built this way still loads fine in the actual game. Failing to parse this one
+        // optional structure shouldn't make every other operation on the container impossible,
+        // most importantly chunk-ID-addressed access (`get`, `unpack-raw`) which never needed it
+        // - fall back to an empty index and let path-based lookups simply find nothing, rather
+        // than hard-erroring the whole container open.
+        let directory_index = if !directory_index.is_empty() {
+            match FIoDirectoryIndexResource::de(&mut Cursor::new(directory_index)) {
+                Ok(index) => index,
+                Err(err) => {
+                    tracing::warn!("failed to parse directory index, falling back to empty (path-based lookups will find nothing, chunk-ID-based access is unaffected): {err:#}");
+                    FIoDirectoryIndexResource::default()
+                }
+            }
+        } else {
+            FIoDirectoryIndexResource::default()
+        };
         directory_index.iter_root(|user_data, path| {
             let path = path.join("/");
             file_map_lower.insert(path.to_ascii_lowercase(), user_data);
