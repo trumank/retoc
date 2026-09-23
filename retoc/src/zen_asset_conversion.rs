@@ -1227,6 +1227,100 @@ impl ConvertedZenAssetBundle {
             package_buffer_writer.seek(SeekFrom::Start(*legacy_serialized_offset))?;
             package_buffer_writer.ser(&result_from_bundle_index)?;
         }
+
+        // The dedup in `create_dependency_arc_from_node` keys on `from_export_bundle_index`,
+        // but for legacy arcs that need this fixup, that field is still the disposable
+        // per-call placeholder from `legacy_external_arc_counter` at the time the arc was
+        // created, not a real bundle index - so it's unique by construction and that dedup
+        // silently does nothing for these arcs. The real source bundle index only exists
+        // once every placeholder above has been resolved, so duplicates can only be found
+        // now, on the already-serialized graph region, after every placeholder is in place.
+        if !self.legacy_external_arc_serialized_offsets.is_empty() {
+            self.dedup_legacy_dependency_arcs()?;
+        }
+        Ok(())
+    }
+
+    /// Removes exact-duplicate `(from, to)` legacy dependency arcs within each imported
+    /// package's block of the graph region, now that `from_export_bundle_index` has been
+    /// resolved to its real value by the fixup loop above. Two arcs created from different
+    /// imports of the same external package (e.g. two different functions or properties
+    /// referencing the same imported class) commonly resolve to the exact same `(from, to)`
+    /// pair once we know which bundle of that package they each landed in - the cooker only
+    /// ever stores such a pair once, so leaving both in makes the graph diverge from what
+    /// the original container has and, in the worst case, from what the engine expects.
+    ///
+    /// Operates directly on the already-serialized `package_buffer` bytes rather than on a
+    /// header struct: this pass runs once per package, after every other package has
+    /// already been converted and serialized too (`fixup_legacy_external_arcs` above needs
+    /// that global view to resolve which bundle an import maps to), so there is no struct
+    /// left to re-serialize from at this point. The graph region is always the last part of
+    /// `FZenPackageSummary` for container header versions `<= Initial` (see
+    /// `FZenPackageSummary::serialize`), so shrinking it only requires splicing bytes out of
+    /// the buffer and patching `graph_data_size` - nothing before or after it needs to move.
+    fn dedup_legacy_dependency_arcs(&mut self) -> anyhow::Result<()> {
+        // Byte offset of `graph_data_offset`/`graph_data_size` within `FZenPackageSummary`
+        // for container header versions `<= Initial`: name (FMappedName, 8) + source_name
+        // (FMappedName, 8) + package_flags (4) + cooked_header_size (4) + 4 name map
+        // offset/size fields (16) + import_map_offset (4) + export_map_offset (4) +
+        // export_bundle_entries_offset (4) + graph_data_offset (4) = 56, then
+        // graph_data_size follows immediately.
+        const GRAPH_DATA_OFFSET_FIELD_POS: u64 = 52;
+        const GRAPH_DATA_SIZE_FIELD_POS: u64 = 56;
+
+        let (graph_data_offset, graph_data_size): (i32, i32) = {
+            let mut reader = Cursor::new(&self.package_buffer);
+            reader.seek(SeekFrom::Start(GRAPH_DATA_OFFSET_FIELD_POS))?;
+            (reader.de()?, reader.de()?)
+        };
+        if graph_data_size < 4 {
+            return Ok(());
+        }
+        let graph_start = graph_data_offset as usize;
+        let graph_end = graph_start + graph_data_size as usize;
+
+        let mut reader = Cursor::new(&self.package_buffer[graph_start..graph_end]);
+        let package_count: u32 = reader.de()?;
+
+        let mut new_graph_data: Vec<u8> = Vec::with_capacity(graph_data_size as usize);
+        new_graph_data.ser(&package_count)?;
+        for _ in 0..package_count {
+            let package_id: FPackageId = reader.de()?;
+            let arc_count: u32 = reader.de()?;
+            let mut arcs: Vec<(i32, i32)> = Vec::with_capacity(arc_count as usize);
+            for _ in 0..arc_count {
+                arcs.push((reader.de()?, reader.de()?));
+            }
+
+            // Deduplicate while preserving first-seen order, so unrelated arcs that
+            // happen to already be unique keep their original relative position
+            let mut seen: HashSet<(i32, i32)> = HashSet::with_capacity(arcs.len());
+            arcs.retain(|arc| seen.insert(*arc));
+
+            new_graph_data.ser(&package_id)?;
+            new_graph_data.ser(&(arcs.len() as u32))?;
+            for (from, to) in arcs {
+                new_graph_data.ser(&from)?;
+                new_graph_data.ser(&to)?;
+            }
+        }
+
+        let bytes_removed = graph_data_size as usize - new_graph_data.len();
+        if bytes_removed == 0 {
+            return Ok(());
+        }
+
+        self.package_buffer.splice(graph_start..graph_end, new_graph_data.iter().copied());
+
+        let new_graph_data_size = new_graph_data.len() as i32;
+        let mut writer = Cursor::new(&mut self.package_buffer);
+        writer.seek(SeekFrom::Start(GRAPH_DATA_SIZE_FIELD_POS))?;
+        writer.ser(&new_graph_data_size)?;
+
+        // header_size (graph_data_offset + graph_data_size) shrank by the same amount,
+        // and export_bundles_size is header_size + sum of export sizes - see
+        // `FZenPackageHeader::serialize`
+        self.store_entry.export_bundles_size -= bytes_removed as u64;
         Ok(())
     }
 
