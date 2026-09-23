@@ -1268,6 +1268,7 @@ impl FZenPackageHeader {
             // Write export count for packages with graph data
             store_entry.export_count = self.export_map.len() as i32;
 
+
             // Graph data starts directly after export bundle entries
             package_summary.graph_data_offset = (s.stream_position()? - package_summary_offset) as i32;
 
@@ -1289,7 +1290,12 @@ impl FZenPackageHeader {
                 }
             } else {
                 // Serialize old style package references
-                let non_empty_dependencies: Vec<&ExternalPackageDependency> = self.external_package_dependencies.iter().filter(|x| !x.legacy_dependency_arcs.is_empty()).collect();
+                // Legacy UE4 cooks emit the per-package arc blocks sorted ascending by FPackageId
+                // (verified by decoding graph data from original shipped containers). The imported
+                // package list in the store entry stays in discovery order - only this graph section
+                // is sorted.
+                let mut non_empty_dependencies: Vec<&ExternalPackageDependency> = self.external_package_dependencies.iter().filter(|x| !x.legacy_dependency_arcs.is_empty()).collect();
+                non_empty_dependencies.sort_by_key(|x| x.from_package_id);
                 let referenced_package_count: i32 = non_empty_dependencies.len() as i32;
                 s.ser(&referenced_package_count)?;
 
@@ -1319,6 +1325,12 @@ impl FZenPackageHeader {
         // We know the total size of the zen package header now
         let package_header_end_offset = s.stream_position()?;
         package_summary.header_size = (package_header_end_offset - package_summary_offset) as u32;
+
+        // Original UE4 cooks store the full serialized package size (header + export blobs) here;
+        // retoc previously left it at 0 for every package. Verified against shipped containers:
+        // header_size + sum(export cooked_serial_size) == total chunk size == this field.
+        store_entry.export_bundles_size = package_summary.header_size as u64
+            + self.export_map.iter().map(|x| x.cooked_serial_size).sum::<u64>();
 
         // Go back to the package summary and patch it up with the offsets that we know now, and then seek back
         s.seek(SeekFrom::Start(package_summary_offset))?;

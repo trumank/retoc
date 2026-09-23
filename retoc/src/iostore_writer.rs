@@ -4,6 +4,7 @@ use crate::{
     container_header::{EIoContainerHeaderVersion, FIoContainerHeader, StoreEntry},
 };
 use crate::{EIoStoreTocVersion, FIoChunkHash, FIoChunkId, FIoContainerId, FIoOffsetAndLength, FIoStoreTocCompressedBlockEntry, FIoStoreTocEntryMeta, FIoStoreTocEntryMetaFlags, Toc, ser::*};
+use crate::compression::{CompressionMethod, compress};
 use anyhow::{Context, Result};
 use fs_err as fs;
 use std::io::Cursor;
@@ -19,6 +20,7 @@ pub struct IoStoreWriter {
     cas_stream: BufWriter<fs::File>,
     toc: Toc,
     container_header: Option<FIoContainerHeader>,
+    compression_method: Option<CompressionMethod>,
 }
 
 impl IoStoreWriter {
@@ -35,6 +37,15 @@ impl IoStoreWriter {
         toc.directory_index.mount_point = mount_point;
         toc.partition_size = u64::MAX;
 
+        // Сжатие включается переменной окружения RETOC_COMPRESSION (Zlib и др.),
+        // чтобы поведение по умолчанию осталось прежним.
+        let compression_method = std::env::var("RETOC_COMPRESSION")
+            .ok()
+            .and_then(|v| CompressionMethod::from_str_ignore_case(&v));
+        if let Some(method) = compression_method {
+            toc.compression_methods = vec![method];
+        }
+
         let container_header = container_header_version.map(|v| FIoContainerHeader::new(v, toc.container_id));
 
         Ok(Self {
@@ -43,6 +54,7 @@ impl IoStoreWriter {
             cas_stream,
             toc,
             container_header,
+            compression_method,
         })
     }
     pub fn write_chunk_raw(&mut self, chunk_id_raw: FIoChunkIdRaw, path: Option<&UEPath>, data: &[u8]) -> Result<()> {
@@ -60,12 +72,28 @@ impl IoStoreWriter {
         let start_block = self.toc.compression_blocks.len();
 
         let mut hasher = blake3::Hasher::new();
+        let mut compressed_buffer: Vec<u8> = Vec::new();
         for block in data.chunks(self.toc.compression_block_size as usize) {
-            self.cas_stream.write_all(block)?;
+            // Хеш считается по несжатым данным - так же, как в оригинале.
             hasher.update(block);
-            let compressed_size = block.len() as u32;
             let uncompressed_size = block.len() as u32;
-            let compression_method_index = 0; // "None"
+
+            // Блок сжимается, только если это даёт выигрыш. Неужавшиеся блоки
+            // пишутся как есть с методом 0 - оригинальный кукер поступает так же.
+            let mut compression_method_index = 0u8;
+            if let Some(method) = self.compression_method {
+                compressed_buffer.clear();
+                if compress(method, block, Cursor::new(&mut compressed_buffer)).is_ok()
+                    && compressed_buffer.len() < block.len()
+                {
+                    compression_method_index = 1;
+                }
+            }
+
+            let payload: &[u8] = if compression_method_index == 0 { block } else { &compressed_buffer };
+            self.cas_stream.write_all(payload)?;
+            let compressed_size = payload.len() as u32;
+
             self.toc.compression_blocks.push(FIoStoreTocCompressedBlockEntry::new(offset, compressed_size, uncompressed_size, compression_method_index));
             offset += compressed_size as u64;
         }

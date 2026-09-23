@@ -4,7 +4,7 @@ use clap::Parser;
 use fs_err as fs;
 use rayon::prelude::*;
 use retoc::asset_conversion::{self, FZenPackageContext};
-use retoc::container_header::EIoContainerHeaderVersion;
+use retoc::container_header::{EIoContainerHeaderVersion, StoreEntry};
 use retoc::iostore::{IoStoreTrait, PackageInfo};
 use retoc::iostore_writer::IoStoreWriter;
 use retoc::legacy_asset::FSerializedAssetBundle;
@@ -544,11 +544,13 @@ mod raw {
     use retoc::{EIoStoreTocVersion, FIoChunkIdRaw};
 
     #[derive(Serialize, Deserialize)]
-    pub(crate) struct RawIoManifest {
-        pub(crate) chunk_paths: HashMap<ChunkId, String>,
-        pub(crate) version: EIoStoreTocVersion,
-        pub(crate) mount_point: String,
-    }
+pub(crate) struct RawIoManifest {
+    pub(crate) chunk_paths: HashMap<ChunkId, String>,
+    pub(crate) version: EIoStoreTocVersion,
+    pub(crate) mount_point: String,
+    pub(crate) container_header_version: Option<retoc::container_header::EIoContainerHeaderVersion>,
+    pub(crate) package_store_entries: HashMap<ChunkId, retoc::container_header::StoreEntry>,
+}
     #[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub(crate) struct ChunkId(#[serde(serialize_with = "to_hex", deserialize_with = "from_hex")] pub(crate) FIoChunkIdRaw);
     impl From<FIoChunkIdRaw> for ChunkId {
@@ -585,19 +587,27 @@ fn action_unpack_raw(args: ActionUnpackRaw, config: Arc<Config>) -> Result<()> {
     fs::create_dir(&output)?;
     fs::create_dir(&chunks_dir)?;
 
-    let mut manifest = raw::RawIoManifest {
-        chunk_paths: Default::default(),
-        version: iostore.container_file_version().unwrap(),
-        mount_point: "../../../".to_string(),
-    };
+   let mut manifest = raw::RawIoManifest {
+    chunk_paths: Default::default(),
+    version: iostore.container_file_version().unwrap(),
+    mount_point: "../../../".to_string(),
+    container_header_version: iostore.container_header_version(),
+    package_store_entries: Default::default(),
+};
 
-    for chunk in iostore.chunks() {
-        let data = chunk.read()?;
-        fs::write(chunks_dir.join(hex::encode(chunk.id().get_raw())), data)?;
-        if let Some(path) = chunk.path() {
-            manifest.chunk_paths.insert(chunk.id().get_raw().into(), path);
+for chunk in iostore.chunks() {
+    let data = chunk.read()?;
+    fs::write(chunks_dir.join(hex::encode(chunk.id().get_raw())), data)?;
+    if let Some(path) = chunk.path() {
+        manifest.chunk_paths.insert(chunk.id().get_raw().into(), path);
+    }
+    if chunk.id().get_chunk_type() == EIoChunkType::ExportBundleData {
+        let package_id = FPackageId(chunk.id().get_chunk_id());
+        if let Some(store_entry) = iostore.package_store_entry(package_id) {
+            manifest.package_store_entries.insert(chunk.id().get_raw().into(), store_entry);
         }
     }
+}
 
     serde_json::to_writer_pretty(BufWriter::new(fs::File::create(manifest_path)?), &manifest)?;
 
@@ -609,13 +619,19 @@ fn action_unpack_raw(args: ActionUnpackRaw, config: Arc<Config>) -> Result<()> {
 fn action_pack_raw(args: ActionPackRaw, _config: Arc<Config>) -> Result<()> {
     let manifest: raw::RawIoManifest = serde_json::from_reader(BufReader::new(fs::File::open(args.input.join("manifest.json"))?))?;
 
-    let mut writer = IoStoreWriter::new(args.utoc, manifest.version, None, manifest.mount_point.into())?;
+    let mut writer = IoStoreWriter::new(args.utoc, manifest.version, manifest.container_header_version, manifest.mount_point.into())?;
     for entry in args.input.join("chunks").read_dir()? {
         let entry = entry?;
         let chunk_id = FIoChunkIdRaw::from_str(entry.file_name().to_string_lossy().as_ref())?;
-        let path = manifest.chunk_paths.get(&chunk_id.into()).map(UEPath::new);
+        let chunk_id_key: raw::ChunkId = chunk_id.into();
+        let path = manifest.chunk_paths.get(&chunk_id_key).map(UEPath::new);
         let data = fs::read(entry.path())?;
-        writer.write_chunk_raw(chunk_id, path, &data)?;
+        if let Some(store_entry) = manifest.package_store_entries.get(&chunk_id_key) {
+            let full_chunk_id = FIoChunkId::from_raw(chunk_id, writer.container_version());
+            writer.write_package_chunk(full_chunk_id, path, &data, store_entry)?;
+        } else {
+            writer.write_chunk_raw(chunk_id, path, &data)?;
+        }
     }
     writer.finalize()?;
     Ok(())
