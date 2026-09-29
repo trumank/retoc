@@ -1248,7 +1248,10 @@ impl ConvertedZenAssetBundle {
         }
         // If this is a redirected package, add the redirect to the redirect map
         else if let Some(source_package_name) = &self.source_package_name {
-            writer.add_package_redirect(source_package_name, self.package_id)?;
+            // Up to container header version Initial source_package_name is set for every package, so only redirect if it points to a different package
+            if FPackageId::from_name(source_package_name) != self.package_id {
+                writer.add_package_redirect(source_package_name, self.package_id)?;
+            }
         }
 
         self.package_buffer = Vec::new();
