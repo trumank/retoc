@@ -1100,6 +1100,36 @@ impl FLegacyPackageHeader {
                 data_resources.push(s.de_ctx(version)?);
             }
         }
+
+        // The conversion follows these indices into the import and export maps without checking
+        // them. A package read with the wrong package version (e.g. a UE4 package read as UE5)
+        // parses into indices that point past the maps, which ended in an "index out of bounds"
+        // panic. Refuse such a package with an error instead.
+        let check_index = |index: FPackageIndex, what: &dyn Fn() -> String| -> Result<()> {
+            let index = index.index as i64;
+            if index < -(imports.len() as i64) || index > exports.len() as i64 {
+                bail!(
+                    "package {}: {} refers to object {index}, but the package has {} imports and {} exports. Was it read with the right --version?",
+                    package_summary.package_name,
+                    what(),
+                    imports.len(),
+                    exports.len()
+                );
+            }
+            Ok(())
+        };
+        for (i, import) in imports.iter().enumerate() {
+            check_index(import.outer_index, &|| format!("import {i} (outer)"))?;
+        }
+        for (i, export) in exports.iter().enumerate() {
+            for (field, index) in [("class", export.class_index), ("super", export.super_index), ("template", export.template_index), ("outer", export.outer_index)] {
+                check_index(index, &|| format!("export {i} ({field})"))?;
+            }
+        }
+        for (i, &dependency) in preload_dependencies.iter().enumerate() {
+            check_index(dependency, &|| format!("preload dependency {i}"))?;
+        }
+
         Ok(FLegacyPackageHeader {
             summary: package_summary,
             name_map,
@@ -1363,3 +1393,27 @@ pub const OBJECT_CLASS_NAME: &str = "Object";
 pub const CLASS_CLASS_NAME: &str = "Class";
 pub const PACKAGE_CLASS_NAME: &str = "Package";
 pub const PRESTREAM_PACKAGE_CLASS_NAME: &str = "PrestreamPackage";
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::version::EngineVersion;
+    use std::io::Cursor;
+
+    #[test]
+    fn test_out_of_range_object_index_is_an_error() -> Result<()> {
+        let version = Some(EngineVersion::UE4_27.package_file_version());
+        let mut data = std::fs::read("tests/UE4.27/TestModUI.uasset")?;
+        let header = FLegacyPackageHeader::deserialize(&mut Cursor::new(&data), version)?;
+        assert!(!header.imports.is_empty());
+
+        // Point the outer of the first import past the end of the export map. An import of a UE 4.27
+        // package is class package and class name (8 bytes each), then the outer index.
+        let outer_offset = header.summary.imports.offset as usize + 16;
+        data[outer_offset..outer_offset + 4].copy_from_slice(&(header.exports.len() as i32 + 100).to_le_bytes());
+
+        let err = FLegacyPackageHeader::deserialize(&mut Cursor::new(&data), version).err().expect("an out of range object index was accepted");
+        assert!(format!("{err:#}").contains("import 0 (outer) refers to object"), "{err:#}");
+        Ok(())
+    }
+}
