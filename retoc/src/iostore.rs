@@ -310,7 +310,7 @@ pub struct IoStoreContainer {
     #[allow(unused)]
     path: PathBuf,
     toc: Toc,
-    cas: FilePool,
+    cas: Vec<FilePool>,
 
     container_header: Option<FIoContainerHeader>,
 }
@@ -318,7 +318,14 @@ impl IoStoreContainer {
     pub fn open<P: AsRef<Path>>(toc_path: P, config: Arc<Config>) -> Result<Self> {
         let path = toc_path.as_ref().to_path_buf();
         let toc: Toc = BufReader::new(fs::File::open(&path)?).de_ctx(config.clone())?;
-        let cas = FilePool::new(path.with_extension("ucas"), rayon::max_num_threads())?;
+        let mut cas = vec![FilePool::new(path.with_extension("ucas"), rayon::max_num_threads())?];
+        // multi-partition containers: <name>.ucas, <name>_s1.ucas, <name>_s2.ucas, ...
+        if toc.partition_count > 1 {
+            let stem = path.file_stem().context("failed to get container name")?.to_string_lossy().to_string();
+            for i in 1..toc.partition_count {
+                cas.push(FilePool::new(path.with_file_name(format!("{stem}_s{i}.ucas")), rayon::max_num_threads())?);
+            }
+        }
 
         let mut container = Self {
             name: path.file_stem().context("failed to get container name")?.to_string_lossy().into(),
@@ -382,8 +389,7 @@ impl IoStoreTrait for IoStoreContainer {
     fn read(&self, chunk_id: FIoChunkId) -> Result<Vec<u8>> {
         let chunk_id = chunk_id.with_version(self.toc.version);
         let index = *self.toc.chunk_id_map.get(&chunk_id).with_context(|| format!("container {:?} does not contain {:?}", self.name, chunk_id))?;
-        let mut file_lock = self.cas.acquire()?;
-        self.toc.read(&mut file_lock.file(), index).with_context(|| format!("Failed to read chunk {chunk_id:?}"))
+        self.toc.read(&mut PartitionedCas::new(&self.cas, self.toc.partition_size), index).with_context(|| format!("Failed to read chunk {chunk_id:?}"))
     }
     fn read_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> Result<Vec<u8>> {
         self.read(FIoChunkId::from_raw(chunk_id_raw, self.toc.version))
@@ -489,5 +495,51 @@ mod test {
                 "pakchunk0-Windows",
             ]
         );
+    }
+}
+
+/// Read + Seek over a container whose data is split into several .ucas partitions
+/// (`<name>.ucas`, `<name>_s1.ucas`, ...). Offsets in the TOC are global: partition = offset / partition_size.
+/// Compression blocks never span two partitions, and `Toc::read` seeks to the start of every block,
+/// so only `SeekFrom::Start` is needed. File handles are taken from each partition's pool on first use.
+struct PartitionedCas<'a> {
+    pools: &'a [FilePool],
+    handles: Vec<Option<crate::file_pool::PooledFileHandle>>,
+    partition_size: u64,
+    cur: usize,
+}
+impl<'a> PartitionedCas<'a> {
+    fn new(pools: &'a [FilePool], partition_size: u64) -> Self {
+        Self {
+            pools,
+            handles: pools.iter().map(|_| None).collect(),
+            partition_size,
+            cur: 0,
+        }
+    }
+    fn file(&mut self, i: usize) -> std::io::Result<&mut fs::File> {
+        let pool = self.pools.get(i).ok_or_else(|| std::io::Error::other(format!("offset points to partition {i}, but the container has {}", self.pools.len())))?;
+        let handle = match &mut self.handles[i] {
+            Some(handle) => handle,
+            slot @ None => slot.insert(pool.acquire()?),
+        };
+        Ok(handle.file())
+    }
+}
+impl std::io::Read for PartitionedCas<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.file(self.cur)?.read(buf)
+    }
+}
+impl std::io::Seek for PartitionedCas<'_> {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        let std::io::SeekFrom::Start(offset) = pos else {
+            return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "partitioned .ucas only supports seeking from the start"));
+        };
+        // single-partition containers store partition_size as 0 or u64::MAX
+        let (part, local) = if self.pools.len() > 1 { ((offset / self.partition_size) as usize, offset % self.partition_size) } else { (0, offset) };
+        self.cur = part;
+        self.file(part)?.seek(std::io::SeekFrom::Start(local))?;
+        Ok(offset)
     }
 }
